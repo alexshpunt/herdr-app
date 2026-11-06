@@ -81,6 +81,7 @@ impl Browser {
             policy::is_unclipped(&hitbox.bounds, &hitbox.content_mask.bounds)
         });
         let show = policy::should_show(hitbox.is_some(), unclipped, overlay) && self.error.is_none();
+        tracing::trace!(geometry = ?hitbox.map(|hitbox| (hitbox.bounds, hitbox.content_mask.bounds)), overlay, unclipped, show, visible = self.visible, "native browser visibility");
         if show == self.visible { return; }
         if let Some(view) = &self.native {
             if !show {
