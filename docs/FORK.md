@@ -38,6 +38,11 @@ finds the native app and its requesting terminal. It uses the terminal's
 `herdr.space` label, not the currently selected agent. An unavailable app, an
 older app without the browser API, or an ambiguous origin opens the system
 browser instead. Closing the review closes only the browser pane it created.
+Each Pi runtime owns a private local socket (a named pipe on Windows). The
+browser hook pairs with Plannotator's review ID over that socket; a reused URL
+or port does not reuse a closed review's lifetime. Cancelling a review while its
+pane is opening also closes that eventual pane. Archive and other unmatched
+browser requests still open in the system browser.
 
 The Windows app can show a review served by Pi in local WSL through localhost.
 The helper resolves Windows PowerShell by absolute path when it is absent from

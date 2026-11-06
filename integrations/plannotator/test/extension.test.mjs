@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 test('a real Pi binds browser launches and cleanup to its own session', { timeout: 60000 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'herdr-plannotator-test-'));
   try {
-    const state = path.join(root, 'state');
     const run = await new PiIntegrationTest({
       testName: 'browser-session-route',
       cwd: root,
@@ -19,7 +19,7 @@ test('a real Pi binds browser launches and cleanup to its own session', { timeou
       transport: 'rpc',
       extensions: [path.resolve(here, '../index.ts'), path.join(here, 'fixtures/probe.ts')],
       tools: ['browser_route_probe'],
-      environment: { HC_TERMINAL_ID: '', HC_TERMINAL_SOCKET: '', HERDR_PLANNOTATOR_STATE_DIR: state },
+      environment: { HC_TERMINAL_ID: '', HC_TERMINAL_SOCKET: '' },
       conversation: [assistantMessage([toolCall({ id: 'probe', name: 'browser_route_probe', arguments: {} })], { stopReason: 'toolUse' }), assistantMessage([text('Probe complete')])],
     }).run('Run the browser routing probe');
     assert.equal(getToolExecution(run, 'probe').isError, false);
@@ -27,8 +27,14 @@ test('a real Pi binds browser launches and cleanup to its own session', { timeou
     assert.equal(details.configuredSession, details.session);
     assert.equal(details.session, run.state.sessionId);
     assert.equal(details.browser, path.resolve(here, process.platform === 'win32' ? '../open.cmd' : '../open.mjs'));
-    const records = await readdir(state);
-    assert.equal(records.length, 1);
-    assert.equal(records[0].endsWith('.closed'), true);
+    assert.deepEqual(details.receipts, [{ kind: 'closed', review: 'pn-111111' }, { kind: 'closed', review: 'pn-222222' }]);
+    assert.deepEqual(details.wrongOwner, { kind: 'error', code: 'owner-mismatch' });
+    assert.deepEqual(details.wrongToken, { kind: 'error', code: 'owner-mismatch' });
+    assert.deepEqual(details.unmatched, { kind: 'external' });
+    await assert.rejects(new Promise((resolve, reject) => {
+      const client = net.createConnection(details.socket);
+      client.once('connect', () => { client.destroy(); resolve(); });
+      client.once('error', reject);
+    }));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

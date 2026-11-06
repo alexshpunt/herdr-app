@@ -51,6 +51,9 @@ prints the machine-readable browser API version without opening a window.
 The Pi integration in `integrations/plannotator` uses the core terminal's space
 label to split beside its originating pane. An unknown or ambiguous origin
 opens the system browser instead of using the currently focused agent.
+Review cleanup is scoped to Plannotator's review ID and Pi session, including
+reviews that reuse a listening port. Unmatched browser requests, such as the
+Plannotator archive, keep their system-browser fallback.
 
 ## What mods are written in
 

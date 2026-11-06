@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { homedir, release, tmpdir } from 'node:os';
+import { access } from 'node:fs/promises';
+import { homedir, release } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { requestBrowser } from './ipc.mjs';
 
 const execute = promisify(execFile);
 const wsl = process.platform === 'linux' && /microsoft/i.test(release());
-export const reviewKey = (session, url) => createHash('sha256').update(JSON.stringify([session, url])).digest('hex');
-const stateDir = () => process.env.HERDR_PLANNOTATOR_STATE_DIR || path.join(tmpdir(), 'herdr-plannotator', String(process.getuid?.() ?? 'user'));
-const recordPath = (session, url) => path.join(stateDir(), reviewKey(session, url));
 const exists = async file => access(file).then(() => true, () => false);
 
 export function findOriginPane(snapshot, terminal) {
@@ -22,7 +19,7 @@ export function findOriginPane(snapshot, terminal) {
         if (space.id !== spaceId && !space.id.endsWith(`/${spaceId}`)) continue;
         for (const tab of space.tabs ?? []) {
             for (const item of tab.terminals ?? []) {
-                if ((item.terminal === terminal.address || item.terminal.endsWith(`/${terminal.address}`)) && typeof item.pane === 'string') matches.push(item.pane);
+                if ((item.terminal === terminal.address || item.terminal?.endsWith(`/${terminal.address}`)) && typeof item.pane === 'string') matches.push(item.pane);
             }
         }
     }
@@ -66,7 +63,7 @@ export async function openExternal(url) {
     }
 }
 
-export async function openReview(url) {
+export async function openReview({ url, id }) {
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Expected an HTTP(S) URL without credentials');
     const session = process.env.HERDR_PLANNOTATOR_SESSION_ID;
@@ -75,9 +72,6 @@ export async function openReview(url) {
         await openExternal(url);
         return { kind: 'external' };
     }
-    const record = recordPath(session, url);
-    await mkdir(stateDir(), { recursive: true, mode: 0o700 });
-    if (await exists(`${record}.closed`)) return { kind: 'closed' };
     try {
         const app = await resolveApp();
         const api = await runJson(app, ['--browser-api']);
@@ -88,35 +82,25 @@ export async function openReview(url) {
         ]);
         const origin = findOriginPane(snapshot, terminal);
         if (!origin) throw new Error('The requesting terminal has no unambiguous pane in this Herdr App');
-        const result = await runJson(app, ['do', 'pane.split', JSON.stringify({ direction: 'right', pane: origin, mod: 'plannotator-browser', props: { url, session, origin: terminalId, review: reviewKey(session, url) } })]);
+        const result = await runJson(app, ['do', 'pane.split', JSON.stringify({ direction: 'right', pane: origin, mod: 'plannotator-browser', props: { url, session, origin: terminalId, review: id } })]);
         if (typeof result.pane !== 'string') throw new Error('Herdr did not return the new browser pane');
-        const value = { app, pane: result.pane, session, url };
-        const temporary = `${record}.${process.pid}.tmp`;
-        await writeFile(temporary, JSON.stringify(value), { mode: 0o600 });
-        await rename(temporary, `${record}.json`);
-        if (await exists(`${record}.closed`)) await runJson(app, ['do', 'pane.close', JSON.stringify({ pane: result.pane })]);
-        return { kind: 'embedded', pane: result.pane };
+        return { kind: 'embedded', app, pane: result.pane };
     } catch (error) {
         // A missing fork/mod/app must never strand the review without a browser.
         console.error(`Herdr browser unavailable: ${error.message}. Opening the system browser.`);
-        if (!(await exists(`${record}.closed`))) await openExternal(url);
-        return { kind: 'external', reason: error.message };
+        await openExternal(url);
+        return { kind: 'external' };
     }
 }
 
-export async function closeReview(session, url) {
-    if (!session) return;
-    const record = recordPath(session, url);
-    await mkdir(stateDir(), { recursive: true, mode: 0o700 });
-    // A tombstone also covers a browser helper that has not finished opening.
-    await writeFile(`${record}.closed`, '', { mode: 0o600 });
-    let value;
-    try { value = JSON.parse(await readFile(`${record}.json`, 'utf8')); }
-    catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    if (value.session !== session || value.url !== url || typeof value.pane !== 'string') throw new Error('Review ownership does not match');
-    await runJson(value.app, ['do', 'pane.close', JSON.stringify({ pane: value.pane })]);
+export async function closeReview(receipt) {
+    if (receipt.kind === 'embedded') await runJson(receipt.app, ['do', 'pane.close', JSON.stringify({ pane: receipt.pane })]);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    openReview(process.argv[2]).catch(error => { console.error(error.message); process.exitCode = 1; });
+    const url = process.argv[2];
+    const result = process.env.HERDR_PLANNOTATOR_SOCKET ? await requestBrowser(url) : { kind: 'external' };
+    if (result.kind === 'external') await openExternal(url);
+    console.log(JSON.stringify(result));
+    if (result.kind === 'error') process.exitCode = 1;
 }
