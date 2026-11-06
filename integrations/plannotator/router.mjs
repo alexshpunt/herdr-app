@@ -61,7 +61,7 @@ export function createReviewRouter(session, { open, close, missingDelay = 1000 }
             record.consumed = true;
             clearTimeout(record.expiry);
             if (!record.closed) {
-                record.opening = Promise.resolve().then(() => open(record.event)).then(receipt => { record.receipt = receipt; });
+                record.opening = Promise.resolve().then(() => open(record.event, () => record.closed)).then(receipt => { record.receipt = receipt; });
                 await record.opening;
             }
             if (record.closed) { await dispose(record); return { kind: 'closed', review: record.event.id }; }

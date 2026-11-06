@@ -63,7 +63,8 @@ export async function openExternal(url) {
     }
 }
 
-export async function openReview({ url, id }) {
+export async function openReview({ url, id }, isClosed = () => false) {
+    if (isClosed()) return { kind: 'closed' };
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Expected an HTTP(S) URL without credentials');
     const session = process.env.HERDR_PLANNOTATOR_SESSION_ID;
@@ -82,10 +83,12 @@ export async function openReview({ url, id }) {
         ]);
         const origin = findOriginPane(snapshot, terminal);
         if (!origin) throw new Error('The requesting terminal has no unambiguous pane in this Herdr App');
+        if (isClosed()) return { kind: 'closed' };
         const result = await runJson(app, ['do', 'pane.split', JSON.stringify({ direction: 'right', pane: origin, mod: 'plannotator-browser', props: { url, session, origin: terminalId, review: id } })]);
         if (typeof result.pane !== 'string') throw new Error('Herdr did not return the new browser pane');
         return { kind: 'embedded', app, pane: result.pane };
     } catch (error) {
+        if (isClosed()) return { kind: 'closed' };
         // A missing fork/mod/app must never strand the review without a browser.
         console.error(`Herdr browser unavailable: ${error.message}. Opening the system browser.`);
         await openExternal(url);

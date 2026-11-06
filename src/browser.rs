@@ -3,7 +3,7 @@ mod policy;
 #[cfg(target_os = "linux")]
 mod linux;
 
-use gpui::{AnyElement, App, Bounds, IntoElement, ParentElement, Pixels, Styled, Window, WindowId, canvas, div};
+use gpui::{HitboxId, HitboxBehavior, AnyElement, App, Bounds, IntoElement, ParentElement, Pixels, Styled, Window, WindowId, canvas, div};
 use gpui_shell::{ArgumentDescriptor, ArgumentSchema, ComponentArgument, ComponentDataValue, ComponentDescriptor, ComponentMaterializer, ComponentPayload, ComponentRegistry, ConstructorDescriptor, FrozenComponentRegistry, MaterializeRequest, StateDescriptor, StateMethodDescriptor, COMPONENT_REGISTRY_API_VERSION};
 use std::{cell::RefCell, rc::{Rc, Weak}, sync::Arc};
 
@@ -17,8 +17,7 @@ struct Browser {
     url: String,
     native: Option<wry::WebView>,
     error: Option<String>,
-    drawn: bool,
-    unclipped: bool,
+    hitbox: Option<HitboxId>,
     visible: bool,
 }
 
@@ -51,10 +50,8 @@ impl Browser {
         Ok(())
     }
 
-    fn layout(&mut self, bounds: Bounds<Pixels>, window: &Window) {
-        self.drawn = true;
-        let clipped = bounds.intersect(&window.content_mask().bounds);
-        self.unclipped = clipped == bounds && bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.);
+    fn layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
+        self.hitbox = Some(window.insert_hitbox(bounds, HitboxBehavior::Normal).id);
         let Some(view) = &self.native else { return };
         // GTK expects physical pixels. WebView2 and WKWebView use logical coordinates.
         let x = f64::from(f32::from(bounds.origin.x));
@@ -75,12 +72,16 @@ impl Browser {
         };
         if let Err(error) = view.set_bounds(rect) {
             self.error = Some(error.to_string());
-            self.unclipped = false;
         }
     }
 
-    fn show(&mut self, overlay: bool) {
-        let show = policy::should_show(self.drawn, self.unclipped, overlay) && self.error.is_none();
+    fn show(&mut self, window: &Window, overlay: bool) {
+        let hitbox = self.hitbox.and_then(|id| window.prepainted_hitbox(id));
+        let unclipped = hitbox.is_some_and(|hitbox| {
+            hitbox.bounds.intersect(&hitbox.content_mask.bounds) == hitbox.bounds
+                && hitbox.bounds.size.width > gpui::px(0.) && hitbox.bounds.size.height > gpui::px(0.)
+        });
+        let show = policy::should_show(hitbox.is_some(), unclipped, overlay) && self.error.is_none();
         if show == self.visible { return; }
         if let Some(view) = &self.native {
             if !show {
@@ -96,27 +97,18 @@ impl Browser {
     }
 }
 
-/// Reset the per-window paint census; inactive tabs keep their page, hidden.
-pub fn begin_frame(window: WindowId) {
-    VIEWS.with_borrow_mut(|views| {
-        views.retain(|weak| {
-            let Some(view) = weak.upgrade() else { return false };
-            let mut view = view.borrow_mut();
-            if view.window == window { view.drawn = false; }
-            true
-        });
-    });
-}
-
-/// Native child windows cannot be covered by GPUI overlays. Hide them while an
-/// overlay is up, and whenever their element was absent or partly clipped.
+/// Native children follow cache-aware frame geometry, not render callbacks:
+/// a cached view can still be on screen without executing its canvas again.
+/// Hide children for overlays, clipping, or an absent (inactive-tab) hitbox.
 pub fn end_frame(overlay: bool) -> impl IntoElement {
     canvas(|_, _, _| (), move |_, _, window, _| {
-        VIEWS.with_borrow(|views| {
-            for view in views.iter().filter_map(Weak::upgrade) {
+        VIEWS.with_borrow_mut(|views| {
+            views.retain(|weak| {
+                let Some(view) = weak.upgrade() else { return false };
                 let mut view = view.borrow_mut();
-                if view.window == window.window_handle().window_id() { view.show(overlay); }
-            }
+                if view.window == window.window_handle().window_id() { view.show(window, overlay); }
+                true
+            });
         });
     })
 }
@@ -146,7 +138,7 @@ pub fn components() -> FrozenComponentRegistry {
         |args, window, _| {
             let ComponentArgument::String(url) = &args[0] else { unreachable!() };
             if !policy::allows_navigation(url) { return Err("Expected an HTTP(S) URL without credentials".into()); }
-            let state = Rc::new(RefCell::new(Browser { window: window.window_handle().window_id(), url: url.clone(), native: None, error: None, drawn: false, unclipped: false, visible: false }));
+            let state = Rc::new(RefCell::new(Browser { window: window.window_handle().window_id(), url: url.clone(), native: None, error: None, hitbox: None, visible: false }));
             VIEWS.with_borrow_mut(|views| views.push(Rc::downgrade(&state)));
             Ok(Box::new(state))
         },

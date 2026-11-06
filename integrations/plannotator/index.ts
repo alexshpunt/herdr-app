@@ -47,11 +47,13 @@ export default function herdrPlannotator(pi: ExtensionAPI): void {
     try { await router?.shutdown(); }
     catch (error) { report(error); }
     finally {
-      await ipc.stop();
-      for (const [key, value] of prior) {
-        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      try { await ipc.stop(); }
+      finally {
+        for (const [key, value] of prior) {
+          if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+        router = undefined; ipc = undefined; context = undefined;
       }
-      router = undefined; ipc = undefined; context = undefined;
     }
   });
 }
