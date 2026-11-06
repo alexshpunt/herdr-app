@@ -87,4 +87,5 @@ concurrent master change leaves master untouched. The workflow never force-pushe
 
 Source builds do not install upstream's official app updates. Synchronization
 updates this repository; install a checked fork build to update the app. CI keeps
-a Windows test executable as the `herdr-browser-windows` artifact for seven days.
+a Windows test executable with its license notices as the `herdr-browser-windows`
+artifact for seven days.
