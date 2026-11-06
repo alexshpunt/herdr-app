@@ -44,6 +44,9 @@ impl Browser {
         let view = linux::build(builder, window, cx)?;
         #[cfg(not(target_os = "linux"))]
         let view = builder.build_as_child(window)?;
+        // Wry's X11 host is installed after its initial visibility is applied.
+        // Hide once more after construction so its child window is hidden too.
+        view.set_visible(false)?;
         self.native = Some(view);
         Ok(())
     }
@@ -80,6 +83,11 @@ impl Browser {
         let show = policy::should_show(self.drawn, self.unclipped, overlay) && self.error.is_none();
         if show == self.visible { return; }
         if let Some(view) = &self.native {
+            if !show {
+                if let Err(error) = view.focus_parent() {
+                    tracing::warn!("browser focus could not return to its parent: {error}");
+                }
+            }
             match view.set_visible(show) {
                 Ok(()) => self.visible = show,
                 Err(error) => self.error = Some(error.to_string()),

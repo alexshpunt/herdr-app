@@ -53,6 +53,7 @@ Usage:
   herdr-app shot [file.png]        save the last window frame (default: herdr-shot.png)
   herdr-app check <mod folder>     load a mod once and report what's wrong
   herdr-app --skill                Agent Skill: driving the window, and where hc fits
+  herdr-app --browser-api          print this fork's native browser API version
   herdr-app --version
 
 The terminals run in herdr-core (`hc`), which keeps them alive when the
@@ -103,6 +104,7 @@ fn main() {
         None => {}
         Some("-h" | "--help" | "help") => return print!("{HELP}"),
         Some("--skill") => return print!("{}", include_str!("SKILL.md")),
+        Some("--browser-api") => return println!("{}", serde_json::json!({"version": 1, "module": "herdr-browser"})),
         Some("-V" | "--version" | "version") => return println!("herdr-app {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
             eprint!("herdr-app: unknown argument {other:?}\n\n{HELP}");

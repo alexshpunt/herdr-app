@@ -45,6 +45,13 @@ Herdr overlay is open or its container is partly clipped; an inactive tab keeps
 its page hidden. Linux requires X11/XWayland and WebKitGTK 4.1. Windows requires
 WebView2. Keep an external-browser fallback in mods that open pages.
 
+The shipped `plannotator-browser` mod takes `{ url, origin? }` props and opens a
+review with Back, Reload and Open externally controls. `herdr-app --browser-api`
+prints the machine-readable browser API version without opening a window.
+The Pi integration in `integrations/plannotator` uses the core terminal's space
+label to split beside its originating pane. An unknown or ambiguous origin
+opens the system browser instead of using the currently focused agent.
+
 ## What mods are written in
 
 Mods use **gpui-kit** (its gpui-shell): JavaScript that describes **GPUI**
