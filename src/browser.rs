@@ -99,7 +99,13 @@ impl Browser {
     fn show(&mut self, window: &Window, overlay: bool) {
         let hitbox = self.hitbox.and_then(|id| window.prepainted_hitbox(id));
         let unclipped = hitbox.is_some_and(|hitbox| {
-            policy::is_unclipped(&hitbox.bounds, &hitbox.content_mask.bounds)
+            // WKWebView keeps a floating-point logical frame. Windows/GTK
+            // children use integer device pixels, like GPUI's rendered mask.
+            if cfg!(target_os = "macos") {
+                policy::is_unclipped(&hitbox.bounds, &hitbox.content_mask.bounds)
+            } else {
+                policy::is_unclipped_at_scale(&hitbox.bounds, &hitbox.content_mask.bounds, window.scale_factor())
+            }
         });
         let show = policy::should_show(hitbox.is_some(), unclipped, overlay) && self.error.is_none();
         tracing::trace!(geometry = ?hitbox.map(|hitbox| (hitbox.bounds, hitbox.content_mask.bounds)), overlay, unclipped, show, visible = self.visible, "native browser visibility");
