@@ -461,7 +461,7 @@ pub struct AppWindow {
 
 impl AppWindow {
     pub fn new(core: Arc<Core>, requests: async_channel::Receiver<Request>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let runtime = ShellRuntime::new(cx).map_err(|e| tracing::error!("script runtime failed, mods are off: {e:#}")).ok();
+        let runtime = ShellRuntime::new_with_components(cx, crate::browser::components()).map_err(|e| tracing::error!("script runtime failed, mods are off: {e:#}")).ok();
         mods::note_fonts(cx);
         let seen = std::fs::read_to_string(file("seen.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         let mut w = AppWindow {
@@ -4771,6 +4771,7 @@ impl Render for AppWindow {
         let _timed = crate::bench::timed(&crate::bench::WINDOW_US);
         crate::bench::frame_start();
         crate::terminal::next_frame();
+        crate::browser::begin_frame(window.window_id());
         window.set_rem_size(px(settings::ui_font_size()));
         // A terminal the person clicked into becomes the focused pane.
         let clicked = self
@@ -4884,6 +4885,7 @@ impl Render for AppWindow {
             .children(tracker)
             .children(win_tracker)
             .child(pane_drag)
+            .child(crate::browser::end_frame(!self.overlays.is_empty() || self.pane_drag.is_some()))
             .child(crate::bench::frame_end())
     }
 }
