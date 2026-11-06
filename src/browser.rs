@@ -107,7 +107,7 @@ pub fn end_frame(overlay: bool) -> impl IntoElement {
         VIEWS.with_borrow(|views| {
             for view in views.iter().filter_map(Weak::upgrade) {
                 let mut view = view.borrow_mut();
-                if view.window == window.window_id() { view.show(overlay); }
+                if view.window == window.window_handle().window_id() { view.show(overlay); }
             }
         });
     })
@@ -138,7 +138,7 @@ pub fn components() -> FrozenComponentRegistry {
         |args, window, _| {
             let ComponentArgument::String(url) = &args[0] else { unreachable!() };
             if !policy::allows_navigation(url) { return Err("Expected an HTTP(S) URL without credentials".into()); }
-            let state = Rc::new(RefCell::new(Browser { window: window.window_id(), url: url.clone(), native: None, error: None, drawn: false, unclipped: false, visible: false }));
+            let state = Rc::new(RefCell::new(Browser { window: window.window_handle().window_id(), url: url.clone(), native: None, error: None, drawn: false, unclipped: false, visible: false }));
             VIEWS.with_borrow_mut(|views| views.push(Rc::downgrade(&state)));
             Ok(Box::new(state))
         },

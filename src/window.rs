@@ -4771,7 +4771,7 @@ impl Render for AppWindow {
         let _timed = crate::bench::timed(&crate::bench::WINDOW_US);
         crate::bench::frame_start();
         crate::terminal::next_frame();
-        crate::browser::begin_frame(window.window_id());
+        crate::browser::begin_frame(window.window_handle().window_id());
         window.set_rem_size(px(settings::ui_font_size()));
         // A terminal the person clicked into becomes the focused pane.
         let clicked = self
