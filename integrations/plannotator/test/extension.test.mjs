@@ -26,7 +26,7 @@ test('a real Pi binds browser launches and cleanup to its own session', { timeou
     const details = getToolExecutionDetails(getToolExecution(run, 'probe'));
     assert.equal(details.configuredSession, details.session);
     assert.equal(details.session, run.state.sessionId);
-    assert.equal(details.browser, path.resolve(here, '../open.mjs'));
+    assert.equal(details.browser, path.resolve(here, process.platform === 'win32' ? '../open.cmd' : '../open.mjs'));
     const records = await readdir(state);
     assert.equal(records.length, 1);
     assert.equal(records[0].endsWith('.closed'), true);
