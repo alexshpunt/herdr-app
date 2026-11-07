@@ -46,7 +46,7 @@ export default class WebsiteBrowser extends View {
         .child(this.button(t, "back", "Back", () => this.browser.back()))
         .child(this.button(t, "reload", "Reload", () => this.browser.reload()))
         .child(this.button(t, "external", "Open externally", (_event, cx) => cx.open_url(this.browser.url())))
-        .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(this.browser.url()))
+        .child(div().flex_1().min_w(0))
         .child(div().flex_none().text_color(t.dim).child(props()?.origin || "")))
       .when(props()?.linked === false, el => el.child(div().px(12).py(6).text_color(t.muted).child("No Linear project found for this folder. Opening Linear instead.")))
       .when(Boolean(this.browser.error()), el => el.child(div().px(12).py(6).text_color(t.blocked).child(this.browser.error())))
