@@ -58,7 +58,7 @@ export default class NewMenu extends View {
     const space = spaces().find(s => s.active);
     const installed = this.agents.filter(a => a.installed);
     const choices = [...installed, ...this.agents.filter(a => !a.installed).slice(0, 2)];
-    return v_flex().min_h(0).w_full().h(Math.min(522, 198 + Math.max(1, choices.length) * 31)).bg(t.popover).p(5).text_size(12.8)
+    return v_flex().min_h(0).w_full().h(Math.min(615, 291 + Math.max(1, choices.length) * 31)).bg(t.popover).p(5).text_size(12.8)
       .id("new-menu").track_focus(this.handle)
       .on_key_down((e) => {
         if (e.modifiers.control || e.modifiers.platform || e.modifiers.alt) return;
@@ -69,6 +69,9 @@ export default class NewMenu extends View {
       })
       .child(this.row("terminal", svg("icons/shell.svg").size(14), "Terminal", () => run("tab.new", { space: space?.id }), shortcut("tab.new")))
       .child(this.row("linear", div().w(14).child("◉"), "Linear", () => run("tab.new", { name: "Linear", space: space?.id, mod: "linear-browser", props: this.linear }), this.linear ? "" : "Checking…", Boolean(this.linear && space)))
+      .child(this.row("github", div().w(14).child("◉"), "GitHub", () => run("tab.new", { name: "GitHub", space: space?.id, mod: "linear-browser", props: { url: "https://github.com/" } }), "", Boolean(space)))
+      .child(this.row("notion", div().w(14).child("◉"), "Notion", () => run("tab.new", { name: "Notion", space: space?.id, mod: "linear-browser", props: { url: "https://www.notion.so/" } }), "", Boolean(space)))
+      .child(this.row("website", div().w(14).child("◉"), "Website…", () => run("tab.new", { name: "Website", space: space?.id, mod: "linear-browser" }), "", Boolean(space)))
       .child(div().px(9).pt(8).pb(4).text_size(11).text_color(t.dim).child("Start an agent"))
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
         .children(choices.map((a, i) => this.row(a.key, a.tint ? svg(a.icon).size(14).text_color(t.foreground) : image(a.icon).size(14), a.name,
