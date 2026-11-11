@@ -175,7 +175,9 @@ the highlighted line shows where it will land.
   looking (it becomes `idle` once they look). A space's and a tab's
   status is the most urgent of its agents: blocked > done > working > idle.
 - **Sub-agents** are terminals an agent started with `hc run`: the core
-  records the starter as `parent` (see `terminals()`). They belong to their
+  records the starter as `parent` (see `terminals()`). Parent addresses use
+  the app's machine names, or a bare ID for this computer, when they can be
+  mapped; otherwise they stay as the core reported them. They belong to their
   parent's tab without a pane; the `agents` mod shows them,
   `terminal.peek` opens one, `terminal.keep` gives one a pane.
   Ctrl-click (Cmd-click on macOS) a live terminal address in terminal text to
@@ -391,7 +393,8 @@ The tab block says how each pane of the shown tab is wrapped:
   buttons run pane commands with that pane (`pane.split`, `pane.zoom`,
   `pane.close`). `position`: `top` or `bottom`; `reveal: "hover"` shows it
   only while the pointer is on the pane, drawn over the terminal so the
-  terminal never resizes. The shipped `pane` mod is an example header.
+  terminal never resizes. The shipped `pane` mod keeps its divider on the
+  terminal-facing edge and reads the frame position from `layout()`.
 - `lone: true` frames a tab's only pane too (default: only when split).
 - Each layout has its own, so one can stay bare while another makes
   every pane a card.
@@ -652,7 +655,9 @@ The main ones:
   Add machine lists all named ssh-config hosts in a scrollable list. Machines
   that need a password, a new host key or herdr-core installed show what to run
   in your own terminal; the picker updates once it is added. Other machines are
-  added quietly. If a remote machine was rebuilt
+  added quietly. Login guidance includes Copy. A machine that needs a login shows
+  `hc machine login <name>` with Copy in Settings > Machines, its sidebar group,
+  the welcome screen and the failed New space toast. If a remote machine was rebuilt
   or replaced and a different core answers there, its sidebar offers Connect:
   explicitly forget the old identity and pair again with the same name and target.
   Other unreachable machines don't offer this.
@@ -802,7 +807,7 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
   `"claude": { "run": ["my-claude"] }` or add
   `"claude-alt": { "name": "Claude (alt)", "icon": "icons/claude.svg", "run": ["my-claude-alt"] }`
   inside `programs`. Use programs or shell functions, not aliases (the launcher
-  does not expand them). On macOS the menu launcher loads login profiles before
+  does not expand them). On macOS both checks and the menu launcher load login profiles before
   running the agent and leaves an interactive login shell when it ends.
   Codex starts as `codex --no-daemon`: a shared Codex daemon would make later
   sessions use the first terminal's identity and stop with it.
@@ -963,6 +968,11 @@ Chained builders with GPUI's snake_case names: `div()`, `h_flex()`,
 `.rounded(n)`; `.id("unique")` then `.on_click(...)`, `.on_mouse_down("right", ...)`,
 `.hover((s) => s.bg(c))`, `.on_scroll_wheel(...)`; keyboard: `this.h = cx.focus_handle()`
 in init, `.track_focus(this.h).on_key_down((e, cx) => …)`, `this.h.focus()`.
+`ScrollHandle` from `gpui-base` scrolls a plain `overflow_*_scroll()` or
+`overflow_*_scrollbar()` area from code. Create `this.scroll = ScrollHandle.new()`
+in `init`, attach `.track_scroll(this.scroll)`, then call
+`this.scroll.scroll_to_item(index)` to reveal a zero-based direct child with
+only the movement needed. Requests run once after layout; visible children stay put.
 `.on_drop((event, cx) => …)` on a plain layout element receives external files as
 `event.paths` (absolute paths). The feedback form accepts dropped images with
 the same limits, previews and removal as picked images.
@@ -1032,7 +1042,7 @@ All of it is in `herdr.d.ts`. In short:
   `knownAgents({ on })`: the agents people can start (programs.json's
   `run`), most picked first, each `installed` or not there (asked of the
   shell agents start in; a remote Unix machine's login/interactive shell when supported);
-  start one with `argv: agent.run`.
+  rejects if the check fails (failed checks are not cached); start one with `argv: agent.run`.
   `pickFolder({ prompt })`: the system's folder picker (here only),
   resolves with the folder or null.
 - Files: `readTextFile(path, { on })` (here, or on that machine),
