@@ -645,9 +645,13 @@ mod win {
         // A pane whose mod restarted (a mod reload, a layout change) gets the
         // window its earlier copy still holds for the same target: VS Code
         // would only bring that window forward instead of opening another.
-        if let Some(embedded) = take_over(state, &app, &target, host) {
-            // That window is running: it gets the file on its own.
-            if let Some(args) = goto_args
+        let orphan = take_orphan(&app, &target);
+        let restarted = orphan.is_some();
+        if let Some(embedded) = orphan.or_else(|| held(state, &app, &target)).map(|e| moved_to(e, host)) {
+            // A window taken from another pane is running: it gets the file on
+            // its own. A restarted copy's window opened it when it started.
+            if !restarted
+                && let Some(args) = goto_args
                 && let Ok(mut child) = std::process::Command::new(&launch.program).args(args).spawn()
             {
                 std::thread::spawn(move || child.wait());
@@ -825,13 +829,6 @@ mod win {
         app.opening = false;
         app.embedded = Some(embedded);
         app.status = "Hidden while its pane is covered.".into();
-    }
-
-    /// The window of the same program and target that a dropped state left or
-    /// another state holds, moved into this host. That state ends as closed.
-    fn take_over(state: &State, app: &str, target: &str, host: HWND) -> Option<Embedded> {
-        let embedded = take_orphan(app, target).or_else(|| held(state, app, target))?;
-        Some(moved_to(embedded, host))
     }
 
     fn take_orphan(app: &str, target: &str) -> Option<Embedded> {

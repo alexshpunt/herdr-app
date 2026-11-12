@@ -2891,6 +2891,8 @@ impl AppWindow {
                 link["url"] = json!(url);
             }
             links::Target::File(path, place) => {
+                // Checked on this computer, whatever machine the shown space is on.
+                link["machine"] = Value::Null;
                 link["kind"] = json!(if path.is_dir() { "folder" } else { "file" });
                 link["path"] = json!(path.to_string_lossy());
                 link["line"] = json!(place.line);
