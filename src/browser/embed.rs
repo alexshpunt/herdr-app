@@ -535,18 +535,20 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             Ok(ComponentDataValue::Null)
         }),
         // Before the window starts, the file goes with the launch, so the new
-        // window opens it in place of its Welcome page. A running VS Code puts
-        // a file it is handed later in the window that has its folder.
+        // window opens it in place of its Welcome page. While it starts, the
+        // file waits for the window: a Code.exe started meanwhile could open a
+        // window of its own. A running VS Code puts a file it is handed later
+        // in the window that has its folder.
         StateMethodDescriptor::new::<State>("goto", "(fileUri: string): void", |state, args, _, _| {
             let Some(ComponentDataValue::String(uri)) = args.first() else { anyhow::bail!("Expected a file URI") };
             let mut app = state.borrow_mut();
             anyhow::ensure!(app.app == "vscode", "Only a VS Code pane opens files");
             anyhow::ensure!(uri.contains("://"), "Expected a file URI, such as file:///C:/r/a.rs:42:7");
             #[cfg(windows)]
-            let started = app.embedded.is_some() || app.opening;
+            let shown = app.embedded.is_some();
             #[cfg(not(windows))]
-            let started = false;
-            if !started {
+            let shown = false;
+            if !shown {
                 app.goto = Some(uri.clone());
                 return Ok(ComponentDataValue::Null);
             }
@@ -841,10 +843,12 @@ mod win {
             let _ = cx.update(|window, _| window.refresh());
             apply(&state);
             focus::give(found);
-            if let Some(uri) = place
-                && let Err(error) = super::vscode_goto(&launch.program, &uri)
-            {
-                tracing::warn!(%error, "cannot hand {uri} to VS Code");
+            // The launch's line, then a file asked for while the window started.
+            let asked = state.borrow_mut().goto.take();
+            for uri in place.iter().chain(asked.iter()) {
+                if let Err(error) = super::vscode_goto(&launch.program, uri) {
+                    tracing::warn!(%error, "cannot hand {uri} to VS Code");
+                }
             }
             // Only the pane holds its state: closing the pane drops it, and
             // with it the window.
