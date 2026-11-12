@@ -446,7 +446,7 @@ Toggle a mod as the overlay its mod.json describes; calling again closes it.
 
 ## `overlay.close`
 
-Close an overlay (default: the top dialog or popup).
+Close an overlay by its id or mod name (default: the top dialog or popup, else the front window); an error if none is open.
 
 | Argument | Required |
 |---|---|
