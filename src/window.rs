@@ -3875,10 +3875,13 @@ impl AppWindow {
             Request::Control { cmd, reply } => {
                 let _ = reply.send(self.control(cmd, window, cx));
             }
-            // A click in a browser pane happens in the shown tab.
+            // A click in a browser pane happens in the shown tab: what it opens
+            // is for the agent that tab was opened for.
             Request::BrowserLink { url } => {
-                let space = self.model.active.clone();
-                self.route_link(links::Target::Url(url), None, space, None, None, "browser", false, window, cx);
+                let space = self.model.active_space();
+                let origin = space.and_then(|s| model::tab_origin(s, s.active_tab()?));
+                let space = space.map(|s| s.id.clone());
+                self.route_link(links::Target::Url(url), None, space, origin, None, "browser", false, window, cx);
             }
             Request::OpenLink { link, system } => self.deliver_link(link, system, window, cx),
         }
