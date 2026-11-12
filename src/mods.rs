@@ -1337,6 +1337,30 @@ mod tests {
     }
 
     #[test]
+    fn links_go_to_the_newest_copy_that_waits_for_them_hidden_or_not() {
+        LINKS.with_borrow_mut(Vec::clear);
+        assert!(!takes_links());
+        assert!(!send_link(json!({ "kind": "url", "url": "https://linear.app" })));
+        let (old_tx, old) = async_channel::unbounded();
+        let (new_tx, new) = async_channel::unbounded();
+        let (gone_tx, gone) = async_channel::unbounded::<Value>();
+        LINKS.with_borrow_mut(|l| *l = vec![(1, old_tx), (2, new_tx), (3, gone_tx)]);
+        drop(gone);
+        // The reloaded copy (3) is gone: the newest live one takes the link, shown or not.
+        set_shown_copies([].into());
+        assert!(takes_links());
+        assert!(send_link(json!({ "kind": "file", "path": "/r/a.rs", "line": 4 })));
+        assert_eq!(new.try_recv().unwrap()["line"], 4);
+        assert!(old.is_empty());
+        drop(new);
+        assert!(send_link(json!({ "kind": "folder", "path": "/r" })));
+        assert_eq!(old.try_recv().unwrap()["path"], "/r");
+        drop(old);
+        assert!(!takes_links());
+        LINKS.with_borrow_mut(Vec::clear);
+    }
+
+    #[test]
     fn keyboard_focus_is_opt_in_and_commands_only_reach_the_shown_copy() {
         for metadata in [json!({}), json!({"focusable": false})] {
             assert!(!serde_json::from_value::<Hint>(metadata).unwrap().focusable);
