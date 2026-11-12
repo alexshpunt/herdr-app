@@ -645,9 +645,9 @@ mod win {
         // A pane whose mod restarted (a mod reload, a layout change) gets the
         // window its earlier copy still holds for the same target: VS Code
         // would only bring that window forward instead of opening another.
-        let orphan = take_orphan(&app, &target);
-        let restarted = orphan.is_some();
-        if let Some(embedded) = orphan.or_else(|| held(state, &app, &target)).map(|e| moved_to(e, host)) {
+        let left = take_orphan(&app, &target);
+        let restarted = left.is_some();
+        if let Some(embedded) = left.or_else(|| held(state, &app, &target)).map(|e| moved_to(e, host)) {
             // A window taken from another pane is running: it gets the file on
             // its own. A restarted copy's window opened it when it started.
             if !restarted
