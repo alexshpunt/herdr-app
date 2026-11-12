@@ -26,10 +26,24 @@ export default class VsCode extends View {
       let last = "";
       for (;;) {
         await cx.sleep(500);
+        this.gotoRequested();
         const now = `${this.app.status()}|${this.app.error()}`;
         if (now !== last) { last = now; cx.notify(); }
       }
     });
+  }
+
+  // A file shown in this tab (a mod waiting in nextLink()) is asked for as
+  // shared("vscode.goto")[its pane] = {uri} (a file URI, `:line:column` after
+  // it); once this pane's window is shown, VS Code opens it there.
+  gotoRequested() {
+    const pane = props()?.pane;
+    const requests = shared("vscode.goto") ?? {};
+    const request = pane ? requests[pane] : null;
+    if (!request?.uri || !this.app.shown()) return;
+    const { [pane]: _done, ...rest } = requests;
+    setShared("vscode.goto", rest);
+    try { this.app.goto(request.uri); } catch (error) { console.error(`Cannot open ${request.uri}: ${error}`); }
   }
 
   // This tab is the one VS Code tab no other open project has claimed.

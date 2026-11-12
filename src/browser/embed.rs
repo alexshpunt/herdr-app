@@ -456,6 +456,19 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             }
             Ok(ComponentDataValue::Null)
         }),
+        // A running VS Code puts a file it is handed in the window that has
+        // its folder: this pane's, once its window is shown.
+        StateMethodDescriptor::new::<State>("goto", "(fileUri: string): void", |state, args, _, _| {
+            let Some(ComponentDataValue::String(uri)) = args.first() else { anyhow::bail!("Expected a file URI") };
+            let app = state.borrow();
+            anyhow::ensure!(app.app == "vscode", "Only a VS Code pane opens files");
+            anyhow::ensure!(uri.contains("://"), "Expected a file URI, such as file:///C:/r/a.rs:42:7");
+            let program = vscode(&app.target)?.program;
+            let mut child = std::process::Command::new(&program).args(["--goto", "--file-uri", uri.as_str()]).spawn()?;
+            // Reaped off the UI thread: it hands the file over and exits.
+            std::thread::spawn(move || child.wait());
+            Ok(ComponentDataValue::Null)
+        }),
         StateMethodDescriptor::new::<State>("focus", "(): void", |state, _, _, _| {
             // Every copy of a mod gets its commands: only a pane shown within a
             // second takes the keyboard. The next frame gives it, outside this
