@@ -229,13 +229,26 @@ fn person_program(program: &std::path::Path) -> std::process::Command {
     command
 }
 
-/// Hands a file URI (`:line:column` after it) to the running VS Code, which
-/// opens it in the window that has its folder.
-fn vscode_goto(program: &std::path::Path, uri: &str) -> std::io::Result<()> {
-    let mut child = person_program(program).args(["--goto", "--file-uri", uri])
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
-    // Reaped off the UI thread: it hands the file over and exits.
-    std::thread::spawn(move || child.wait());
+/// Hands file URIs (`:line:column` after each) to the running VS Code, which
+/// opens each in the window that has its folder. They go one after another,
+/// so the last one ends up in front; at once, the order would be VS Code's.
+fn vscode_goto(program: &std::path::Path, uris: Vec<String>) -> std::io::Result<()> {
+    let hand = |program: &std::path::Path, uri: &str| person_program(program).args(["--goto", "--file-uri", uri])
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+    let mut uris = uris.into_iter();
+    let Some(first) = uris.next() else { return Ok(()) };
+    let mut child = hand(program, &first)?;
+    let program = program.to_owned();
+    // Off the UI thread: each Code.exe hands its file over and exits.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        for uri in uris {
+            match hand(&program, &uri) {
+                Ok(mut child) => { let _ = child.wait(); }
+                Err(error) => tracing::warn!(%error, "cannot hand {uri} to VS Code"),
+            }
+        }
+    });
     Ok(())
 }
 
@@ -552,7 +565,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
                 app.goto = Some(uri.clone());
                 return Ok(ComponentDataValue::Null);
             }
-            vscode_goto(&vscode(&app.target)?.program, uri)?;
+            vscode_goto(&vscode(&app.target)?.program, vec![uri.clone()])?;
             Ok(ComponentDataValue::Null)
         }),
         StateMethodDescriptor::new::<State>("focus", "(): void", |state, _, _, _| {
@@ -730,7 +743,7 @@ mod win {
             // its own. A restarted copy's window opened it when it started.
             if !restarted
                 && let Some(uri) = &goto
-                && let Err(error) = super::vscode_goto(&launch.program, uri)
+                && let Err(error) = super::vscode_goto(&launch.program, vec![uri.clone()])
             {
                 tracing::warn!(%error, "cannot hand {uri} to VS Code");
             }
@@ -845,10 +858,8 @@ mod win {
             focus::give(found);
             // The launch's line, then a file asked for while the window started.
             let asked = state.borrow_mut().goto.take();
-            for uri in place.iter().chain(asked.iter()) {
-                if let Err(error) = super::vscode_goto(&launch.program, uri) {
-                    tracing::warn!(%error, "cannot hand {uri} to VS Code");
-                }
+            if let Err(error) = super::vscode_goto(&launch.program, place.into_iter().chain(asked).collect()) {
+                tracing::warn!(%error, "cannot hand files to VS Code");
             }
             // Only the pane holds its state: closing the pane drops it, and
             // with it the window.
