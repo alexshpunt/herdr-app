@@ -72,8 +72,15 @@ impl Browser {
             .with_url(url)
             .with_visible(false)
             .with_navigation_handler(|url| policy::allows_navigation(&url))
-            // No popups, downloads, custom protocols, initialization scripts or native IPC.
-            .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+            // No popups, downloads, custom protocols, initialization scripts or
+            // native IPC. A link that asks for a new window opens as a terminal
+            // link does: in the Herdr tab that shows it, else the system browser.
+            .with_new_window_req_handler(|url, _| {
+                if policy::allows_navigation(&url) {
+                    crate::mods::request(crate::mods::Request::BrowserLink { url });
+                }
+                wry::NewWindowResponse::Deny
+            })
             .with_download_started_handler(|_, _| false)
     }
 

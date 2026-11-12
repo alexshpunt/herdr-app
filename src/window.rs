@@ -11,6 +11,7 @@ mod pane_drag;
 mod pane_size;
 mod titlebar;
 
+use crate::links;
 use crate::layout::{Axis, Background as Paint, Content, Fit, HeaderContent, Kind, Line, Node, PaneFrame, Size as Span};
 use crate::model::{self, Tab, Model};
 use crate::mods::{self, Found, Instance, Request};
@@ -1206,7 +1207,10 @@ impl AppWindow {
                 {
                     mods.push(pane_header_mod(n, name, props));
                 }
-                visit(n, &mut terms, &mut mods);
+                match n.content() {
+                    Some(Content::Mod { name, props }) => mods.push((n.id.clone(), tab_mod(n, name, props))),
+                    _ => visit(n, &mut terms, &mut mods),
+                }
                 if let Some(a) = self.swapped.get(&n.id) {
                     terms.push((format!("{}{SWAP}", n.id), a.clone()));
                 }
@@ -1263,7 +1267,7 @@ impl AppWindow {
         for c in self.model.tabs() {
             for n in c.root.walk() {
                 if let Some(Content::Mod { name, props }) = n.content() {
-                    out.insert(n.id.clone(), inst(name, props));
+                    out.insert(n.id.clone(), tab_mod(n, name, props));
                 }
                 if let Some((name, props)) = &header
                     && n.is_pane()
@@ -1414,6 +1418,10 @@ impl AppWindow {
             let (block, addr) = (id.clone(), address.clone());
             let sub = cx.subscribe_in(&view, window, move |this, _, ev: &TerminalEvent, window, cx| match ev {
                 TerminalEvent::Peek(address) => this.peek_terminal(address, window, cx),
+                TerminalEvent::Link(target) => {
+                    let origin = this.model.status(&addr).is_some().then(|| addr.clone());
+                    this.route_link(target.clone(), Some(addr.clone()), None, origin, None, "terminal", false, window, cx)
+                }
                 TerminalEvent::TitleChanged => this.publish(cx),
                 TerminalEvent::Ended => this.terminal_ended(&block, window, cx),
                 TerminalEvent::ContextMenu(at) => {
@@ -1718,8 +1726,8 @@ impl AppWindow {
                     let focused = m.active.as_deref() == Some(pr.id.as_str()) && focused_pane.as_deref() == Some(p.id.as_str());
                     let zoomed = ctx.zoomed.as_deref() == Some(p.id.as_str());
                     // A mod pane: what it shows, no terminal.
-                    if let Some(Content::Mod { name, .. }) = p.content() {
-                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
+                    if let Some(Content::Mod { name, props }) = p.content() {
+                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "props": props, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
                         continue;
                     }
                     let Some(addr) = p.terminal() else { continue };
@@ -2751,6 +2759,103 @@ impl AppWindow {
         self.open_overlay(mods::new_overlay_id(), spec, window, cx);
     }
 
+    // ---- links -------------------------------------------------------------
+
+    /// The terminal a link came from: an address, or the id on its own machine
+    /// with its space there (`$HC_TERMINAL_ID` and the `herdr.space` label are
+    /// all an agent on that machine knows).
+    fn link_source(&self, terminal: &str, space: Option<&str>) -> Option<String> {
+        let names = |id: &str, want: &str| id == want || id.strip_suffix(want).is_some_and(|rest| rest.ends_with('/'));
+        let mut found: Vec<&String> = self.live.keys().filter(|a| names(a, terminal)).collect();
+        if let Some(space) = space {
+            found.retain(|a| {
+                self.model.pane_of(a).and_then(|p| self.model.space_of(&p)).is_some_and(|s| names(&s.id, space))
+                    || self.live.get(*a).and_then(|r| r.pointer("/labels/herdr.space")).and_then(Value::as_str) == Some(space)
+            });
+        } else if found.iter().any(|a| a.as_str() == terminal) {
+            return Some(terminal.to_owned());
+        }
+        (found.len() == 1).then(|| found[0].clone())
+    }
+
+    /// What a `link.open` target is: on another machine a path is checked
+    /// there when the link is routed; here it must exist.
+    fn link_target(&self, target: &str, source: Option<&str>, cwd: Option<&str>) -> Result<links::Target, String> {
+        if source.is_some_and(|s| s.contains('/')) {
+            return Ok(links::unchecked(target));
+        }
+        let cwd = cwd.map(std::path::PathBuf::from).or_else(|| source.and_then(|s| self.cwds.get(s)).map(std::path::PathBuf::from));
+        links::resolve(target, cwd.as_deref()).ok_or_else(|| format!("no such file or folder: {target}"))
+    }
+
+    /// Routes a link: what it points to, on which machine, from which space and
+    /// for which agent (`origin`), to the mod that shows links in tabs, else to
+    /// the system. A path on another machine is checked there first, off the
+    /// UI thread.
+    #[allow(clippy::too_many_arguments)]
+    fn route_link(&mut self, target: links::Target, source: Option<String>, space: Option<String>, origin: Option<String>, cwd: Option<String>, from: &str, system: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let source_space = source.as_deref().and_then(|s| self.model.pane_of(s)).and_then(|p| self.model.space_of(&p));
+        let space = source_space.or_else(|| space.as_deref().and_then(|s| self.model.space(s))).or_else(|| self.model.active_space());
+        let machine = source.as_deref().and_then(|s| s.split_once('/')).map(|(m, _)| m.to_owned()).or_else(|| space.and_then(|s| s.machine.clone()));
+        let mut link = json!({ "machine": machine, "space": space.map(|s| s.id.clone()), "origin": origin, "from": from });
+        match target {
+            links::Target::Url(url) => {
+                link["kind"] = json!("url");
+                link["url"] = json!(url);
+            }
+            links::Target::File(path, place) => {
+                link["kind"] = json!(if path.is_dir() { "folder" } else { "file" });
+                link["path"] = json!(path.to_string_lossy());
+                link["line"] = json!(place.line);
+                link["column"] = json!(place.column);
+            }
+            links::Target::Remote(raw) => {
+                let Some(machine) = machine else { return };
+                let cwd = cwd.or_else(|| source.and_then(|s| self.cwds.get(&s).cloned()));
+                std::thread::spawn(move || {
+                    match links::resolve_on(&machine, &raw, cwd.as_deref()) {
+                        Some(found) => {
+                            link["kind"] = json!(if found.folder { "folder" } else { "file" });
+                            link["path"] = json!(found.path);
+                            link["line"] = json!(found.place.line);
+                            link["column"] = json!(found.place.column);
+                        }
+                        None => {
+                            link["kind"] = json!("missing");
+                            link["path"] = json!(raw);
+                        }
+                    }
+                    mods::request(Request::OpenLink { link, system });
+                });
+                return;
+            }
+        }
+        self.deliver_link(link, system, window, cx);
+    }
+
+    /// A routed link: a mod waiting in `nextLink()` shows it in a tab;
+    /// without one, or with `system`, the system's program opens it.
+    fn deliver_link(&mut self, link: Value, system: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let machine = link["machine"].as_str().map(str::to_owned);
+        let path = link["path"].as_str().unwrap_or_default().to_owned();
+        let toast = |this: &mut Self, title: String, window: &mut Window, cx: &mut Context<Self>| {
+            let spec = json!({"kind":"toast", "notification":{"title":title,"body":&path,"level":"warning"}});
+            this.open_overlay(mods::new_overlay_id(), spec, window, cx);
+        };
+        if link["kind"] == "missing" {
+            return toast(self, format!("No such file or folder on {}", machine.as_deref().unwrap_or("this computer")), window, cx);
+        }
+        if !system && mods::send_link(link.clone()) {
+            return;
+        }
+        match (link["kind"].as_str(), machine) {
+            (Some("url"), _) => links::open(&links::Target::Url(link["url"].as_str().unwrap_or_default().to_owned())),
+            (Some("file" | "folder"), None) => links::open(&links::Target::File(path.clone().into(), links::Place::default())),
+            (_, Some(machine)) => toast(self, format!("No tab opens files on {machine}"), window, cx),
+            _ => {}
+        }
+    }
+
     /// Runs a command and says what it made or why not. Scripts and agents
     /// (`person: false`) never get a dialog: a missing argument is an error.
     fn run_as(&mut self, name: &str, mut args: Value, person: bool, window: &mut Window, cx: &mut Context<Self>) -> Value {
@@ -3128,6 +3233,26 @@ impl AppWindow {
                     return self.fail(format!("no running terminal {t:?}"));
                 }
                 self.kill(&[t.to_owned()], cx);
+            }
+            "link.open" => {
+                let target = Self::arg(a, "target").unwrap_or_default().trim().to_owned();
+                if target.is_empty() {
+                    return self.fail("link.open needs target");
+                }
+                let source = match Self::arg(a, "terminal") {
+                    Some(t) => match self.link_source(t, Self::arg(a, "space")) {
+                        Some(s) => Some(s),
+                        None => return self.fail(format!("no running terminal {t:?}")),
+                    },
+                    None => None,
+                };
+                let link = match self.link_target(&target, source.as_deref(), Self::arg(a, "cwd")) {
+                    Ok(link) => link,
+                    Err(e) => return self.fail(e),
+                };
+                let origin = source.clone().filter(|s| self.model.status(s).is_some());
+                let system = a.get("system").and_then(Value::as_bool) == Some(true);
+                self.route_link(link, source, Self::owned(a, "space"), origin, Self::owned(a, "cwd"), "command", system, window, cx);
             }
             "terminal.peek" => {
                 let t = Self::arg(a, "terminal").unwrap_or_default();
@@ -3744,6 +3869,12 @@ impl AppWindow {
             Request::Control { cmd, reply } => {
                 let _ = reply.send(self.control(cmd, window, cx));
             }
+            // A click in a browser pane happens in the shown tab.
+            Request::BrowserLink { url } => {
+                let space = self.model.active.clone();
+                self.route_link(links::Target::Url(url), None, space, None, None, "browser", false, window, cx);
+            }
+            Request::OpenLink { link, system } => self.deliver_link(link, system, window, cx),
         }
     }
 
@@ -4723,6 +4854,14 @@ fn pane_header_mod(n: &Node, name: &str, props: &Value) -> (String, Instance) {
     props["pane"] = json!(n.id);
     props["terminal"] = json!(n.terminal());
     (format!("{}#frame", n.id), Instance { name: name.to_owned(), props })
+}
+
+/// A tab's mod pane, told which pane it is (its props as stored, plus `pane`).
+/// `visible` and `owned_mods` must build the same, or a kept copy is dropped.
+fn tab_mod(n: &Node, name: &str, props: &Value) -> Instance {
+    let mut props = if props.is_object() { props.clone() } else { json!({}) };
+    props["pane"] = json!(n.id);
+    Instance { name: name.to_owned(), props }
 }
 
 /// Every node shown on screen (hidden ones and inactive stack children skipped).

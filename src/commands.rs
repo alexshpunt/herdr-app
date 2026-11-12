@@ -67,6 +67,8 @@ pub const COMMANDS: &[Command] = &[
     cmd("terminal.paste", &[], "Paste into the focused terminal (copied files as if dropped; an image alone as terminal.paste_image pastes it)."),
     cmd("terminal.paste_image", &[], "Ctrl+V: the clipboard's image as a file on the focused terminal's machine, when that's another one; on Windows, paste clipboard text; otherwise Ctrl+V goes to the terminal."),
     cmd("terminal.search", &[], "Search the focused terminal's screen and scrollback; the find bar and query stay with that terminal."),
+    cmd("link.open", &[req("target"), opt("terminal"), opt("space"), opt("cwd"), opt("system")],
+        "Open a link as clicking it in a terminal does: a URL, or a file or folder path (`:42` or `:42:7` after it names a line and column) on the terminal's machine, relative to cwd (default: the terminal's folder). terminal: the terminal it came from (an address, or the id on its machine with space naming its space there); tabs opened for an agent's link belong to that agent. A mod waiting in nextLink() shows it in a tab; otherwise, or with system true, the system's program opens it."),
     cmd("agent.focus", &[req("terminal")], "Show an agent (sub-agents too)."),
     cmd("agent.next", &[], "Show the next agent, in the order the agents list shows them."),
     cmd("agent.prev", &[], "Show the previous agent."),

@@ -66,6 +66,8 @@ export function playSound(sound: string): null;
  *   terminal.right_click {to: "program" | "menu", terminal?} (right-clicks to a program that takes the mouse; Shift: the menu).
  *   terminal.scroll {lines | pages | to: "top" | "bottom", terminal?} (Herdr's view of the history: negative goes up; pages may be fractional).
  * Agents: agent.next, agent.prev (the agents list's order), agent.focus {terminal} (sub-agents too).
+ * Links: link.open {target, terminal?, space?, cwd?, system?} opens a URL or a path as a click on it in that
+ *   terminal does (see nextLink); system: true skips the mod and opens the system's program.
  * Layout (the shown layout's nodes by id): layout.toggle|show|hide {id}, layout.resize {id, px | weight},
  *   layout.select {stack, child}, layout.set {layout} (personal trees; shipped layouts: click/look fields only), layout.switch {name?} (no name: the next one).
  *   layout.clone {name, as?} duplicates and switches; mod.clone {name, as?} duplicates a mod.
@@ -187,9 +189,11 @@ export function agents(): AgentInfo[];
 export interface PaneInfo {
   pane: string;
   /** null for a mod pane (`pane.split {mod}`): then `mod` names it, and only
-   *  pane, mod, tab, title, focused and zoomed are set. */
+   *  pane, mod, props, tab, title, focused and zoomed are set. */
   terminal: string | null;
   mod?: string;
+  /** A mod pane's props as given (`tab.new {mod, props}`). */
+  props?: Record<string, unknown>;
   tab: string;
   /** The terminal's title (what the program set), or the mod's name. */
   title: string;
@@ -385,7 +389,38 @@ export function notify(n: {
   action?: { name: string; args?: Record<string, unknown> };
 }): string;
 
+/** A link to open: clicked in a terminal (with the link key), opened with `link.open` (an agent's
+ *  `herdr-app do link.open`) or clicked in a browser pane where the page asks for a new window.
+ *  Herdr has checked that a file or folder exists, on its machine. */
+export interface Link {
+  kind: "url" | "file" | "folder";
+  /** For "url". */
+  url?: string;
+  /** For "file" and "folder": absolute, on `machine`. */
+  path?: string;
+  /** `:42` / `:42:7` after a file's path, else null. */
+  line?: number | null;
+  column?: number | null;
+  /** The machine a path is on (a space's `machine`), null for this one. */
+  machine: string | null;
+  /** The space it came from: the terminal's, else the shown one. */
+  space: string | null;
+  /** The agent it came from (its terminal's address), else null. A tab opened for it records it
+   *  as `props.origin` (`tab.new {mod, props: {origin}}`). */
+  origin: string | null;
+  from: "terminal" | "command" | "browser";
+}
+
+/**
+ * Waits for the next link to open. From its first call, links go to this mod instead of the
+ * system: queued for it while it is busy, to the newest such copy if there are several. Show it
+ * in a tab, or hand back one no tab shows: `run("link.open", { target: link.url ?? link.path, system: true })`.
+ *   cx.spawn(async (cx) => { for (;;) { const link = await nextLink(); ... } });
+ */
+export function nextLink(): Promise<Link>;
+
 /** The props this copy of the mod was given in the layout (or overlay).
+ *  A tab's mod pane also gets `pane`: its own pane id.
  *  A layout's terminal_menu mod gets {tab: "pane", target: {pane: string, terminal: string}, overlay: string}.
  *  Target names the clicked pane/terminal, not necessarily the focused one; pass it to actions.
  *  Close the popup with closeOverlay(props().overlay). */
