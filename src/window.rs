@@ -2797,7 +2797,7 @@ impl AppWindow {
         let source_space = source.as_deref().and_then(|s| self.model.pane_of(s)).and_then(|p| self.model.space_of(&p));
         let space = source_space.or_else(|| space.as_deref().and_then(|s| self.model.space(s))).or_else(|| self.model.active_space());
         let machine = source.as_deref().and_then(|s| s.split_once('/')).map(|(m, _)| m.to_owned()).or_else(|| space.and_then(|s| s.machine.clone()));
-        let mut link = json!({ "machine": machine, "space": space.map(|s| s.id.clone()), "origin": origin, "from": from });
+        let mut link = json!({ "machine": machine, "space": space.map(|s| s.id.clone()), "terminal": &source, "origin": origin, "from": from });
         match target {
             links::Target::Url(url) => {
                 link["kind"] = json!("url");
@@ -3252,6 +3252,12 @@ impl AppWindow {
                 };
                 let origin = source.clone().filter(|s| self.model.status(s).is_some());
                 let system = a.get("system").and_then(Value::as_bool) == Some(true);
+                // Only a tab can open a path on another machine: say so now, so the caller can.
+                if let links::Target::Remote(path) = &link
+                    && (system || !mods::takes_links())
+                {
+                    return self.fail(format!("no Herdr tab opens {path} on its machine"));
+                }
                 self.route_link(link, source, Self::owned(a, "space"), origin, Self::owned(a, "cwd"), "command", system, window, cx);
             }
             "terminal.peek" => {

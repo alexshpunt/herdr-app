@@ -690,6 +690,14 @@ pub fn send_command(name: &str, command: &str) -> bool {
     })
 }
 
+/// A copy waits for links (`nextLink()`).
+pub fn takes_links() -> bool {
+    LINKS.with_borrow_mut(|links| {
+        links.retain(|(_, tx)| !tx.is_closed());
+        !links.is_empty()
+    })
+}
+
 /// Hands a link to the newest copy that waits for links (`nextLink()`).
 /// Returns whether one took it; without one, the caller opens it itself.
 pub fn send_link(link: Value) -> bool {

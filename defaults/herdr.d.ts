@@ -405,6 +405,8 @@ export interface Link {
   machine: string | null;
   /** The space it came from: the terminal's, else the shown one. */
   space: string | null;
+  /** The terminal it came from (its address), else null. */
+  terminal: string | null;
   /** The agent it came from (its terminal's address), else null. A tab opened for it records it
    *  as `props.origin` (`tab.new {mod, props: {origin}}`). */
   origin: string | null;
