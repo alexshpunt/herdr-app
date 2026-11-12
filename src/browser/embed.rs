@@ -162,6 +162,83 @@ fn vscode(target: &str) -> anyhow::Result<Launch> {
     Ok(Launch { program, args, class: "Chrome_WidgetWin_1", title, own_process: false, fork_repo: None, once: false, menu_window: false, wait: OPEN_WAIT })
 }
 
+/// The arguments of a new VS Code window on folder `target` with `file` (a
+/// file URI, `:line:column` after it) open in it, and the file URI to hand
+/// over once the window is up for its line, if it names one. A VS Code that
+/// is not running yet quits on `--folder-uri` with `--file-uri` (1.146), so
+/// both go as paths, with `--remote` naming a remote folder's machine;
+/// `--goto` there would take a remote folder for a file. None: the file is
+/// not in the folder's machine, or not a URI VS Code takes as a path.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn vscode_with_file(target: &str, file: &str) -> Option<(Vec<String>, Option<String>)> {
+    let (folder_on, folder) = if target.contains("://") { vscode_location(target)? } else { (None, target.to_owned()) };
+    let (bare, placed) = without_place(file);
+    let (file_on, path) = vscode_location(bare)?;
+    if file_on != folder_on {
+        return None;
+    }
+    let mut args = vec!["--new-window".to_owned()];
+    if let Some(authority) = folder_on {
+        args.extend(["--remote".to_owned(), authority]);
+    }
+    args.extend([folder, path]);
+    Some((args, placed.then(|| file.to_owned())))
+}
+
+/// A VS Code URI as the machine `--remote` takes (none for this computer)
+/// and the path there.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn vscode_location(uri: &str) -> Option<(Option<String>, String)> {
+    let (scheme, rest) = uri.split_once("://")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    match scheme {
+        "file" => Some((None, windows_folder(uri).ok()?)),
+        "vscode-remote" if !authority.is_empty() => Some((Some(percent_decoded(authority)), format!("/{}", percent_decoded(path)))),
+        _ => None,
+    }
+}
+
+/// A file URI without the `:42` or `:42:7` after it, and whether it had one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn without_place(uri: &str) -> (&str, bool) {
+    let mut bare = uri;
+    for _ in 0..2 {
+        match bare.rsplit_once(':') {
+            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => bare = head,
+            _ => break,
+        }
+    }
+    (bare, bare.len() != uri.len())
+}
+
+/// `%XX` escapes decoded; `+` stays itself.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn percent_decoded(s: &str) -> String {
+    url::form_urlencoded::parse(format!("n={}", s.replace('+', "%2B")).as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default()
+}
+
+/// A program of the person's, started without the IPC variables of the
+/// VS Code or other Electron app Herdr may run in: with them Code.exe acts
+/// as a CLI or Node instead.
+fn person_program(program: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("VSCODE_") || name.starts_with("ELECTRON_") { command.env_remove(&key); }
+    }
+    command
+}
+
+/// Hands a file URI (`:line:column` after it) to the running VS Code, which
+/// opens it in the window that has its folder.
+fn vscode_goto(program: &std::path::Path, uri: &str) -> std::io::Result<()> {
+    let mut child = person_program(program).args(["--goto", "--file-uri", uri])
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
+    // Reaped off the UI thread: it hands the file over and exits.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 /// A Fork (git client) process of the pane's own on a repository. `target`
 /// is a local folder, a `file://` URI or a VS Code WSL folder URI
 /// (`vscode-remote://wsl+…`).
@@ -293,17 +370,15 @@ fn class_matches(pattern: &str, class: &str) -> bool {
 fn windows_folder(target: &str) -> anyhow::Result<String> {
     let target = target.trim();
     anyhow::ensure!(!target.is_empty(), "No folder to open");
-    // %XX escapes only: '+' stays itself.
-    let decode = |s: &str| url::form_urlencoded::parse(format!("n={}", s.replace('+', "%2B")).as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default();
     let mut folder = match target.split_once("://") {
         None => target.to_owned(),
         Some((scheme, rest)) => {
             let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
-            let path = decode(path).replace('/', "\\");
+            let path = percent_decoded(path).replace('/', "\\");
             match scheme {
                 "file" if authority.is_empty() => path,
                 "file" => format!(r"\\{authority}\{path}"),
-                "vscode-remote" => match decode(authority).strip_prefix("wsl+") {
+                "vscode-remote" => match percent_decoded(authority).strip_prefix("wsl+") {
                     Some(distro) if !distro.is_empty() => format!(r"\\wsl.localhost\{distro}\{path}"),
                     _ => anyhow::bail!("Only local and WSL folders open on Windows, not {target}"),
                 },
@@ -475,10 +550,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
                 app.goto = Some(uri.clone());
                 return Ok(ComponentDataValue::Null);
             }
-            let program = vscode(&app.target)?.program;
-            let mut child = std::process::Command::new(&program).args(["--goto", "--file-uri", uri.as_str()]).spawn()?;
-            // Reaped off the UI thread: it hands the file over and exits.
-            std::thread::spawn(move || child.wait());
+            vscode_goto(&vscode(&app.target)?.program, uri)?;
             Ok(ComponentDataValue::Null)
         }),
         StateMethodDescriptor::new::<State>("focus", "(): void", |state, _, _, _| {
@@ -637,10 +709,14 @@ mod win {
             Ok(launch) => launch,
             Err(error) => { fail(state, format!("{error:#}")); return; }
         };
-        // VS Code opens the folder and, in the same new window, the file.
-        let goto_args = goto.map(|uri| vec!["--goto".to_owned(), "--file-uri".to_owned(), uri]);
-        if let Some(args) = &goto_args {
-            launch.args.extend(args.iter().cloned());
+        // VS Code opens the folder and, in the same new window, the file;
+        // its line once the window is up.
+        let mut place = None;
+        if let Some(uri) = &goto {
+            match super::vscode_with_file(&target, uri) {
+                Some((args, later)) => (launch.args, place) = (args, later),
+                None => launch.args.extend(["--goto".to_owned(), "--file-uri".to_owned(), uri.clone()]),
+            }
         }
         // A pane whose mod restarted (a mod reload, a layout change) gets the
         // window its earlier copy still holds for the same target: VS Code
@@ -651,10 +727,10 @@ mod win {
             // A window taken from another pane is running: it gets the file on
             // its own. A restarted copy's window opened it when it started.
             if !restarted
-                && let Some(args) = goto_args
-                && let Ok(mut child) = std::process::Command::new(&launch.program).args(args).spawn()
+                && let Some(uri) = &goto
+                && let Err(error) = super::vscode_goto(&launch.program, uri)
             {
-                std::thread::spawn(move || child.wait());
+                tracing::warn!(%error, "cannot hand {uri} to VS Code");
             }
             let child = embedded.child as usize;
             show(state, embedded);
@@ -765,6 +841,11 @@ mod win {
             let _ = cx.update(|window, _| window.refresh());
             apply(&state);
             focus::give(found);
+            if let Some(uri) = place
+                && let Err(error) = super::vscode_goto(&launch.program, &uri)
+            {
+                tracing::warn!(%error, "cannot hand {uri} to VS Code");
+            }
             // Only the pane holds its state: closing the pane drops it, and
             // with it the window.
             drop(state);
@@ -795,16 +876,9 @@ mod win {
     }
 
     fn run(launch: &Launch) -> std::io::Result<std::process::Child> {
-        let mut command = std::process::Command::new(&launch.program);
-        command.args(&launch.args)
-            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-        // Herdr may run inside VS Code or another Electron app: never pass
-        // their IPC variables on, or Code.exe acts as a CLI or Node instead.
-        for (key, _) in std::env::vars_os() {
-            let name = key.to_string_lossy();
-            if name.starts_with("VSCODE_") || name.starts_with("ELECTRON_") { command.env_remove(&key); }
-        }
-        command.spawn()
+        super::person_program(&launch.program).args(&launch.args)
+            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+            .spawn()
     }
 
     fn fail(state: &State, error: String) {
@@ -1330,7 +1404,7 @@ mod win {
 
 #[cfg(test)]
 mod tests {
-    use super::{class_matches, editor_version, fork_workspace, safe_directory, unity_version, windows_folder};
+    use super::{class_matches, editor_version, fork_workspace, safe_directory, unity_version, vscode_with_file, windows_folder};
     use serde_json::json;
 
     #[test]
@@ -1386,6 +1460,22 @@ mod tests {
         assert!(windows_folder("  ").is_err());
         assert_eq!(windows_folder(r"C:\dev\app\").unwrap(), r"C:\dev\app");
         assert_eq!(windows_folder("file:///C:/").unwrap(), r"C:\");
+    }
+
+    #[test]
+    fn a_new_vscode_window_gets_its_folder_and_file_as_paths() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let wsl = "vscode-remote://wsl+Ubuntu/root/my%20app";
+        assert_eq!(vscode_with_file(wsl, &format!("{wsl}/src/a.rs:42:7")),
+            Some((args(&["--new-window", "--remote", "wsl+Ubuntu", "/root/my app", "/root/my app/src/a.rs"]), Some(format!("{wsl}/src/a.rs:42:7")))));
+        assert_eq!(vscode_with_file("vscode-remote://ssh-remote%2Bvps/srv", "vscode-remote://ssh-remote%2Bvps/srv/a.rs"),
+            Some((args(&["--new-window", "--remote", "ssh-remote+vps", "/srv", "/srv/a.rs"]), None)));
+        assert_eq!(vscode_with_file("file:///C:/dev/app", "file:///C:/dev/app/a.rs:3"),
+            Some((args(&["--new-window", r"C:\dev\app", r"C:\dev\app\a.rs"]), Some("file:///C:/dev/app/a.rs:3".into()))));
+        assert_eq!(vscode_with_file(r"C:\dev\app", "file:///C:/dev/app/a.rs").map(|(a, _)| a), Some(args(&["--new-window", r"C:\dev\app", r"C:\dev\app\a.rs"])));
+        // A file on another machine, or a URI VS Code takes no path for, goes as a URI.
+        assert_eq!(vscode_with_file(wsl, "file:///C:/dev/a.rs"), None);
+        assert_eq!(vscode_with_file("vscode-vfs://github/a/b", "vscode-vfs://github/a/b/c.rs"), None);
     }
 
     #[test]
