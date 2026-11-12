@@ -3538,10 +3538,25 @@ impl AppWindow {
                 }
             }
             "overlay.close" => {
-                let id = Self::owned(a, "id").or_else(|| self.overlays.iter().rev().find(|o| o.kind.modal_keys()).map(|o| o.id.clone()));
-                if let Some(id) = id {
-                    self.close_overlay(&id, window, cx);
-                }
+                let found = match Self::arg(a, "id") {
+                    Some(name) => self.overlay_named(name),
+                    // The top dialog or popup, which holds the keyboard; else the front window,
+                    // such as the welcome. A toast goes away by itself.
+                    None => self
+                        .overlays
+                        .iter()
+                        .rev()
+                        .find(|o| o.kind.modal_keys())
+                        .or_else(|| self.overlays.iter().rev().find(|o| o.kind == OverlayKind::Window))
+                        .map(|o| o.id.clone()),
+                };
+                let Some(id) = found else {
+                    return self.fail(match Self::arg(a, "id") {
+                        Some(name) => format!("no open overlay {name:?}; `herdr-app status` lists the open ones"),
+                        None => "no dialog, popup or window is open".to_owned(),
+                    });
+                };
+                self.close_overlay(&id, window, cx);
                 return;
             }
             // ---- the app
@@ -3896,6 +3911,16 @@ impl AppWindow {
     fn publish_shown_copies(&self) {
         let (_, shown) = self.visible();
         mods::set_shown_copies(shown.iter().filter_map(|(s, i)| self.copies.get(s).filter(|c| c.inst == *i)).map(|c| c.id).collect());
+    }
+
+    /// The overlay an `id` names: its own id, else the mod it shows (the name
+    /// `herdr-app status` lists), the front-most one if several show it.
+    fn overlay_named(&self, name: &str) -> Option<String> {
+        self.overlays
+            .iter()
+            .find(|o| o.id == name)
+            .or_else(|| self.overlays.iter().rev().find(|o| self.copies.get(&o.slot).is_some_and(|c| c.inst.name == name)))
+            .map(|o| o.id.clone())
     }
 
     /// Closes an overlay; a kept window stays closed on the next start too.
@@ -5776,6 +5801,66 @@ mod tests {
                     }
                 }
             }
+        }));
+    }
+
+    #[test]
+    fn overlay_close_closes_a_window_such_as_the_welcome() {
+        in_own_process("overlay_close_windows");
+    }
+
+    #[gpui::test]
+    fn overlay_close_windows(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("overlay_close_windows") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "unused", "", json!({
+            "id": "root", "type": "block", "content": { "tab": "active" }
+        }));
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            let open = |this: &mut super::AppWindow, id: &str, kind: &str, window: &mut gpui::Window, cx: &mut gpui::Context<super::AppWindow>| {
+                this.open_overlay(id.into(), json!({"mod": format!("frame-{id}"), "kind": kind}), window, cx);
+            };
+            let shown = |this: &super::AppWindow| this.overlays.iter().map(|o| o.id.clone()).collect::<Vec<_>>();
+            let close = |this: &mut super::AppWindow, args: serde_json::Value, window: &mut gpui::Window, cx: &mut gpui::Context<super::AppWindow>| {
+                this.run_as("overlay.close", args, false, window, cx)
+            };
+
+            // Nothing is open: the reply says so instead of ok.
+            assert!(close(this, json!({}), window, cx).get("error").is_some());
+
+            // A window holds no keyboard, but a command with no id still closes it.
+            open(this, "welcome", "window", window, cx);
+            assert!(close(this, json!({}), window, cx).get("error").is_none());
+            assert!(shown(this).is_empty());
+
+            // A dialog on top goes first; the window behind it stays until asked again.
+            open(this, "welcome", "window", window, cx);
+            open(this, "settings", "dialog", window, cx);
+            close(this, json!({}), window, cx);
+            assert_eq!(shown(this), ["welcome"]);
+            close(this, json!({}), window, cx);
+            assert!(shown(this).is_empty());
+
+            // `herdr-app status` lists overlays by mod name, so that name closes one too.
+            open(this, "o7", "window", window, cx);
+            open(this, "o8", "window", window, cx);
+            assert!(close(this, json!({"id": "frame-o7"}), window, cx).get("error").is_none());
+            assert_eq!(shown(this), ["o8"]);
+            assert!(close(this, json!({"id": "o8"}), window, cx).get("error").is_none());
+            assert!(shown(this).is_empty());
+
+            // An id that is not open is an error, not a silent ok.
+            open(this, "welcome", "window", window, cx);
+            assert!(close(this, json!({"id": "no-such-overlay"}), window, cx).get("error").is_some());
+            assert_eq!(shown(this), ["welcome"]);
+
+            // A toast goes away by itself: closing with no id leaves it.
+            close(this, json!({}), window, cx);
+            this.open_overlay("toast1".into(), json!({"kind": "toast", "notification": {"title": "t"}}), window, cx);
+            assert!(close(this, json!({}), window, cx).get("error").is_some());
+            assert_eq!(shown(this), ["toast1"]);
         }));
     }
 
