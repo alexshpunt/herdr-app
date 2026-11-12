@@ -39,6 +39,17 @@ herdr-app do pane.split --direction right --pane p12
 herdr-app do agent.focus --terminal t7
 ```
 
+To show the person a file, a folder or a web page, open it as a link clicked in
+your terminal: Herdr shows it in the tab for it (with the personal layout:
+Linear, GitHub, a review, VS Code at `:42`, Unity) under you, else in the
+system's program. A path is on your machine, relative to your folder.
+`--space` is your `herdr.space` label (`hc get $HC_TERMINAL_ID`); it tells
+your terminal from one with the same id on another machine:
+
+```sh
+herdr-app do link.open --target src/main.rs:42 --terminal "$HC_TERMINAL_ID" --space sp1d22
+```
+
 For a remote space:
 
 ```sh
