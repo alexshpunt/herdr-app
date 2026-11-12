@@ -396,6 +396,11 @@ pub enum Request {
     Refresh,
     /// From `herdr-app do` / `herdr-app status` (control.rs); answer on `reply`.
     Control { cmd: Value, reply: std::sync::mpsc::Sender<Value> },
+    /// A browser pane asked for a new window: a link clicked in the shown tab.
+    BrowserLink { url: String },
+    /// A link resolved off the UI thread (a file on another machine), to open
+    /// as `link.open` does.
+    OpenLink { link: Value, system: bool },
 }
 
 static REQUESTS: OnceLock<async_channel::Sender<Request>> = OnceLock::new();
@@ -550,6 +555,8 @@ thread_local! {
     static SHARED: RefCell<Option<SharedStore>> = const { RefCell::new(None) };
     /// Where key commands for each loaded copy go: (copy, mod, sender).
     static COMMANDS: RefCell<Vec<(u64, String, async_channel::Sender<String>)>> = const { RefCell::new(Vec::new()) };
+    /// The copies that wait for links (`nextLink()`), oldest first: (copy, sender).
+    static LINKS: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
     /// The copies on screen: only they get commands (a hidden copy kept alive must
     /// not act on the person's keys).
     static SHOWN_COPIES: RefCell<std::collections::HashSet<u64>> = RefCell::new(std::collections::HashSet::new());
@@ -680,6 +687,23 @@ pub fn send_command(name: &str, command: &str) -> bool {
             }
         }
         any
+    })
+}
+
+/// A copy waits for links (`nextLink()`).
+pub fn takes_links() -> bool {
+    LINKS.with_borrow_mut(|links| {
+        links.retain(|(_, tx)| !tx.is_closed());
+        !links.is_empty()
+    })
+}
+
+/// Hands a link to the newest copy that waits for links (`nextLink()`).
+/// Returns whether one took it; without one, the caller opens it itself.
+pub fn send_link(link: Value) -> bool {
+    LINKS.with_borrow_mut(|links| {
+        links.retain(|(_, tx)| !tx.is_closed());
+        links.last().is_some_and(|(_, tx)| tx.try_send(link).is_ok())
     })
 }
 
@@ -909,6 +933,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
     let feedback_from = inst.props.get("from").and_then(Value::as_str).unwrap_or("person").to_owned();
     let feedback_layout = inst.props.get("layout").and_then(Value::as_str).unwrap_or("other").to_owned();
     let (cmd_tx, commands) = async_channel::unbounded::<String>();
+    let (link_tx, link_rx) = async_channel::unbounded::<Value>();
     COMMANDS.with_borrow_mut(|commands| {
         commands.retain(|(_, _, tx)| !tx.is_closed());
         commands.push((copy, inst.name.clone(), cmd_tx));
@@ -1110,6 +1135,17 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             let rx = commands.clone();
             Ok(async move { rx.recv().await.map(HostValue::Str).map_err(|_| HostError::new("herdr-app is shutting down")) })
         })
+        // The first call makes this copy take links: they queue for it from then on.
+        .async_function("nextLink", move |_| {
+            LINKS.with_borrow_mut(|links| {
+                links.retain(|(_, tx)| !tx.is_closed());
+                if !links.iter().any(|(c, _)| *c == copy) {
+                    links.push((copy, link_tx.clone()));
+                }
+            });
+            let rx = link_rx.clone();
+            Ok(async move { rx.recv().await.map(|link| to_host(&link)).map_err(|_| HostError::new("herdr-app is shutting down")) })
+        })
 }
 
 /// The runtime's base layer, themed from settings.json.
@@ -1298,6 +1334,30 @@ mod tests {
             COMMANDS.with_borrow(|commands| assert_eq!(commands.len(), 1));
             drop(last);
         }).join().unwrap();
+    }
+
+    #[test]
+    fn links_go_to_the_newest_copy_that_waits_for_them_hidden_or_not() {
+        LINKS.with_borrow_mut(Vec::clear);
+        assert!(!takes_links());
+        assert!(!send_link(json!({ "kind": "url", "url": "https://linear.app" })));
+        let (old_tx, old) = async_channel::unbounded();
+        let (new_tx, new) = async_channel::unbounded();
+        let (gone_tx, gone) = async_channel::unbounded::<Value>();
+        LINKS.with_borrow_mut(|l| *l = vec![(1, old_tx), (2, new_tx), (3, gone_tx)]);
+        drop(gone);
+        // The reloaded copy (3) is gone: the newest live one takes the link, shown or not.
+        set_shown_copies([].into());
+        assert!(takes_links());
+        assert!(send_link(json!({ "kind": "file", "path": "/r/a.rs", "line": 4 })));
+        assert_eq!(new.try_recv().unwrap()["line"], 4);
+        assert!(old.is_empty());
+        drop(new);
+        assert!(send_link(json!({ "kind": "folder", "path": "/r" })));
+        assert_eq!(old.try_recv().unwrap()["path"], "/r");
+        drop(old);
+        assert!(!takes_links());
+        LINKS.with_borrow_mut(Vec::clear);
     }
 
     #[test]

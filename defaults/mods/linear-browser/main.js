@@ -1,17 +1,42 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { BrowserState, Browser } from "herdr-browser";
-import { props, theme } from "herdr";
+import { props, theme, shared, setShared } from "herdr";
 
 // Shared by Linear and other website tabs. The existing mod name is retained
 // so saved Linear tabs continue to open.
 export default class WebsiteBrowser extends View {
-  init() {
+  init(_props, cx) {
     const url = props()?.url;
     this.browser = url ? BrowserState(url) : null;
     this.input = InputState.new({ placeholder: "https://example.com" });
     this.input.on("submit", (_event, cx) => this.open(cx));
     if (!this.browser) this.input.focus();
+    // A link shown in this tab (a mod waiting in nextLink()) asks for it as
+    // shared("browser.open")[its pane] = {url}; the request is done once read.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const pane = props()?.pane;
+        const requests = shared("browser.open") ?? {};
+        const request = pane ? requests[pane] : null;
+        if (request?.url) {
+          const { [pane]: _done, ...rest } = requests;
+          setShared("browser.open", rest);
+          this.show(request.url);
+          cx.notify();
+        }
+        await cx.sleep(250);
+      }
+    });
+  }
+
+  show(url) {
+    try {
+      if (this.browser) this.browser.navigate(url);
+      else this.browser = BrowserState(url);
+    } catch (error) {
+      console.error(`Cannot open ${url}: ${error}`);
+    }
   }
 
   open(cx) {

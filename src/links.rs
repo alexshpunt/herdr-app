@@ -69,18 +69,51 @@ pub fn terminal_address<'a>(word: &str, source: &str, live: impl IntoIterator<It
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Url(String),
-    File(PathBuf),
+    File(PathBuf, Place),
+    /// A path on the terminal's machine when that is another one: checked
+    /// there when it is opened (`resolve_on`).
+    Remote(String),
 }
 
-/// What a link opens. File paths count only when they exist here; relative
-/// ones need the terminal's folder.
-pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
-    let scheme = link.split_once(':').is_some_and(|(s, _)| {
+/// Where in a file a link points: `:42` (line) or `:42:7` (line, column)
+/// after its path.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Place {
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+fn is_url(link: &str) -> bool {
+    link.split_once(':').is_some_and(|(s, _)| {
         s.len() > 1 && s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-    });
-    if scheme {
-        return Some(Target::Url(link.to_owned()));
+    })
+}
+
+/// The ways a path link may name a file, in order: as written, without the
+/// period ending a sentence, then without `:42` and `:42:7` naming a place.
+pub fn spellings(link: &str) -> Vec<(String, Place)> {
+    let mut out = vec![(link.to_owned(), Place::default())];
+    let mut bare = link.strip_suffix('.').unwrap_or(link);
+    if bare.len() != link.len() {
+        out.push((bare.to_owned(), Place::default()));
     }
+    let mut numbers = Vec::new();
+    for _ in 0..2 {
+        match bare.rsplit_once(':') {
+            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && let Ok(n) = n.parse::<u32>() => {
+                numbers.insert(0, n);
+                bare = head;
+                out.push((bare.to_owned(), Place { line: numbers.first().copied(), column: numbers.get(1).copied() }));
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// A path link with `~/`, `$HOME`, `$PWD` or another variable at its start
+/// expanded, absolute: relative ones need the terminal's folder.
+fn expand(link: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     let home = std::env::home_dir();
     let expanded = if let Some(rest) = link.strip_prefix("~/") {
         home?.join(rest)
@@ -95,27 +128,94 @@ pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
     } else {
         PathBuf::from(link)
     };
-    let full = if expanded.is_absolute() { expanded } else { cwd?.join(expanded) };
-    // Windows ignores a trailing period when checking whether a path exists.
-    if !(cfg!(windows) && full.extension().is_some_and(|ext| ext.is_empty())) && full.exists() {
-        return Some(Target::File(full));
-    }
-    // The period ending a sentence, or `:42` / `:42:7` naming a place in the file.
-    let mut bare = full.to_str()?.strip_suffix('.').unwrap_or(full.to_str()?);
-    for _ in 0..2 {
-        match bare.rsplit_once(':') {
-            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => bare = head,
-            _ => break,
-        }
-    }
-    Path::new(bare).exists().then(|| Target::File(PathBuf::from(bare)))
+    Some(if expanded.is_absolute() { expanded } else { cwd?.join(expanded) })
 }
 
-/// Hands the target to the system's default handler.
+/// What a link opens. File paths count only when they exist here; relative
+/// ones need the terminal's folder.
+pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
+    if is_url(link) {
+        return Some(Target::Url(link.to_owned()));
+    }
+    for (i, (spelling, place)) in spellings(link).into_iter().enumerate() {
+        let full = expand(&spelling, cwd)?;
+        // Windows ignores a trailing period when checking whether a path exists.
+        if i == 0 && cfg!(windows) && full.extension().is_some_and(|ext| ext.is_empty()) {
+            continue;
+        }
+        if full.exists() {
+            return Some(Target::File(full, place));
+        }
+    }
+    None
+}
+
+/// What a link in a terminal on another machine opens: a URL, or a path
+/// that only that machine can check.
+pub fn unchecked(link: &str) -> Target {
+    if is_url(link) { Target::Url(link.to_owned()) } else { Target::Remote(link.to_owned()) }
+}
+
+/// A file or folder on another machine: its absolute path there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteFile {
+    pub path: String,
+    pub folder: bool,
+    pub place: Place,
+}
+
+/// Tries each spelling of a path (see `spellings`) on a Unix machine and
+/// prints `<d|f> <index> <absolute path>` for the first that exists. `~/`
+/// and `$NAME/` expand there; relative paths start in the terminal's folder.
+const RESOLVE_SCRIPT: &str = r#"i=0
+for p do
+  case $p in
+    "~/"*) p=$HOME/${p#??} ;;
+    '$'*) n=${p#?}; n=${n%%/*}
+      case $n in ''|*[!A-Za-z0-9_]*) p= ;; *) eval "v=\${$n-}"; p=${v:+$v${p#?$n}} ;; esac ;;
+  esac
+  if [ -n "$p" ] && [ -e "$p" ]; then
+    if [ -d "$p" ]; then k=d; p=$(cd "$p" && pwd); else k=f; p=$(cd "$(dirname "$p")" && pwd)/${p##*/}; fi
+    printf '%s %s %s' "$k" "$i" "$p"
+    exit 0
+  fi
+  i=$((i+1))
+done
+exit 1"#;
+
+/// What a path link in a terminal on `machine` names there, checked with
+/// `hc exec` (slow: off the UI thread). Machines without a Unix shell have none.
+pub fn resolve_on(machine: &str, link: &str, cwd: Option<&str>) -> Option<RemoteFile> {
+    let spellings = spellings(link);
+    let mut args = vec!["-c".to_owned(), RESOLVE_SCRIPT.to_owned(), "sh".to_owned()];
+    args.extend(spellings.iter().map(|(s, _)| s.clone()));
+    let (code, out, _) = crate::mods::run_remote(machine, "sh", &args, cwd.map(str::to_owned))
+        .inspect_err(|e| tracing::debug!("cannot check {link:?} on {machine}: {e}"))
+        .ok()?;
+    if code != 0 {
+        return None;
+    }
+    parse_resolved(&String::from_utf8_lossy(&out), &spellings)
+}
+
+fn parse_resolved(out: &str, spellings: &[(String, Place)]) -> Option<RemoteFile> {
+    let mut parts = out.splitn(3, ' ');
+    let folder = match parts.next()? { "d" => true, "f" => false, _ => return None };
+    let place = spellings.get(parts.next()?.parse::<usize>().ok()?)?.1;
+    let path = parts.next().filter(|p| p.starts_with('/'))?.to_owned();
+    Some(RemoteFile { path, folder, place })
+}
+
+/// Hands the target to the system's default handler. A path on another
+/// machine has none here.
 pub fn open(target: &Target) {
     let arg = match target {
         Target::Url(u) => std::ffi::OsStr::new(u),
-        Target::File(p) => p.as_os_str(),
+        Target::File(p, _) => p.as_os_str(),
+        Target::Remote(p) => {
+            tracing::warn!("cannot open {p:?} on another machine with this computer's programs");
+            return;
+        }
     };
     open_system(arg);
 }
@@ -350,14 +450,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("herdr-links-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/main.rs"), "").unwrap();
-        let file = Target::File(dir.join("src/main.rs"));
+        let main = dir.join("src/main.rs");
+        let file = Target::File(main.clone(), Place::default());
+        let at = |line, column| Target::File(main.clone(), Place { line: Some(line), column });
         assert_eq!(resolve("src/main.rs", Some(&dir)), Some(file.clone()));
-        assert_eq!(resolve("src/main.rs:42:7", Some(&dir)), Some(file.clone()));
+        assert_eq!(resolve("src/main.rs:42", Some(&dir)), Some(at(42, None)));
+        assert_eq!(resolve("src/main.rs:42:7", Some(&dir)), Some(at(42, Some(7))));
+        assert_eq!(resolve("src/main.rs:42:7.", Some(&dir)), Some(at(42, Some(7))));
         assert_eq!(resolve("src/main.rs.", Some(&dir)), Some(file.clone()));
-        assert_eq!(resolve("src/.", Some(&dir)), Some(Target::File(dir.join("src/."))));
-        assert_eq!(resolve("src/..", Some(&dir)), Some(Target::File(dir.join("src/.."))));
+        assert_eq!(resolve("src/.", Some(&dir)), Some(Target::File(dir.join("src/."), Place::default())));
+        assert_eq!(resolve("src/..", Some(&dir)), Some(Target::File(dir.join("src/.."), Place::default())));
         assert_eq!(resolve("$PWD/src/main.rs", Some(&dir)), Some(file.clone()));
-        assert_eq!(resolve(dir.join("src/main.rs").to_str().unwrap(), None), Some(file));
+        assert_eq!(resolve(main.to_str().unwrap(), None), Some(file));
         assert_eq!(resolve("src/gone.rs", Some(&dir)), None);
         assert_eq!(resolve("src/main.rs", None), None);
         assert_eq!(resolve("https://a.com/x", None), Some(Target::Url("https://a.com/x".into())));
@@ -365,8 +469,53 @@ mod tests {
         {
             let dotted = dir.join("src/main.rs.");
             std::fs::write(&dotted, "").unwrap();
-            assert_eq!(resolve("src/main.rs.", Some(&dir)), Some(Target::File(dotted)));
+            assert_eq!(resolve("src/main.rs.", Some(&dir)), Some(Target::File(dotted, Place::default())));
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_path_names_its_file_with_or_without_a_place() {
+        let place = |line, column| Place { line, column };
+        assert_eq!(spellings("a.rs"), [("a.rs".to_owned(), place(None, None))]);
+        assert_eq!(spellings("a.rs:42:7."), [
+            ("a.rs:42:7.".to_owned(), place(None, None)),
+            ("a.rs:42:7".to_owned(), place(None, None)),
+            ("a.rs:42".to_owned(), place(Some(7), None)),
+            ("a.rs".to_owned(), place(Some(42), Some(7))),
+        ]);
+        // A number too big for a line ends the place.
+        assert_eq!(spellings("a.rs:99999999999").len(), 1);
+        assert_eq!(unchecked("src/a.rs:4"), Target::Remote("src/a.rs:4".into()));
+        assert_eq!(unchecked("https://a.com"), Target::Url("https://a.com".into()));
+    }
+
+    /// The script `resolve_on` runs on the terminal's machine, run here.
+    #[cfg(unix)]
+    #[test]
+    fn another_machine_checks_its_own_paths() {
+        let dir = std::env::temp_dir().join(format!("herdr-remote-links-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src/sub dir")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "").unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let check = |link: &str| {
+            let spellings = spellings(link);
+            let out = std::process::Command::new("sh").arg("-c").arg(RESOLVE_SCRIPT).arg("sh").args(spellings.iter().map(|(s, _)| s))
+                .current_dir(&dir).env("HOME", &dir).env("PROJECT", dir.join("src")).output().unwrap();
+            out.status.success().then(|| parse_resolved(&String::from_utf8_lossy(&out.stdout), &spellings)).flatten()
+        };
+        let main = dir.join("src/main.rs").to_string_lossy().into_owned();
+        let file = |line, column| Some(RemoteFile { path: main.clone(), folder: false, place: Place { line, column } });
+        assert_eq!(check("src/main.rs"), file(None, None));
+        assert_eq!(check("./src/../src/main.rs:42:7."), file(Some(42), Some(7)));
+        assert_eq!(check("~/src/main.rs:3"), file(Some(3), None));
+        assert_eq!(check("$PROJECT/main.rs"), file(None, None));
+        assert_eq!(check(&main), file(None, None));
+        assert_eq!(check("src/sub dir").map(|f| (f.path, f.folder)), Some((dir.join("src/sub dir").to_string_lossy().into_owned(), true)));
+        assert_eq!(check("src/gone.rs"), None);
+        assert_eq!(check("$UNSET_HERDR_VAR/main.rs"), None);
+        assert_eq!(check("$(touch x)/main.rs"), None);
+        assert!(!dir.join("x").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

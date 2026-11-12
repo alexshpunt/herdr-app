@@ -44,6 +44,8 @@ enum LinkTarget {
 
 pub enum TerminalEvent {
     Peek(String),
+    /// A link clicked with the link key: the window routes it (`link.open`).
+    Link(links::Target),
     TitleChanged,
     /// The program reported its folder (OSC 7 and its kin), or cleared it (None).
     FolderReported(Option<crate::folder_report::Report>),
@@ -898,11 +900,14 @@ impl TerminalView {
         let (x, y) = local(&g, pos);
         let (col, row) = (x / f32::from(g.cell.width), y / f32::from(g.cell.height));
         let mut target = None;
+        // A path in a terminal on another machine is checked there when clicked.
+        let remote = self.address.contains('/');
+        let resolve = |link: &str| if remote { Some(links::unchecked(link)) } else { links::resolve(link, self.cwd.as_deref()) };
         let hit = g.vt.link_at(col as u16, row as u16, |text, at, joined| {
             // In lines joined back together only a file that exists proves the join right.
             if let Some(range) = links::find(text, at)
-                && let Some(link) = links::resolve(&text[range.clone()], self.cwd.as_deref())
-                && (!joined || matches!(link, links::Target::File(_)))
+                && let Some(link) = resolve(&text[range.clone()])
+                && (!joined || matches!(link, links::Target::File(..)))
             {
                 target = Some(LinkTarget::External(link));
                 return Some(range);
@@ -916,7 +921,7 @@ impl TerminalView {
             Some(range)
         })?;
         // OSC 8 links bypass text detection.
-        let target = target.or_else(|| links::resolve(&hit.target, self.cwd.as_deref()).map(LinkTarget::External))?;
+        let target = target.or_else(|| resolve(&hit.target).map(LinkTarget::External))?;
         Some((target, hit.spans))
     }
 
@@ -1954,7 +1959,7 @@ impl Render for TerminalView {
                     && let Some((target, _)) = this.link_at(ev.position)
                 {
                     match target {
-                        LinkTarget::External(target) => links::open(&target),
+                        LinkTarget::External(target) => cx.emit(TerminalEvent::Link(target)),
                         LinkTarget::Terminal(address) => cx.emit(TerminalEvent::Peek(address)),
                     }
                     return;
