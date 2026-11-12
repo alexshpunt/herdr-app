@@ -54,10 +54,11 @@ person's own VS Code window on `target` (a folder URI such as
 `vscode-remote://wsl+Ubuntu/root/app`, or a local folder) inside the element.
 Herdr asks VS Code for a window, adopts it and crops its frame; closing the
 pane closes that window. `status()`, `error()`, `shown()`, `reopen()` and
-`focus()` follow and control it; `goto(fileUri)` hands VS Code a file URI
-(`:42:7` after it for a line and column), which it opens in the window that
-has the file's folder. The bundled `vscode` mod is one VS Code tab; once its
-window is shown, it opens `shared("vscode.goto")[its pane].uri`.
+`focus()` follow and control it; `goto(fileUri)` opens a file URI (`:42:7`
+after it for a line and column): called before the window starts, the new
+window opens with it; later, VS Code opens it in the window that has its
+folder. The bundled `vscode` mod is one VS Code tab: it opens `props.goto` as
+its window starts and `shared("vscode.goto")[its pane].uri` when asked later.
 `NativeAppState("fork", target)` shows Fork, the git client, on a local
 folder, `file://` URI or WSL folder URI: a Fork process of the pane's own,
 with only that repository. The bundled `fork` mod is one Fork tab.

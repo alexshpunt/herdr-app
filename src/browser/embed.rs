@@ -73,6 +73,9 @@ pub(super) struct NativeApp {
     /// Keyboard focus was asked for while the pane was hidden: give it when
     /// the pane shows up soon after (a tab selected just before).
     focus_until: Option<std::time::Instant>,
+    /// A file URI (VS Code) to open with the window when it starts: given at
+    /// launch, the new window opens it instead of its Welcome page.
+    goto: Option<String>,
     #[cfg(windows)]
     embedded: Option<win::Embedded>,
     #[cfg(windows)]
@@ -425,7 +428,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             let state = Rc::new(RefCell::new(NativeApp {
                 window: window.window_handle().window_id(), app: app.clone(), target: target.clone(),
                 status: "Opening…".into(), error: None, hitbox: None, rect: None, visible: false, holes: Vec::new(),
-                apply_pending: false, generation: 0, closed: false, focus_until: None,
+                apply_pending: false, generation: 0, closed: false, focus_until: None, goto: None,
                 #[cfg(windows)] embedded: None,
                 #[cfg(windows)] opening: false,
             }));
@@ -456,13 +459,22 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             }
             Ok(ComponentDataValue::Null)
         }),
-        // A running VS Code puts a file it is handed in the window that has
-        // its folder: this pane's, once its window is shown.
+        // Before the window starts, the file goes with the launch, so the new
+        // window opens it in place of its Welcome page. A running VS Code puts
+        // a file it is handed later in the window that has its folder.
         StateMethodDescriptor::new::<State>("goto", "(fileUri: string): void", |state, args, _, _| {
             let Some(ComponentDataValue::String(uri)) = args.first() else { anyhow::bail!("Expected a file URI") };
-            let app = state.borrow();
+            let mut app = state.borrow_mut();
             anyhow::ensure!(app.app == "vscode", "Only a VS Code pane opens files");
             anyhow::ensure!(uri.contains("://"), "Expected a file URI, such as file:///C:/r/a.rs:42:7");
+            #[cfg(windows)]
+            let started = app.embedded.is_some() || app.opening;
+            #[cfg(not(windows))]
+            let started = false;
+            if !started {
+                app.goto = Some(uri.clone());
+                return Ok(ComponentDataValue::Null);
+            }
             let program = vscode(&app.target)?.program;
             let mut child = std::process::Command::new(&program).args(["--goto", "--file-uri", uri.as_str()]).spawn()?;
             // Reaped off the UI thread: it hands the file over and exits.
@@ -586,11 +598,11 @@ mod win {
     }
 
     pub(super) fn start(state: &State, window: &mut Window, cx: &mut App) {
-        let (generation, app, target) = {
+        let (generation, app, target, goto) = {
             let mut app = state.borrow_mut();
             if app.embedded.is_some() || app.opening || app.error.is_some() || app.closed { return; }
             app.opening = true;
-            (app.generation, app.app.clone(), app.target.clone())
+            (app.generation, app.app.clone(), app.target.clone(), app.goto.take())
         };
         if !QUIT_HOOKED.get() {
             QUIT_HOOKED.set(true);
@@ -621,14 +633,25 @@ mod win {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get() as HWND,
             _ => { fail(state, "No Win32 host window".into()); return; }
         };
-        let launch = match super::launch(&app, &target) {
+        let mut launch = match super::launch(&app, &target) {
             Ok(launch) => launch,
             Err(error) => { fail(state, format!("{error:#}")); return; }
         };
+        // VS Code opens the folder and, in the same new window, the file.
+        let goto_args = goto.map(|uri| vec!["--goto".to_owned(), "--file-uri".to_owned(), uri]);
+        if let Some(args) = &goto_args {
+            launch.args.extend(args.iter().cloned());
+        }
         // A pane whose mod restarted (a mod reload, a layout change) gets the
         // window its earlier copy still holds for the same target: VS Code
         // would only bring that window forward instead of opening another.
         if let Some(embedded) = take_over(state, &app, &target, host) {
+            // That window is running: it gets the file on its own.
+            if let Some(args) = goto_args
+                && let Ok(mut child) = std::process::Command::new(&launch.program).args(args).spawn()
+            {
+                std::thread::spawn(move || child.wait());
+            }
             let child = embedded.child as usize;
             show(state, embedded);
             let weak = Rc::downgrade(state);
