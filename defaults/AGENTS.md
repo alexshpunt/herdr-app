@@ -58,7 +58,8 @@ pane closes that window. `status()`, `error()`, `shown()`, `reopen()` and
 after it for a line and column): called before the window starts, the new
 window opens with it; later, VS Code opens it in the window that has its
 folder. The bundled `vscode` mod is one VS Code tab: it opens `props.goto` as
-its window starts and `shared("vscode.goto")[its pane].uri` when asked later.
+its window first starts (not again after a restart) and
+`shared("vscode.goto")[its pane].uri` when asked later.
 `NativeAppState("fork", target)` shows Fork, the git client, on a local
 folder, `file://` URI or WSL folder URI: a Fork process of the pane's own,
 with only that repository. The bundled `fork` mod is one Fork tab.
@@ -980,6 +981,7 @@ Rules:
   `cx.timer.every(ms, (cx) => …)`.
 - No `setTimeout`/`setInterval` (use `cx.timer`), no top-level `await` (use
   `cx.spawn` in `init`). Anything slow goes through `exec` or `fetch`.
+- No global `URL`: take a URL apart with a regular expression.
 - Size: put `.id("root").on_size_change((size, cx) => { this.size = size; cx.notify(); })`
   on the root `div()`, `h_flex()` or `v_flex()`. It reports `{width, height}`
   in logical pixels after the first layout and whenever the size changes,

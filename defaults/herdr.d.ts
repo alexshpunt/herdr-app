@@ -326,8 +326,12 @@ export function telemetry(): {
   last_sent: { at: number; report: Record<string, unknown> } | null;
 } | null;
 
+/** A JSON value, as gpui-kit's `HostValue`. Declared here so this file type-checks where
+ *  gpui-kit.d.ts isn't beside it, as in the herdr-app source tree. */
+type HostValue = null | boolean | number | string | HostValue[] | { [key: string]: HostValue };
+
 /** The explicit feedback draft. Sending is restricted to the app-owned feedback frame. */
-export function feedbackPreview(message: string, email: string, images?: number): { body: import("gpui-kit").HostValue; available: boolean };
+export function feedbackPreview(message: string, email: string, images?: number): { body: HostValue; available: boolean };
 /** The clipboard's image, kept for the form (`path` for `image()`); null when it holds none. Frame-only. */
 export function feedbackPasteImage(): { path: string } | { error: string } | null;
 /** Picks image files (at most 3), each kept like a pasted one. Frame-only. */
@@ -336,7 +340,7 @@ export function feedbackPickImages(): Promise<({ path: string } | { error: strin
 export function feedbackAttachImages(paths: string[]): ({ path: string } | { error: string })[];
 /** Drops the form's kept screenshots. Frame-only. */
 export function feedbackClearImages(): null;
-export function sendFeedback(body: import("gpui-kit").HostValue, images?: string[]): Promise<string | null>;
+export function sendFeedback(body: HostValue, images?: string[]): Promise<string | null>;
 
 /** What the app runs with: the shown layout's look (theme name, fonts, sizes, terminal
  *  padding and opacity) with the person's zoom and sounds. */

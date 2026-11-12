@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { requestCommand } from "../../ipc.mjs";
@@ -25,8 +26,10 @@ export default function commands(pi: ExtensionAPI) {
       }
       const label = JSON.parse(labels()["herdr.plannotator"]);
       const runs = [];
-      // As Herdr runs it: a PATH without hc, and hc named by the label.
-      const bare = { ...process.env, PATH: "/usr/bin:/bin" };
+      // As Herdr runs it: a PATH without hc, and hc named by the label. This
+      // hc is a Node script, so the PATH keeps the folder of this Node (CI's
+      // is not in /usr/bin).
+      const bare = { ...process.env, PATH: [path.dirname(label.node), "/usr/bin", "/bin"].join(path.delimiter) };
       const { execFile } = await import("node:child_process");
       const run = (args: string[]) => new Promise<{ code: number; stderr: string }>(resolve =>
         execFile(label.node, [request, ...args], { env: bare }, (error, _out, stderr) => resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, stderr })));
