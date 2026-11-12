@@ -35,12 +35,15 @@ export default class VsCode extends View {
 
   // A file shown in this tab (a mod waiting in nextLink()) is asked for as
   // shared("vscode.goto")[its pane] = {uri} (a file URI, `:line:column` after
-  // it); once this pane's window is shown, VS Code opens it there.
+  // it); once this pane's window is shown, VS Code opens it there. A new
+  // window gets two seconds to start first, or its Welcome page covers the file.
   gotoRequested() {
+    if (!this.app.shown()) { this.shownAt = null; return; }
+    this.shownAt ??= Date.now();
     const pane = props()?.pane;
     const requests = shared("vscode.goto") ?? {};
     const request = pane ? requests[pane] : null;
-    if (!request?.uri || !this.app.shown()) return;
+    if (!request?.uri || Date.now() - this.shownAt < 2000) return;
     const { [pane]: _done, ...rest } = requests;
     setShared("vscode.goto", rest);
     try { this.app.goto(request.uri); } catch (error) { console.error(`Cannot open ${request.uri}: ${error}`); }
