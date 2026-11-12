@@ -231,60 +231,78 @@ fn person_program(program: &std::path::Path) -> std::process::Command {
     command
 }
 
-/// The title of a VS Code window, read off the UI thread.
-type TitleReader = Box<dyn Fn() -> String + Send>;
+/// When, after VS Code's window was adopted, files handed to it go again.
+/// A new window takes a few seconds to connect to its machine (WSL, SSH):
+/// before that it opens a file but drops its line (VS Code 1.146), and the
+/// files come to front in no fixed order. Its title is no sign of it: it
+/// names a file before the window has connected.
+const VSCODE_HAND_AGAIN: [std::time::Duration; 3] =
+    [std::time::Duration::from_secs(3), std::time::Duration::from_secs(8), std::time::Duration::from_secs(15)];
 
-/// How long a new VS Code window may take to connect to its machine before
-/// its files are handed again, and how long the files it then opens take.
-const VSCODE_CONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
-const VSCODE_OPEN_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+/// The files handed to one VS Code window while it is new, in the order
+/// asked (each once, at its latest place), and the last time they went again.
+#[derive(Default)]
+pub(super) struct Handed {
+    uris: Vec<String>,
+    again: Option<std::time::Instant>,
+}
+
+/// A new VS Code window: when Herdr adopted it, and what it was handed.
+type NewWindow = (std::time::Instant, Arc<std::sync::Mutex<Handed>>);
+
+/// One hand-off at a time, so files reach VS Code in the order asked.
+static HANDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Hands file URIs (`:line:column` after each) to the running VS Code, which
 /// opens each in the window that has its folder. They go one after another,
 /// so the last one ends up in front; at once, the order would be VS Code's.
-/// A new window (`title` reads its title) may still be connecting to its
-/// machine: it opens a file handed before that but drops its line (VS Code
-/// 1.146), in no fixed order. So once its title shows one of the files, they
-/// all go again: open now, each takes its line, and the last comes to front.
-fn vscode_goto(program: &std::path::Path, uris: Vec<String>, title: Option<TitleReader>) -> std::io::Result<()> {
-    let hand = |program: &std::path::Path, uri: &str| person_program(program).args(["--goto", "--file-uri", uri])
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-    let Some(first) = uris.first() else { return Ok(()) };
-    let mut child = hand(program, first)?;
+/// While the window is new, every file it was handed goes again at each of
+/// `VSCODE_HAND_AGAIN` still ahead, in the order asked: a file open by then
+/// takes its line, and the last one asked comes to front.
+fn vscode_goto(program: &std::path::Path, uris: Vec<String>, window: Option<NewWindow>) {
+    if uris.is_empty() { return; }
     let program = program.to_owned();
-    let hand_all = move |uris: &[String]| for uri in uris {
-        match hand(&program, uri) {
-            Ok(mut child) => { let _ = child.wait(); }
-            Err(error) => tracing::warn!(%error, "cannot hand {uri} to VS Code"),
+    // The caller holds HANDING: one Code.exe at a time, each handing its file
+    // over and exiting.
+    let hand_all = move |uris: &[String]| {
+        for uri in uris {
+            let child = person_program(&program).args(["--goto", "--file-uri", uri])
+                .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+            match child {
+                Ok(mut child) => { let _ = child.wait(); }
+                Err(error) => tracing::warn!(%error, "cannot hand {uri} to VS Code"),
+            }
         }
     };
-    // Off the UI thread: each Code.exe hands its file over and exits.
-    std::thread::spawn(move || {
-        let _ = child.wait();
-        hand_all(&uris[1..]);
-        let Some(title) = title else { return };
-        let names: Vec<String> = uris.iter().filter_map(|uri| file_name(uri)).collect();
-        let started = std::time::Instant::now();
-        while !shows_file(&title(), &names) {
-            if started.elapsed() > VSCODE_CONNECT_WAIT { return; }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+    if let Some((_, handed)) = &window {
+        let mut handed = handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for uri in &uris {
+            handed.uris.retain(|u| u != uri);
+            handed.uris.push(uri.clone());
         }
-        std::thread::sleep(VSCODE_OPEN_SETTLE);
-        hand_all(&uris);
+    }
+    // Off the UI thread, which must never wait for HANDING.
+    std::thread::spawn(move || {
+        let handing = || HANDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let _handing = handing();
+            hand_all(&uris);
+        }
+        let Some((adopted, handed)) = window else { return };
+        for at in VSCODE_HAND_AGAIN.map(|after| adopted + after) {
+            let Some(wait) = at.checked_duration_since(std::time::Instant::now()) else { continue };
+            std::thread::sleep(wait);
+            let _handing = handing();
+            // Another hand-off to this window may have done this round.
+            let again = {
+                let mut handed = handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if handed.again.is_some_and(|done| done >= at) { continue; }
+                handed.again = Some(at);
+                handed.uris.clone()
+            };
+            hand_all(&again);
+        }
     });
-    Ok(())
-}
-
-/// The file name a file URI (`:line:column` after it) ends with.
-fn file_name(uri: &str) -> Option<String> {
-    let name = without_place(uri).0.rsplit('/').next().filter(|n| !n.is_empty())?;
-    Some(percent_decoded(name))
-}
-
-/// Whether a VS Code window title (`● a.rs - app [WSL: Ubuntu] - Visual
-/// Studio Code` by default) shows one of these files as its editor.
-fn shows_file(title: &str, names: &[String]) -> bool {
-    title.split(" - ").any(|part| names.iter().any(|name| part.trim_start_matches("● ") == name))
 }
 
 /// A Fork (git client) process of the pane's own on a repository. `target`
