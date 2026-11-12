@@ -73,8 +73,10 @@ pub(super) struct NativeApp {
     /// Keyboard focus was asked for while the pane was hidden: give it when
     /// the pane shows up soon after (a tab selected just before).
     focus_until: Option<std::time::Instant>,
-    /// A file URI (VS Code) to open with the window when it starts: given at
-    /// launch, the new window opens it instead of its Welcome page.
+    /// A file URI (VS Code) asked for before the window is shown: one asked
+    /// for before it starts goes with the launch, so the new window opens it
+    /// instead of its Welcome page; one asked for while it starts is handed
+    /// to it once it is shown.
     goto: Option<String>,
     #[cfg(windows)]
     embedded: Option<win::Embedded>,
