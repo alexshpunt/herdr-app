@@ -223,6 +223,16 @@ fn base(s: &str) -> &str {
     }
 }
 
+/// The npm package a script path is in, without its scope: `pi-coding-agent` for
+/// `...\node_modules\@earendil-works\pi-coding-agent\dist\cli.js`. Not `.bin`, which
+/// holds launchers named after the program.
+fn npm_package(path: &str) -> Option<&str> {
+    let mut parts = path.rsplit_once("node_modules").map(|(_, rest)| rest)?.split(['/', '\\']).filter(|p| !p.is_empty());
+    let first = parts.next()?;
+    let name = if first.starts_with('@') { parts.next()? } else { first };
+    (!name.starts_with('.')).then_some(name)
+}
+
 /// PowerShell's single quotes, which include the curly ones.
 const PS_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
 
@@ -312,7 +322,11 @@ fn resolve(t: &Table, app: Option<&str>, argv: &[String]) -> Value {
             // A script's name without its extension (`vite.js`), never a module path (`http.server`).
             let name = base(arg);
             let stem = [".js", ".mjs", ".cjs", ".ts", ".py", ".rb"].iter().find_map(|x| name.strip_suffix(x)).unwrap_or(name);
-            if let Some((key, e)) = find(t, stem).filter(|(k, _)| !t.interpreters.iter().any(|i| i == k)) {
+            // Else the npm package the script is in: on Windows npm starts `pi` as
+            // `node.exe ...\node_modules\@earendil-works\pi-coding-agent\...\cli.js`.
+            let package = npm_package(arg);
+            let known = |name: &str| find(t, name).filter(|(k, _)| !t.interpreters.iter().any(|i| i == k));
+            if let Some((key, e)) = known(stem).or_else(|| package.and_then(known)) {
                 return shown(key, e, None, false, false);
             }
         }
@@ -399,6 +413,13 @@ mod tests {
         assert_eq!(key(None, &["node", "/x/node_modules/.bin/vite", "dev"]), "vite");
         assert_eq!(key(None, &["npx", "vitest"]), "vitest");
         assert_eq!(key(None, &["node", "server.js"]), "node");
+        // Windows: npm starts an agent as `node.exe <package>\...\cli.js`.
+        let pi = [r"C:\Program Files\nodejs\node.exe", r"C:\Users\me\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js"];
+        assert_eq!(key(None, &pi), "pi");
+        assert_eq!(key(None, &[pi[0], r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js", "--resume"]), "claude");
+        assert_eq!(key(None, &["node", "/home/me/.npm/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"]), "pi");
+        assert_eq!(key(None, &["node", r"C:\app\node_modules\left-pad\cli.js"]), "node");
+        assert_eq!(key(None, &["node", r"C:\app\cli.js"]), "node");
         assert_eq!(key(None, &["python3", "-m", "http.server", "8799"]), "python");
         assert_eq!(key(None, &["uv", "run", "pytest"]), "pytest");
         assert_eq!(key(None, &["mytool"]), "program");
