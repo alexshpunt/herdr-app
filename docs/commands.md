@@ -319,18 +319,6 @@ Search the focused terminal's screen and scrollback; the find bar and query stay
 
 No arguments.
 
-## `link.open`
-
-Open a link as clicking it in a terminal does: a URL, or a file or folder path (`:42` or `:42:7` after it names a line and column) on the terminal's machine, relative to cwd (default: the terminal's folder). terminal: the terminal it came from (an address, or the id on its machine with space naming its space there); tabs opened for an agent's link belong to that agent. A mod waiting in nextLink() shows it in a tab; otherwise, or with system true, the system's program opens it.
-
-| Argument | Required |
-|---|---|
-| `target` | yes |
-| `terminal` | no |
-| `space` | no |
-| `cwd` | no |
-| `system` | no |
-
 ## `agent.focus`
 
 Show an agent (sub-agents too).

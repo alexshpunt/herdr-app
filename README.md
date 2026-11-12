@@ -55,7 +55,6 @@ Agents that report status show as:
 Click an agent to see it. A worker without a pane opens in **peek**, over your tab. Keep it as a tab if you want it beside your other work.
 Ctrl-click a live terminal address in terminal text to peek at it; use Cmd-click on macOS.
 An address such as `t7` means a terminal on the same machine as the terminal showing it. `vps/t7` names one on another machine.
-Ctrl-click (Cmd-click) a URL or a file path in terminal text to open it: in the system's browser or program, or in a Herdr tab when a mod shows links in tabs (one waiting in `nextLink()`). A file path counts when it exists on the terminal's machine; in a WSL or SSH terminal it is checked there when clicked. `:42` or `:42:7` after it names a line and column. Agents open links the same way with `herdr-app do link.open`, and a link in a browser tab that asks for a new window goes there too.
 
 The window arranges terminals. The core runs them.
 Closing the window leaves them running; closing a pane or tab ends its terminals.

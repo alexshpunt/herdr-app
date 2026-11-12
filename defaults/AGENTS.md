@@ -54,11 +54,7 @@ person's own VS Code window on `target` (a folder URI such as
 `vscode-remote://wsl+Ubuntu/root/app`, or a local folder) inside the element.
 Herdr asks VS Code for a window, adopts it and crops its frame; closing the
 pane closes that window. `status()`, `error()`, `shown()`, `reopen()` and
-`focus()` follow and control it; `goto(fileUri)` opens a file URI (`:42:7`
-after it for a line and column): called before the window starts, the new
-window opens with it; later, VS Code opens it in the window that has its
-folder. The bundled `vscode` mod is one VS Code tab: it opens `props.goto` as
-its window starts and `shared("vscode.goto")[its pane].uri` when asked later.
+`focus()` follow and control it. The bundled `vscode` mod is one VS Code tab.
 `NativeAppState("fork", target)` shows Fork, the git client, on a local
 folder, `file://` URI or WSL folder URI: a Fork process of the pane's own,
 with only that repository. The bundled `fork` mod is one Fork tab.
@@ -224,15 +220,6 @@ the highlighted line shows where it will land.
   Ctrl-click (Cmd-click on macOS) a live terminal address in terminal text to
   peek at it. Bare addresses refer to the machine of the terminal showing them;
   use `machine/address` for another machine. Names and non-live addresses aren't links.
-- **Links**: Ctrl-click (Cmd-click) a URL or a file path in terminal text, or
-  `link.open {target, terminal?}` (what an agent's `herdr-app do link.open`
-  sends), or a browser pane's link that asks for a new window. A file path
-  counts when it exists on the terminal's machine (WSL and SSH ones are
-  checked there); `:42` / `:42:7` after it is a line and column. A mod that
-  waits in `nextLink()` gets each link and shows it in a tab, recording the
-  agent it came from as `props.origin` of the tab's mod pane; it hands back
-  one no tab shows with `link.open {target, system: true}`. Without such a
-  mod, the system's browser or program opens it.
 - **Agent navigation order** belongs to the mods. A mod displaying agents calls
   `setAgentOrder(list.map(a => a.address))` on render so `agent.next` /
   `agent.prev` follow its list.
@@ -1101,9 +1088,7 @@ All of it is in `herdr.d.ts`. In short:
 - `notify({ ..., action: { name, args } })`: the toast runs the command when clicked.
 - This copy: `props()`, `shared(key)` / `setShared(key, value)` (every mod
   sees it; setting re-renders all; values survive a restart), `nextCommand()` (key commands for this
-  mod: `cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); …; cx.notify(); } })`),
-  `nextLink()` (links to show in tabs; see Links above). A tab's mod pane
-  gets its own pane id as `props().pane`; `panes()` lists a mod pane's props.
+  mod: `cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); …; cx.notify(); } })`).
 - A pane's mod copy starts the first time its tab is shown, then lives while
   the pane does. After a restart, what a copy records in `init` (such as its
   `shared()` entry) appears only once its tab has been shown again.
