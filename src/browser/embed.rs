@@ -856,9 +856,13 @@ mod win {
             let _ = cx.update(|window, _| window.refresh());
             apply(&state);
             focus::give(found);
-            // The launch's line, then a file asked for while the window started.
+            // The launch's line, then a file asked for while the window
+            // started. That one goes twice: a window still connecting to its
+            // machine opens the file but drops its line (VS Code 1.146), and
+            // the second hand-off finds it open and places it.
             let asked = state.borrow_mut().goto.take();
-            if let Err(error) = super::vscode_goto(&launch.program, place.into_iter().chain(asked).collect()) {
+            let uris = place.into_iter().chain(asked.into_iter().flat_map(|uri| [uri.clone(), uri])).collect();
+            if let Err(error) = super::vscode_goto(&launch.program, uris) {
                 tracing::warn!(%error, "cannot hand files to VS Code");
             }
             // Only the pane holds its state: closing the pane drops it, and
