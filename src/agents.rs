@@ -20,6 +20,17 @@ pub fn require_dedicated(placement: Option<&Value>) -> Result<(), String> {
     }
 }
 
+/// Core lifecycle events can remove the tab before the kill reply reaches the
+/// window. Treat that completed removal as success, but never close a replacement.
+pub fn removal_tab(current: Option<&Value>, expected: Option<&Value>, expected_tab_exists: bool) -> Result<Option<String>, String> {
+    if current.is_none() && !expected_tab_exists { return Ok(None); }
+    if let Some(current) = current {
+        if current["dedicated"] == true && expected.is_some_and(|old| old["tab"] == current["tab"]) {
+            if let Some(tab) = current["tab"].as_str() { return Ok(Some(tab.into())); }
+        }
+    }
+    Err("The agent ended, but its tab changed during removal. The tab was retained.".into())
+}
 pub fn pi_label(record: &Value) -> Option<Value> {
     let label: Value = serde_json::from_str(record["labels"]["herdr.pi"].as_str()?).ok()?;
     (label["version"] == 1
@@ -253,6 +264,12 @@ mod tests {
     }
     #[test]
     fn removal_requires_a_dedicated_tab_and_preserves_split_panes() {
+        let expected = json!({"tab":"tb1","dedicated":true});
+        assert_eq!(removal_tab(Some(&expected), Some(&expected), true).unwrap(), Some("tb1".into()));
+        assert_eq!(removal_tab(None, Some(&expected), false).unwrap(), None);
+        assert!(removal_tab(None, Some(&expected), true).is_err());
+        assert!(removal_tab(Some(&json!({"tab":"tb2","dedicated":true})), Some(&expected), true).is_err());
+        assert!(removal_tab(Some(&json!({"tab":"tb1","dedicated":false})), Some(&expected), true).is_err());
         let mut model = crate::model::Model::default();
         model.add_space(
             "sp1",

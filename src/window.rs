@@ -4187,10 +4187,8 @@ impl AppWindow {
                 let result = result.and_then(|value| {
                     if removing {
                         let current = this.agent_placement(&address);
-                        if current.as_ref().is_none_or(|p| p["dedicated"] != true || placement.as_ref().is_none_or(|old| p["tab"] != old["tab"])) {
-                            return Err("The agent ended, but its tab changed during removal. The tab was retained.".into());
-                        }
-                        if let Some(tab) = current.as_ref().and_then(|p| p["tab"].as_str()) { this.model.remove_tab(tab); }
+                        let expected_tab_exists = placement.as_ref().and_then(|p| p["tab"].as_str()).is_some_and(|id| this.model.tab(id).is_some());
+                        if let Some(tab) = crate::agents::removal_tab(current.as_ref(), placement.as_ref(), expected_tab_exists)? { this.model.remove_tab(&tab); }
                         this.sync(window, cx);
                         this.flush_documents(false, window, cx);
                     }
