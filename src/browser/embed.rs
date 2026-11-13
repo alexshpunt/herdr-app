@@ -620,10 +620,10 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             }
             // A window that just started may still be connecting to its machine.
             #[cfg(windows)]
-            let title = app.embedded.as_ref().and_then(win::title_while_new);
+            let window = app.embedded.as_ref().map(win::new_window);
             #[cfg(not(windows))]
-            let title = None;
-            vscode_goto(&vscode(&app.target)?.program, vec![uri.clone()], title)?;
+            let window = None;
+            vscode_goto(&vscode(&app.target)?.program, vec![uri.clone()], window);
             Ok(ComponentDataValue::Null)
         }),
         StateMethodDescriptor::new::<State>("focus", "(): void", |state, _, _, _| {
@@ -676,9 +676,10 @@ mod win {
         /// The program's other windows of the same class (Unity's floating
         /// editor windows), hidden while the pane is.
         hidden: Vec<HWND>,
-        /// When Herdr adopted it: a VS Code window still connects to its
-        /// machine for a while after that.
+        /// When Herdr adopted it, and the files handed to it since: a VS
+        /// Code window still connects to its machine for a while after that.
         adopted: Instant,
+        handed: std::sync::Arc<std::sync::Mutex<super::Handed>>,
     }
 
     #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -802,11 +803,8 @@ mod win {
         if let Some(embedded) = left.or_else(|| held(state, &app, &target)).map(|e| moved_to(e, host)) {
             // A window taken from another pane is running: it gets the file on
             // its own. A restarted copy's window opened it when it started.
-            if !restarted
-                && let Some(uri) = &goto
-                && let Err(error) = super::vscode_goto(&launch.program, vec![uri.clone()], title_while_new(&embedded))
-            {
-                tracing::warn!(%error, "cannot hand {uri} to VS Code");
+            if !restarted && let Some(uri) = &goto {
+                super::vscode_goto(&launch.program, vec![uri.clone()], Some(new_window(&embedded)));
             }
             let child = embedded.child as usize;
             show(state, embedded);
@@ -918,13 +916,12 @@ mod win {
             apply(&state);
             focus::give(found);
             // The launch's line, then a file asked for while the window
-            // started, the last in front. The window may still be connecting
-            // to its machine: they go again once it shows one (vscode_goto).
+            // started, the last in front; again while the window may still be
+            // connecting to its machine (vscode_goto).
             let asked = state.borrow_mut().goto.take();
             let uris = place.into_iter().chain(asked).collect();
-            if let Err(error) = super::vscode_goto(&launch.program, uris, Some(title_reader(found))) {
-                tracing::warn!(%error, "cannot hand files to VS Code");
-            }
+            let window = state.borrow().embedded.as_ref().map(new_window);
+            super::vscode_goto(&launch.program, uris, window);
             // Only the pane holds its state: closing the pane drops it, and
             // with it the window.
             drop(state);
@@ -1099,24 +1096,10 @@ mod win {
         }
     }
 
-    /// How long after Herdr adopts it a VS Code window may still be
-    /// connecting to its machine.
-    const CONNECTING: Duration = Duration::from_secs(30);
-
-    /// Reads a program window's title from any thread (no message is sent
-    /// to a window of another process).
-    pub(super) fn title_reader(hwnd: HWND) -> super::TitleReader {
-        let hwnd = hwnd as usize;
-        Box::new(move || {
-            let mut text = [0u16; 512];
-            let len = unsafe { GetWindowTextW(hwnd as HWND, text.as_mut_ptr(), text.len() as i32) };
-            String::from_utf16_lossy(&text[..len.max(0) as usize])
-        })
-    }
-
-    /// The title reader of a window that may still be connecting to its machine.
-    pub(super) fn title_while_new(embedded: &Embedded) -> Option<super::TitleReader> {
-        (embedded.adopted.elapsed() < CONNECTING).then(|| title_reader(embedded.child))
+    /// When Herdr adopted a window, and what it was handed: for files handed
+    /// to VS Code while the window may still be connecting to its machine.
+    pub(super) fn new_window(embedded: &Embedded) -> super::NewWindow {
+        (embedded.adopted, embedded.handed.clone())
     }
 
     /// The one window whose title has `part` as a " - "-separated part.
@@ -1224,7 +1207,7 @@ mod win {
         };
         if menu { cx.background_executor().spawn(async move { reparent() }).await } else { reparent() }
         focus::adopt(host, container, hwnd, menu);
-        Embedded { child: hwnd, container, style, ex_style, crop: Crop::default(), applied: None, popup: menu, hidden: Vec::new(), adopted: Instant::now() }
+        Embedded { child: hwnd, container, style, ex_style, crop: Crop::default(), applied: None, popup: menu, hidden: Vec::new(), adopted: Instant::now(), handed: Default::default() }
     }
 
     /// Give the container the pane's latest geometry, visibility and holes.
@@ -1503,7 +1486,7 @@ mod win {
 
 #[cfg(test)]
 mod tests {
-    use super::{class_matches, editor_version, file_name, fork_workspace, safe_directory, shows_file, unity_version, vscode_with_file, windows_folder};
+    use super::{class_matches, editor_version, fork_workspace, safe_directory, unity_version, vscode_with_file, windows_folder};
     use serde_json::json;
 
     #[test]
@@ -1575,19 +1558,6 @@ mod tests {
         // A file on another machine, or a URI VS Code takes no path for, goes as a URI.
         assert_eq!(vscode_with_file(wsl, "file:///C:/dev/a.rs"), None);
         assert_eq!(vscode_with_file("vscode-vfs://github/a/b", "vscode-vfs://github/a/b/c.rs"), None);
-    }
-
-    #[test]
-    fn a_vscode_title_shows_a_handed_file_by_its_name() {
-        let names = [file_name("vscode-remote://wsl+Ubuntu/root/my%20app/src/a%20b.rs:42:7").unwrap(), file_name("file:///C:/dev/app/x.rs").unwrap()];
-        assert_eq!(names, ["a b.rs", "x.rs"]);
-        assert!(shows_file("a b.rs - my app [WSL: Ubuntu] - Visual Studio Code", &names));
-        assert!(shows_file("● x.rs - app - Visual Studio Code", &names));
-        // Still connecting, or another file in front.
-        assert!(!shows_file("[WSL: Ubuntu] - Visual Studio Code", &names));
-        assert!(!shows_file("Welcome - my app [WSL: Ubuntu] - Visual Studio Code", &names));
-        assert!(!shows_file("ax.rs - app - Visual Studio Code", &names));
-        assert_eq!(file_name("file:///C:/dev/"), None);
     }
 
     #[test]
