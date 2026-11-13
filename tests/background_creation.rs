@@ -141,10 +141,24 @@ fn empty_folder_starts_tabs_and_split_panes_in_home() {
     let app = App::start();
     let folder = app.root.to_string_lossy();
     let space = app.run("space.new", json!({"folder": folder}));
+    let source_pane = app.query(&["status"])["focused_pane"].clone();
     let home = std::env::home_dir().unwrap();
-    for (command, args) in [
-        ("tab.new", json!({"space": space["space"], "folder": ""})),
-        ("pane.split", json!({"direction": "right", "folder": ""})),
+    for (command, args, expected) in [
+        (
+            "tab.new",
+            json!({"space": space["space"], "folder": ""}),
+            home,
+        ),
+        (
+            "pane.split",
+            json!({"pane": source_pane, "direction": "right", "folder": ""}),
+            std::env::home_dir().unwrap(),
+        ),
+        (
+            "pane.split",
+            json!({"pane": source_pane, "direction": "down", "folder": folder}),
+            app.root.clone(),
+        ),
     ] {
         let result = app.run(command, args);
         let terminal = result["terminal"].as_str().unwrap();
@@ -161,7 +175,7 @@ fn empty_folder_starts_tabs_and_split_panes_in_home() {
         let record: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
             std::path::Path::new(record["cwd"].as_str().unwrap()),
-            home,
+            expected,
             "{command}"
         );
     }
