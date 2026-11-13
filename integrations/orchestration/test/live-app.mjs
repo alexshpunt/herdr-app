@@ -136,4 +136,16 @@ await step('remove ends only the selected dedicated agent', async () => {
   assert.equal(inspect(fallback.terminal).startup, 'started');
   return { removed: success.terminal, otherAgentsPreserved: true };
 });
+await step('split siblings prevent destructive agent removal', async () => {
+  const agent = inspect(fallback.terminal);
+  const before = app('ls').spaces.flatMap(space => space.tabs).find(tab => tab.terminals.some(pane => pane.terminal === agent.terminal));
+  const pane = before.terminals.find(pane => pane.terminal === agent.terminal).pane;
+  app('pane.split', { pane, direction: 'right' });
+  const refused = await invoke('herdr_agent_remove', target(agent), true);
+  assert.match(refused.error, /single-pane|split|sibling/i);
+  const after = app('ls').spaces.flatMap(space => space.tabs).find(tab => tab.id === before.id);
+  assert.equal(after.terminals.length, 2);
+  assert.equal(inspect(agent.terminal).pid, agent.pid);
+  return { terminal: agent.terminal, siblingsPreserved: true };
+});
 console.log(`Native App verification passed: ${reports.length} scenarios`);
