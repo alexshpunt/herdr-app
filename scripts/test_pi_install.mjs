@@ -114,6 +114,22 @@ test('serializes concurrent installations into one complete managed copy', () =>
   await assert.rejects(lstat(path.join(root, '.herdr-orchestration-install.lock')), { code: 'ENOENT' });
 }));
 
+test('refuses an expired installation lock without changing it or the installed extension', () => fixture(async root => {
+  assert.equal(run(root).status, 0);
+  const target = path.join(root, 'extensions', 'herdr-orchestration');
+  const metadata = await readFile(path.join(target, marker), 'utf8');
+  const lock = path.join(root, '.herdr-orchestration-install.lock');
+  const original = JSON.stringify({ owner: 'herdr-app', token: 'expired-fixture', at: Date.now() - 180000 });
+  await writeFile(lock, original);
+  const result = run(root, [['package.json', files[0][1]], ['index.ts', 'upgraded source']]);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.receipt, undefined);
+  assert.ok(result.stderr.includes(lock));
+  assert.equal(await readFile(lock, 'utf8'), original);
+  for (const [name, content] of files) assert.equal(await readFile(path.join(target, name), 'utf8'), content);
+  assert.equal(await readFile(path.join(target, marker), 'utf8'), metadata);
+}));
+
 const discoverySource = source.match(/\/\/ BEGIN_PI_RUNTIME_DISCOVERY\r?\n([\s\S]*?)\/\/ END_PI_RUNTIME_DISCOVERY/)?.[1];
 const discover = (...args) => {
   assert.ok(discoverySource, 'The installer must expose its native Pi runtime discovery contract');

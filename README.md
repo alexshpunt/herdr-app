@@ -88,7 +88,7 @@ Remote work keeps running when your local window closes or your laptop sleeps, a
 
 Herdr carries its Pi orchestration extension in the app executable. When a machine connects, Herdr installs or updates the managed extension in `~/.pi/agent/extensions/herdr-orchestration/` on that machine, not on the viewing computer. It checks the installation again before launching Pi. Install Node.js and Pi on each machine first; Herdr does not install either runtime.
 
-The installer leaves Pi settings and other extensions unchanged. It refuses to replace an unrelated directory at the managed path or discard personal files added there. Workflow settings show installation errors. An already running Pi keeps its loaded extension until you reload Pi or start a new session. When the core supplies `PI_CODING_AGENT_DIR`, Herdr uses that directory instead of `~/.pi/agent`.
+The installer leaves Pi settings and other extensions unchanged. It refuses to replace an unrelated directory at the managed path or discard personal files added there. Workflow settings show installation errors. If an installation lock has expired, Herdr reports its path and leaves it in place: verify that no Herdr installer is running on that machine, then remove only that lock file and retry. An already running Pi keeps its loaded extension until you reload Pi or start a new session. When the core supplies `PI_CODING_AGENT_DIR`, Herdr uses that directory instead of `~/.pi/agent`.
 
 ## Make it yours
 

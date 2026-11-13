@@ -124,13 +124,12 @@ async function discoverPiRuntime(searchPath = process.env.PATH || '', platform =
       finally { await handle.close(); }
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      // Only a lock written by this installer can be reclaimed after the
-      // bounded machine.exec that held it must have ended.
+      // Never unlink an expired lock: another waiter may already have
+      // replaced the lock we read with its own active installation.
       let previous;
       try { previous = await readJson(lock); } catch { /* A writer may still be filling the lock. */ }
       if (previous?.owner === owner && typeof previous.token === 'string' && Number.isFinite(previous.at) && Date.now() - previous.at > 120000) {
-        await fs.unlink(lock).catch(error => { if (error.code !== 'ENOENT') throw error; });
-        continue;
+        throw new Error(`Pi extension installation lock has expired at ${lock}; verify that no Herdr installer is running on this machine, then remove this lock manually and retry`);
       }
       if (Date.now() > deadline) throw new Error('Another Pi extension installation is still running; try again after it finishes');
       await delay(100);
