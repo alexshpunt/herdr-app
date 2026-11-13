@@ -97,7 +97,7 @@ export class Orchestrator {
         if (signal?.aborted) return { outcome: 'pending', detail: 'Observation cancelled; the agent is left running. Inspect it before further action.' };
         const agent = await this.client.inspect(target.terminal);
         const outcome = startupOutcome(agent);
-        if (outcome !== 'pending') return { outcome, pid: agent.pid, session: agent.session, detail: agent.error ?? agent.message };
+        if (outcome !== 'pending') return { outcome, pid: agent.pid, session: agent.session, detail: agent.startupError ?? agent.message };
         await delay(this.pollMs, undefined, { signal }).catch(error => { if (!signal?.aborted) throw error; });
       } while (Date.now() < deadline);
       return { outcome: 'pending', detail: 'Startup observation timed out; the agent is left running. Inspect it before retrying.' };
@@ -111,7 +111,7 @@ export class Orchestrator {
         // The user may have retried the primary after its first error. Re-read
         // it before launching a replacement; a recovered agent stays primary.
         const current = await this.client.inspect(target.terminal);
-        outcome = { outcome: startupOutcome(current), pid: current.pid, session: current.session, detail: current.error ?? current.message };
+        outcome = { outcome: startupOutcome(current), pid: current.pid, session: current.session, detail: current.startupError ?? current.message };
         receipt = { ...receipt, ...outcome };
         await this.save(file, receipt);
         if (['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {

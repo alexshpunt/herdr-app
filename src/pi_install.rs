@@ -49,9 +49,63 @@ const readJson = async file => JSON.parse(await fs.readFile(file, 'utf8'));
 const optionalStat = async file => {
   try { return await fs.lstat(file); } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
 };
+// BEGIN_PI_RUNTIME_DISCOVERY
+async function discoverPiRuntime(searchPath = process.env.PATH || '', platform = process.platform, extra) {
+  const packageName = '@earendil-works/pi-coding-agent';
+  const standard = extra ?? [path.dirname(process.execPath), path.join(os.homedir(), '.local', 'bin'), path.join(os.homedir(), '.npm-global', 'bin'), ...(platform === 'win32' && process.env.APPDATA ? [path.join(process.env.APPDATA, 'npm')] : [])];
+  const directories = [...new Set([...searchPath.split(platform === 'win32' ? ';' : ':'), ...standard].filter(Boolean))];
+  const names = platform === 'win32' ? ['pi.exe', 'pi.cmd', 'pi.ps1', 'pi'] : ['pi'];
+  const nodeScript = async file => {
+    const handle = await fs.open(file, 'r');
+    let header;
+    try { const bytes = Buffer.alloc(512); const result = await handle.read(bytes, 0, bytes.length, 0); header = bytes.subarray(0, result.bytesRead).toString('utf8'); }
+    finally { await handle.close(); }
+    if (!/^#![^\r\n]*\bnode(?:\.exe)?(?:\s|$)/.test(header)) throw new Error('The pi command is not a Node.js CLI; use the supported Pi npm installation before launching it from Herdr');
+    return { launch: [process.execPath, await fs.realpath(file)] };
+  };
+  const fromPackage = async directory => {
+    let metadata;
+    try { metadata = JSON.parse(await fs.readFile(path.join(directory, 'package.json'), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return undefined; throw error; }
+    if (metadata.name !== packageName) return undefined;
+    const bin = typeof metadata.bin === 'string' ? metadata.bin : metadata.bin?.pi;
+    if (typeof bin !== 'string' || !bin) throw new Error('The installed Pi package has no pi entrypoint');
+    const cli = path.resolve(directory, bin), relative = path.relative(directory, cli);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('The installed Pi entrypoint is outside its package');
+    return nodeScript(cli);
+  };
+  for (const directory of directories) for (const name of names) {
+    const command = path.join(directory, name);
+    try {
+      let stat;
+      try { stat = await fs.stat(command); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }
+      if (!stat.isFile()) continue;
+      if (/\.(?:cmd|ps1)$/i.test(name)) {
+        const shim = (await fs.readFile(command, 'utf8')).replaceAll('\\', '/');
+        if (!shim.includes(packageName)) throw new Error('The pi command does not name the supported Pi npm package');
+        const result = await fromPackage(path.join(directory, 'node_modules', '@earendil-works', 'pi-coding-agent'));
+        if (!result) throw new Error('The Pi npm shim has no installed package beside it');
+        return result;
+      }
+      const resolved = await fs.realpath(command);
+      let parent = path.dirname(resolved);
+      for (let level = 0; level < 8; level++) {
+        const result = await fromPackage(parent);
+        if (result) return result;
+        const next = path.dirname(parent);
+        if (next === parent) break;
+        parent = next;
+      }
+      return await nodeScript(resolved);
+    } catch (error) { return { launchError: `Cannot launch Pi directly: ${error.message}` }; }
+  }
+  return { launchError: 'Pi is not installed on this machine or is not on its PATH; install the Pi npm package and reconnect the machine' };
+}
+// END_PI_RUNTIME_DISCOVERY
 (async () => {
   if (!Array.isArray(files) || !files.length || files.some(item => !Array.isArray(item) || item.length !== 2 || typeof item[0] !== 'string' || !/^[a-zA-Z0-9_.-]+$/.test(item[0]) || ['.', '..', marker].includes(item[0]) || typeof item[1] !== 'string') || new Set(files.map(item => item[0])).size !== files.length) throw new Error('Invalid bundled Pi resources');
   const revision = createHash('sha256').update(JSON.stringify(files)).digest('hex');
+  const runtime = await discoverPiRuntime();
   const configured = process.env.PI_CODING_AGENT_DIR;
   const agent = configured ? path.resolve(configured === '~' ? os.homedir() : configured.startsWith('~/') || configured.startsWith('~\\') ? path.join(os.homedir(), configured.slice(2)) : configured) : path.join(os.homedir(), '.pi', 'agent');
   const extensions = path.join(agent, 'extensions');
@@ -98,7 +152,7 @@ const optionalStat = async file => {
         if (!stat?.isFile() || stat.isSymbolicLink() || await fs.readFile(path.join(target, name), 'utf8') !== content) unchanged = false;
       }
       if (unchanged && metadata.files.length === files.length) {
-        process.stdout.write('\nherdr-pi-install:' + JSON.stringify({ state: 'ready', path: target, revision, changed: false }) + '\n');
+        process.stdout.write('\nherdr-pi-install:' + JSON.stringify({ state: 'ready', path: target, revision, changed: false, ...runtime }) + '\n');
         return;
       }
     }
@@ -117,7 +171,7 @@ const optionalStat = async file => {
       throw error;
     }
     if (moved) { await fs.rm(backup, { recursive: true }); moved = false; }
-    process.stdout.write('\nherdr-pi-install:' + JSON.stringify({ state: 'ready', path: target, revision, changed: true }) + '\n');
+    process.stdout.write('\nherdr-pi-install:' + JSON.stringify({ state: 'ready', path: target, revision, changed: true, ...runtime }) + '\n');
   } finally {
     try { await fs.rm(stage, { recursive: true, force: true }); }
     finally {
@@ -152,6 +206,20 @@ enum State {
     },
 }
 static INSTALLS: OnceLock<Mutex<HashMap<Option<String>, Arc<Install>>>> = OnceLock::new();
+// Keep verified prefixes while a later disk refresh is in flight; otherwise a
+// queued UI launch could accidentally regain a shell wrapper during refresh.
+static RUNTIMES: OnceLock<Mutex<Vec<Vec<String>>>> = OnceLock::new();
+pub(crate) fn remember_runtime(receipt: &Value) {
+    if let Ok(argv) = runtime_argv(receipt) {
+        let mut runtimes = RUNTIMES
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !runtimes.contains(&argv) {
+            runtimes.push(argv);
+        }
+    }
+}
 
 fn entry(on: Option<&str>) -> Arc<Install> {
     INSTALLS
@@ -237,6 +305,7 @@ pub fn ensure(core: &Core, on: Option<&str>) -> Result<(), String> {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     match &result {
         Ok(receipt) => {
+            remember_runtime(receipt);
             *state = State::Ready {
                 receipt: receipt.clone(),
                 at: Instant::now(),
@@ -253,6 +322,44 @@ pub fn ensure(core: &Core, on: Option<&str>) -> Result<(), String> {
     result.map(|_| ())
 }
 
+/// Resolve the target's own Node/Pi CLI after installing the extension. Native
+/// argv keeps task text intact and makes Pi, not its shell, the terminal owner.
+pub fn launch(core: &Core, on: Option<&str>) -> Result<Vec<String>, String> {
+    ensure(core, on)?;
+    runtime_argv(&status(on))
+}
+fn runtime_argv(receipt: &Value) -> Result<Vec<String>, String> {
+    let argv = receipt["launch"]
+        .as_array()
+        .filter(|argv| argv.len() == 2)
+        .and_then(|argv| {
+            argv.iter()
+                .map(|part| part.as_str().filter(|s| !s.is_empty()).map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        });
+    argv.ok_or_else(|| {
+        receipt["launchError"]
+            .as_str()
+            .unwrap_or(
+                "Pi's native Node entrypoint is unavailable; install Pi and reconnect this machine",
+            )
+            .to_owned()
+    })
+}
+/// Only installer-verified runtime prefixes bypass generic shell wrapping.
+pub fn is_direct_pi(argv: &[String]) -> bool {
+    if argv.len() < 2 {
+        return false;
+    }
+    let Some(runtimes) = RUNTIMES.get() else {
+        return false;
+    };
+    runtimes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|runtime| argv.starts_with(runtime))
+}
 #[derive(Debug)]
 enum ExecFailure {
     Spawn(String),
@@ -376,6 +483,23 @@ mod tests {
         json!({ "code": code, "stdout": base64::engine::general_purpose::STANDARD.encode(output), "stderr": "", "timed_out": false })
     }
 
+    #[test]
+    fn native_launches_use_only_installer_verified_runtime_prefixes() {
+        let runtime = json!({"launch":["/herdr-native-test/node", "/herdr-native-test/pi.js"]});
+        let mut argv = runtime_argv(&runtime).unwrap();
+        assert!(!is_direct_pi(&argv));
+        remember_runtime(&runtime);
+        argv.extend([
+            "--model".into(),
+            "fixture/success".into(),
+            "task with \"quotes\"\nand newline".into(),
+        ]);
+        assert!(is_direct_pi(&argv));
+        argv[1] = "/another/cli.js".into();
+        assert!(!is_direct_pi(&argv));
+        assert!(runtime_argv(&json!({"launchError":"unavailable"})).is_err());
+        assert!(runtime_argv(&json!({"launch":["node"]})).is_err());
+    }
     #[test]
     fn parses_the_target_machine_confirmation_after_shell_greetings() {
         let expected = json!({ "state": "ready", "path": "C:\\Users\\Person\\.pi\\agent\\extensions\\herdr-orchestration", "revision": "a".repeat(64), "changed": true });

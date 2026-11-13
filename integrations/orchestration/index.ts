@@ -127,7 +127,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         } else {
           lines = [clean(data.outcome ?? data.status ?? data.state ?? 'Applied') + (data.model ? ` · ${clean(data.model)}` : '')];
           if (data.terminal) lines.push(clean(data.terminal));
-          if (data.detail || data.message || data.error) lines.push(clean(data.detail ?? data.error ?? data.message));
+          if (data.detail || data.message || data.error || data.startupError) lines.push(clean(data.detail ?? data.error ?? data.startupError ?? data.message));
           if (data.retainedPrimary?.terminal) lines.push(`Primary retained: ${clean(data.retainedPrimary.terminal)}`);
           if (options.expanded) {
             if (data.pid) lines.push(`Pi PID ${clean(data.pid)} · session ${clean(data.session)}`);

@@ -113,3 +113,40 @@ test('serializes concurrent installations into one complete managed copy', () =>
   for (const [name, content] of files) assert.equal(await readFile(path.join(target, name), 'utf8'), content);
   await assert.rejects(lstat(path.join(root, '.herdr-orchestration-install.lock')), { code: 'ENOENT' });
 }));
+
+const discoverySource = source.match(/\/\/ BEGIN_PI_RUNTIME_DISCOVERY\r?\n([\s\S]*?)\/\/ END_PI_RUNTIME_DISCOVERY/)?.[1];
+const discover = (...args) => {
+  assert.ok(discoverySource, 'The installer must expose its native Pi runtime discovery contract');
+  return new Function('fs', 'path', 'os', `${discoverySource}; return discoverPiRuntime;`)(fsForDiscovery, path, { homedir: () => '' })(...args);
+};
+const fsForDiscovery = await import('node:fs/promises');
+test('discovers the Windows npm Pi CLI from its declared bin, not a hardcoded filename', () => fixture(async root => {
+  const prefix = path.join(root, 'npm'), pkg = path.join(prefix, 'node_modules', '@earendil-works', 'pi-coding-agent');
+  await mkdir(path.join(pkg, 'custom'), { recursive: true });
+  await writeFile(path.join(pkg, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-coding-agent', bin: { pi: 'custom/native-entry.js' } }));
+  const cli = path.join(pkg, 'custom', 'native-entry.js');
+  await writeFile(cli, '#!/usr/bin/env node\nconsole.log("fixture");\n');
+  await writeFile(path.join(prefix, 'pi.cmd'), '@node "%~dp0%\\node_modules\\@earendil-works\\pi-coding-agent\\custom\\native-entry.js" %*');
+  assert.deepEqual(await discover(prefix, 'win32', []), { launch: [process.execPath, await fsForDiscovery.realpath(cli)] });
+}));
+test('discovers a POSIX Pi symlink and follows package bin metadata', () => fixture(async root => {
+  const pkg = path.join(root, 'package'), bin = path.join(root, 'bin');
+  await mkdir(path.join(pkg, 'bin'), { recursive: true });
+  await writeFile(path.join(pkg, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-coding-agent', bin: { pi: './bin/pi' } }));
+  const cli = path.join(pkg, 'bin', 'pi');
+  await writeFile(cli, '#!/usr/bin/env node\nconsole.log("fixture");\n');
+  if (process.platform === 'win32') await symlink(path.join(pkg, 'bin'), bin, 'junction');
+  else { await mkdir(bin); await symlink(cli, path.join(bin, 'pi')); }
+  assert.deepEqual(await discover(bin, 'linux', []), { launch: [process.execPath, await fsForDiscovery.realpath(cli)] });
+}));
+test('a missing or non-Node Pi command does not prevent extension installation', () => fixture(async root => {
+  const missing = await discover(root, 'linux', []);
+  assert.equal(missing.launch, undefined);
+  assert.equal(typeof missing.launchError, 'string');
+  assert.ok(missing.launchError.length);
+  await writeFile(path.join(root, 'pi'), '#!/bin/sh\necho not-node\n');
+  const incompatible = await discover(root, 'linux', []);
+  assert.equal(incompatible.launch, undefined);
+  assert.equal(typeof incompatible.launchError, 'string');
+  assert.ok(incompatible.launchError.length);
+}));

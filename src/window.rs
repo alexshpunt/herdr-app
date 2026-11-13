@@ -2518,12 +2518,15 @@ impl AppWindow {
         vec!["powershell.exe".into(), "-NoLogo".into(), "-NoExit".into(), "-Command".into(), crate::programs::powershell_line(cmd)]
     }
 
-    /// An agent with its first message, in a shell that stays when the agent exits
-    /// (on another machine: that machine's shell).
+    /// A verified Pi runs directly: core keep=true restores a shell after exit.
+    /// Other agents retain the machine's existing shell-wrapper behavior.
     fn agent_argv(argv: Option<Vec<String>>, task: Option<&str>, on: Option<&str>) -> Option<Vec<String>> {
         let task = task.map(str::trim).filter(|t| !t.is_empty());
         argv.filter(|a| !a.is_empty()).map(|mut cmd| {
             cmd.extend(task.map(str::to_owned));
+            // The installer resolved this machine's actual Node/Pi entrypoint.
+            // Core keep=true already recovers a shell when Pi exits.
+            if crate::pi_install::is_direct_pi(&cmd) { return cmd; }
             if on.is_some() {
                 return crate::remote_shell::launch(cmd);
             }
@@ -4238,11 +4241,16 @@ impl AppWindow {
     fn launch_pi_request(&mut self, name: String, args: Value, machine: Option<String>, person: bool, reply: Option<std::sync::mpsc::Sender<Value>>, window: &mut Window, cx: &mut Context<Self>) {
         let core = self.core.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { crate::pi_install::ensure(&core, machine.as_deref()) }).await;
+            let result = cx.background_executor().spawn(async move { crate::pi_install::launch(&core, machine.as_deref()) }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let response = match result {
-                    Ok(()) => this.run_as(&name, args, person, window, cx),
-                    Err(error) => json!({"error":format!("Pi orchestration extension is not installed: {error}")}),
+                    Ok(mut runtime) => {
+                        let mut args = args;
+                        if let Some(argv) = Self::argv(&args) { runtime.extend(argv.into_iter().skip(1)); }
+                        args["argv"] = json!(runtime);
+                        this.run_as(&name, args, person, window, cx)
+                    }
+                    Err(error) => json!({"error":format!("Cannot start Pi with the Herdr integration: {error}")}),
                 };
                 if let Some(reply) = reply { let _ = reply.send(response); }
                 else if let Some(error) = response["error"].as_str() { this.command_error(&name, error, window, cx); }
@@ -5744,6 +5752,18 @@ mod tests {
         assert!(error.to_string().contains("second"));
     }
 
+    #[test]
+    fn native_pi_launch_keeps_its_task_as_one_exact_argument_without_a_shell() {
+        let runtime = serde_json::json!({"launch":["/herdr-window-test/node", "/herdr-window-test/pi.js"]});
+        crate::pi_install::remember_runtime(&runtime);
+        let argv = vec!["/herdr-window-test/node".to_owned(), "/herdr-window-test/pi.js".to_owned(), "--model".to_owned(), "fixture/success".to_owned()];
+        let task = "{\"name\":\"task $with `quotes`\"}\nsecond line";
+        let mut expected = argv.clone();
+        expected.push(task.to_owned());
+        for machine in [None, Some("remote")] {
+            assert_eq!(super::AppWindow::agent_argv(Some(argv.clone()), Some(task), machine), Some(expected.clone()));
+        }
+    }
     #[test]
     fn new_spaces_follow_the_persons_active_machine_but_keep_explicit_targets() {
         use serde_json::json;

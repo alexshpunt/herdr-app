@@ -71,7 +71,7 @@ pub fn summary(address: &str, record: &Value, placement: Option<&Value>) -> Valu
         "message": report(record)["msg"], "pid": foreground["pid"],
         "session": label.as_ref().filter(|_| current).map(|p| &p["session"]),
         "startup": startup.map(|p| &p["startup"]),
-        "error": startup.map(|p| &p["error"]), "exited": exited, "identityCurrent": current,
+        "startupError": startup.map(|p| &p["error"]), "exited": exited, "identityCurrent": current,
         "name": record["name"],
     });
     if let Some(placement) = placement {
@@ -287,6 +287,17 @@ mod tests {
     }
     #[test]
     fn summaries_never_expose_routing_labels() {
+        let mut failed = record();
+        failed["labels"]["herdr.pi"] = json!(
+            json!({"version":1,"pid":7,"session":"s1","startup":"failed","error":"model quota"})
+                .to_string()
+        );
+        let failure = summary("remote/t1", &failed, None);
+        assert_eq!(failure["startupError"], "model quota");
+        assert!(
+            failure.get("error").is_none(),
+            "top-level error is reserved for command failure"
+        );
         let result = summary(
             "remote/t1",
             &record(),
