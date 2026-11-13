@@ -4,7 +4,6 @@ import { Text } from '@earendil-works/pi-tui';
 import { stripVTControlCharacters } from 'node:util';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { importFresh } from './client.mjs';
 
@@ -23,7 +22,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       if (!client) return;
       const available = ctx.scopedModels.length ? ctx.scopedModels.map(item => item.model) : ctx.modelRegistry.getAvailable();
       const models = [...new Map(available.map(model => [`${model.provider}/${model.id}`, { id: `${model.provider}/${model.id}`, name: model.name }])).values()];
-      const hc = process.env.HC_BIN || (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, process.platform === 'win32' ? 'hc.exe' : 'hc')).find(file => existsSync(file)) || 'hc';
+      const hc = client.hc;
       const route = ipc ? { socket: ipc.socket, token: ipc.token, node: process.execPath, request: fileURLToPath(new URL('./request.mjs', import.meta.url)), hc } : {};
       const label = { version: 1, pid: process.pid, session: ctx.sessionManager.getSessionId(), models, startup, ...route, ...(error ? { error } : {}) };
       const serialized = JSON.stringify(label);

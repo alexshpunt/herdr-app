@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestViaMailbox } from '../client.mjs';
+import { requestViaMailbox, resolveHc } from '../client.mjs';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 const route = { version: 1, app: 'app-a', epoch: 'epoch-a', mailbox: 'herdr.orchestration.t1' };
 const identity = { pid: 12, session: 'session-a', terminal: 't1' };
 function fixture({ restart = false, accepted = false, conflicts = 0, unknown = false } = {}) {
@@ -54,4 +57,15 @@ test('accepted requests time out without replay and an App restart is unknown', 
 });
 test('a missing route refuses instead of contacting an unrelated App', async () => {
   await assert.rejects(requestViaMailbox(fixture(), undefined, identity, { ls: true }), /reload|route/i);
+});
+test('direct launches find hc without a login-shell PATH', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'herdr-hc-path-'));
+  try {
+    const directory = process.platform === 'win32' ? path.join(home, 'AppData', 'Local', 'Programs', 'herdr-core') : path.join(home, '.local', 'bin');
+    await mkdir(directory, { recursive: true });
+    const command = path.join(directory, process.platform === 'win32' ? 'hc.exe' : 'hc');
+    await writeFile(command, 'fixture');
+    assert.equal(resolveHc({ home, env: { PATH: '' } }), command);
+    assert.equal(resolveHc({ home, env: { PATH: '', HC_BIN: 'explicit-hc' } }), 'explicit-hc');
+  } finally { await rm(home, { recursive: true, force: true }); }
 });

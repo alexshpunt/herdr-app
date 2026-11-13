@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { access } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -32,10 +33,18 @@ export async function resolveApp() {
 
 // The unframed core API is JSON-RPC over one hc connection. Metadata calls do
 // not need framed terminal streams, a local App executable or an SSH tunnel.
+// Direct Pi launches do not load a shell profile; include hc's standard install paths.
+export function resolveHc({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+  if (env.HC_BIN) return env.HC_BIN;
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  const name = platform === 'win32' ? 'hc.exe' : 'hc';
+  const directories = [...(env.PATH || '').split(platform === 'win32' ? ';' : ':'), paths.join(home, '.local', 'bin'), ...(platform === 'win32' ? [paths.join(env.LOCALAPPDATA || paths.join(home, 'AppData', 'Local'), 'Programs', 'herdr-core')] : [])];
+  return directories.filter(Boolean).map(directory => paths.join(directory, name)).find(file => existsSync(file)) || 'hc';
+}
 export class CoreRpc {
   constructor() {
     this.next = 0; this.pending = new Map(); this.buffer = ''; this.closed = false;
-    this.child = spawn(process.env.HC_BIN || 'hc', ['connect'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    this.child = spawn(resolveHc(), ['connect'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const fail = () => {
       this.closed = true;
       for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(new Error('Core connection closed; the request effect is unknown. Inspect Herdr before retrying.')); }
@@ -114,7 +123,7 @@ export async function requestViaMailbox(core, route, identity, wire, { timeout =
   throw new Error('The App did not confirm this request before its deadline; its effect is unknown. Inspect Herdr before retrying.');
 }
 export class AppClient {
-  constructor(bindOrigin, pid, session) { this.bindOrigin = bindOrigin; this.pid = pid; this.session = session; }
+  constructor(bindOrigin, pid, session) { this.bindOrigin = bindOrigin; this.pid = pid; this.session = session; this.hc = resolveHc(); }
   async app(args, options = {}) {
     const owner = await this.owner();
     let route;
@@ -131,7 +140,7 @@ export class AppClient {
   }
   async owner() {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) throw new Error('Run this Pi in a Herdr App terminal; HC terminal identity is missing');
-    const terminal = await runJson(process.env.HC_BIN || 'hc', ['get', process.env.HC_TERMINAL_ID, '--json']);
+    const terminal = await runJson(this.hc, ['get', process.env.HC_TERMINAL_ID, '--json']);
     if (terminal.foreground?.pid !== this.pid) throw new Error('This Pi is not the Herdr terminal foreground process');
     return terminal;
   }
@@ -141,7 +150,7 @@ export class AppClient {
   }
   async publish(label) {
     await this.owner();
-    return runJson(process.env.HC_BIN || 'hc', ['label', process.env.HC_TERMINAL_ID, `herdr.pi=${JSON.stringify(label)}`, '--json']);
+    return runJson(this.hc, ['label', process.env.HC_TERMINAL_ID, `herdr.pi=${JSON.stringify(label)}`, '--json']);
   }
   async workflow() { return this.command('workflow.get'); }
   async list(args) {
