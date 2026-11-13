@@ -5755,9 +5755,17 @@ mod tests {
     /// shipped ones run programs on threads of their own, which the test
     /// executor refuses.
     fn open_window<'a>(cx: &'a mut gpui::TestAppContext, mod_name: &str, main_js: &str, layout: serde_json::Value) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
+        open_window_with_welcome(cx, mod_name, main_js, layout, false)
+    }
+
+    fn open_window_with_welcome<'a>(cx: &'a mut gpui::TestAppContext, mod_name: &str, main_js: &str, layout: serde_json::Value, first_run: bool) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
         use serde_json::json;
         let home = crate::mods::app_dir();
         crate::mods::write_workspace().unwrap();
+        if first_run {
+            // The shipped welcome starts background I/O, which the test executor rejects.
+            std::fs::write(crate::mods::frame_dir().join("welcome/main.js"), "").unwrap();
+        }
         let folder = home.join("mods").join(mod_name);
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("mod.json"), r#"{ "place": "none" }"#).unwrap();
@@ -5767,7 +5775,9 @@ mod tests {
         cx.update(crate::mods::init);
         let requests = crate::mods::install_policy();
         crate::mods::set_shared("layout".into(), json!("test"));
-        crate::mods::set_shared("frame.welcomed".into(), json!("test"));
+        if !first_run {
+            crate::mods::set_shared("frame.welcomed".into(), json!("test"));
+        }
         let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::new(crate::hc::offline(), requests, window, cx));
         assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
         (view, cx)
@@ -5911,6 +5921,34 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn dismissing_welcome_records_a_skipped_outcome() {
+        in_own_process("welcome_dismissal");
+    }
+
+    #[gpui::test]
+    fn welcome_dismissal(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("welcome_dismissal") {
+            return;
+        }
+        let (view, cx) = open_window_with_welcome(cx, "unused", "", json!({
+            "id": "root", "type": "block", "content": { "tab": "active" }
+        }), true);
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            assert!(crate::mods::shared("frame.welcomed").is_none());
+            this.open_overlay("other".into(), json!({"mod": "unused", "kind": "window"}), window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
+            assert!(crate::mods::shared("frame.welcomed").is_none());
+            this.open_welcome(window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
+            assert_eq!(crate::mods::shared("frame.welcomed"), Some(json!("skipped")));
+            crate::mods::set_shared("frame.welcomed".into(), json!("finished"));
+            this.open_welcome(window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
+            assert_eq!(crate::mods::shared("frame.welcomed"), Some(json!("finished")));
+        }));
+    }
     #[test]
     fn a_second_rename_press_closes_the_prompt() {
         in_own_process("rename_prompt_opens_once");
