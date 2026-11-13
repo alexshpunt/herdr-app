@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use gpui_util::ResultExt;
 use windows::{
+    core::{Interface, HSTRING},
     Win32::{
         Foundation::HWND,
         Graphics::{
@@ -16,7 +17,6 @@ use windows::{
             Dxgi::{Common::*, *},
         },
     },
-    core::{HSTRING, Interface},
 };
 
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
@@ -1794,11 +1794,11 @@ pub(crate) mod shader_resources {
 
     #[cfg(debug_assertions)]
     use windows::{
+        core::{HSTRING, PCSTR},
         Win32::Graphics::Direct3D::{
-            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompileFromFile},
+            Fxc::{D3DCompile, D3DCompileFromFile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION},
             ID3DBlob,
         },
-        core::{HSTRING, PCSTR},
     };
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1901,6 +1901,19 @@ pub(crate) mod shader_resources {
 
     #[cfg(debug_assertions)]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
+        build_shader_blob_from(
+            entry,
+            target,
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        )
+    }
+
+    #[cfg(debug_assertions)]
+    fn build_shader_blob_from(
+        entry: ShaderModule,
+        target: ShaderTarget,
+        source_root: &std::path::Path,
+    ) -> Result<ID3DBlob> {
         unsafe {
             use windows::Win32::Graphics::{
                 Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
@@ -1927,29 +1940,57 @@ pub(crate) mod shader_resources {
 
             let mut compile_blob = None;
             let mut error_blob = None;
-            let shader_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(&format!("src/{}", shader_name))
-                .canonicalize()?;
+            let shader_path = source_root.join("src").join(shader_name).canonicalize();
 
             let entry_point = PCSTR::from_raw(entry.as_ptr());
             let target_cstr = PCSTR::from_raw(target.as_ptr());
+            let flags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 
-            // really dirty trick because winapi bindings are unhappy otherwise
-            let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
-                D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
-            );
-
-            let ret = D3DCompileFromFile(
-                &HSTRING::from(shader_path.to_str().unwrap()),
-                None,
-                include_handler,
-                entry_point,
-                target_cstr,
-                D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
-                0,
-                &mut compile_blob,
-                Some(&mut error_blob),
-            );
+            let ret = match shader_path {
+                Ok(shader_path) => {
+                    // Use the live source when it is available for shader development.
+                    let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
+                        D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
+                    );
+                    D3DCompileFromFile(
+                        &HSTRING::from(shader_path.to_str().unwrap()),
+                        None,
+                        include_handler,
+                        entry_point,
+                        target_cstr,
+                        flags,
+                        0,
+                        &mut compile_blob,
+                        Some(&mut error_blob),
+                    )
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // A copied debug executable must not depend on the build machine's paths.
+                    let source = if shader_name == "color_text_raster.hlsl" {
+                        include_str!("color_text_raster.hlsl")
+                    } else {
+                        include_str!("shaders.hlsl")
+                    };
+                    let source = source.replace(
+                        "#include \"alpha_correction.hlsl\"",
+                        include_str!("alpha_correction.hlsl"),
+                    );
+                    D3DCompile(
+                        source.as_ptr().cast(),
+                        source.len(),
+                        PCSTR::null(),
+                        None,
+                        None::<&ID3DInclude>,
+                        entry_point,
+                        target_cstr,
+                        flags,
+                        0,
+                        &mut compile_blob,
+                        Some(&mut error_blob),
+                    )
+                }
+                Err(error) => return Err(error.into()),
+            };
             if ret.is_err() {
                 let Some(error_blob) = error_blob else {
                     return Err(anyhow::anyhow!("{ret:?}"));
@@ -1965,6 +2006,48 @@ pub(crate) mod shader_resources {
         }
     }
 
+    #[cfg(all(test, debug_assertions))]
+    mod tests {
+        use super::*;
+
+        #[::core::prelude::v1::test]
+        fn debug_shader_uses_the_live_source_when_present() {
+            let root =
+                std::env::temp_dir().join(format!("herdr-invalid-shader-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let src = root.join("src");
+            std::fs::create_dir(&src).unwrap();
+            std::fs::write(src.join("shaders.hlsl"), "not valid HLSL").unwrap();
+            let result = build_shader_blob_from(ShaderModule::Quad, ShaderTarget::Vertex, &root);
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(result.is_err());
+        }
+        #[::core::prelude::v1::test]
+        fn debug_shaders_compile_without_the_build_machine_sources() {
+            let missing = std::env::temp_dir().join(format!(
+                "herdr-missing-shader-source-{}",
+                std::process::id()
+            ));
+            assert!(!missing.exists());
+            for module in [
+                ShaderModule::Quad,
+                ShaderModule::PlainQuad,
+                ShaderModule::Shadow,
+                ShaderModule::Underline,
+                ShaderModule::PathRasterization,
+                ShaderModule::PathSprite,
+                ShaderModule::MonochromeSprite,
+                ShaderModule::SubpixelSprite,
+                ShaderModule::PolychromeSprite,
+                ShaderModule::EmojiRasterization,
+            ] {
+                for target in [ShaderTarget::Vertex, ShaderTarget::Fragment] {
+                    let blob = build_shader_blob_from(module, target, &missing).unwrap();
+                    assert!(unsafe { blob.GetBufferSize() } > 0);
+                }
+            }
+        }
+    }
     #[cfg(not(debug_assertions))]
     include!(concat!(env!("OUT_DIR"), "/shaders_bytes.rs"));
 
@@ -1994,7 +2077,7 @@ mod nvidia {
     };
 
     use anyhow::Result;
-    use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
+    use windows::{core::s, Win32::System::LibraryLoader::GetProcAddress};
 
     use crate::with_dll_library;
 
@@ -2061,7 +2144,7 @@ mod amd {
     use std::os::raw::{c_char, c_int, c_void};
 
     use anyhow::Result;
-    use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
+    use windows::{core::s, Win32::System::LibraryLoader::GetProcAddress};
 
     use crate::with_dll_library;
 
@@ -2154,8 +2237,8 @@ mod amd {
 
 mod dxgi {
     use windows::{
-        Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIDevice},
         core::Interface,
+        Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIDevice},
     };
 
     pub(super) fn get_driver_version(adapter: &IDXGIAdapter1) -> anyhow::Result<String> {
