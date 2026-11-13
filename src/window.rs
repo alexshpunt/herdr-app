@@ -2539,7 +2539,7 @@ impl AppWindow {
         let here = || self.model.focused_pane().and_then(|p| self.model.address_of(&p))
             .filter(|a| a.split_once('/').map(|(m, _)| m) == on)
             .and_then(|a| self.cwds.get(&a).cloned());
-        let folder = new_space_folder(folder, here, on.is_some(), home);
+        let folder = new_terminal_folder(folder, here, on.is_some(), home);
         let (space, ctx, pane) = (self.model.fresh_id_on("sp", on), self.model.fresh_id_on("tb", on), self.model.fresh_id_on("p", on));
         let size = self.initial_size(&Tab::new(&ctx, "", &pane, "").root, &pane, window);
         let (addr, folder) = self.spawn(Self::agent_argv(argv.clone(), task, on).or(argv), folder, follow, &space, &ctx, on, size, window)?;
@@ -2558,8 +2558,8 @@ impl AppWindow {
             return Err(format!("no space {space:?}"));
         }
         let follow = folder.is_none();
-        let folder = folder.unwrap_or_else(|| self.folder_for(&space));
         let on = self.machine_of(&space);
+        let folder = new_terminal_folder(folder, || Some(self.folder_for(&space)), on.is_some(), home);
         let (ctx, pane) = (self.model.fresh_id_on("tb", on.as_deref()), self.model.fresh_id_on("p", on.as_deref()));
         let size = self.initial_size(&Tab::new(&ctx, "", &pane, "").root, &pane, window);
         let (addr, _) = self.spawn(Self::agent_argv(argv.clone(), task, on.as_deref()).or(argv), folder, follow, &space, &ctx, on.as_deref(), size, window)?;
@@ -2591,9 +2591,9 @@ impl AppWindow {
         let (space, ctx, fallback) = (p.id.clone(), c.id.clone(), p.folder.clone());
         let target_addr = self.model.address_of(&target);
         let follow = folder.is_none();
-        let cwd = folder.unwrap_or_else(|| target_addr.as_ref().and_then(|a| self.cwds.get(a).cloned()).unwrap_or(fallback));
         // A split stays on the machine of the pane it splits (else its space's).
-        let on = target_addr.and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| self.machine_of(&space));
+        let on = target_addr.as_ref().and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| self.machine_of(&space));
+        let cwd = new_terminal_folder(folder, || Some(target_addr.as_ref().and_then(|a| self.cwds.get(a).cloned()).unwrap_or(fallback)), on.is_some(), home);
         let new = self.model.fresh_id_on("p", on.as_deref());
         let mut root = self.model.tab(&ctx).expect("target tab").root.clone();
         root.split(&target, axis, Node::block(new.clone(), Content::Terminal { terminal: String::new() }), "initial-size".into());
@@ -3201,7 +3201,7 @@ impl AppWindow {
                 };
                 let r = match Self::owned(a, "mod") {
                     Some(name) => self.split_mod(Self::owned(a, "pane"), axis, name, a.get("props").cloned().unwrap_or(Value::Null)),
-                    None => self.split(Self::owned(a, "pane"), axis, Self::argv(a), None, window),
+                    None => self.split(Self::owned(a, "pane"), axis, Self::argv(a), Self::owned(a, "folder"), window),
                 };
                 self.answer(r);
             }
@@ -3944,6 +3944,12 @@ impl AppWindow {
 
     /// Closes an overlay; a kept window stays closed on the next start too.
     fn close_overlay(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if mods::shared("frame.welcomed").is_none()
+            && self.overlays.iter().find(|o| o.id == id)
+                .is_some_and(|o| self.copies.get(&o.slot).is_some_and(|c| c.inst.name == "frame-welcome"))
+        {
+            mods::set_shared("frame.welcomed".into(), json!("skipped"));
+        }
         if let Some(k) = self.overlays.iter().find(|o| o.id == id).and_then(|o| o.key.clone()) {
             movable::forget(&self.layout_name, &k);
         }
@@ -5028,10 +5034,10 @@ fn new_space_machine(args: &Value, person: bool, model: &Model) -> Option<String
         .filter(|m| !m.is_empty()).map(str::to_owned)
 }
 
-/// The folder a new space starts in: the one given, else the focused terminal's.
+/// The folder a new terminal starts in: the one given, else the focused terminal's.
 /// Without either (or when the given one is empty) it is the home of its machine:
 /// this computer's, or on another machine the empty folder its core reads as home.
-fn new_space_folder(given: Option<String>, focused: impl FnOnce() -> Option<String>, other_machine: bool, home: impl FnOnce() -> String) -> String {
+fn new_terminal_folder(given: Option<String>, focused: impl FnOnce() -> Option<String>, other_machine: bool, home: impl FnOnce() -> String) -> String {
     let folder = given.or_else(focused).unwrap_or_default();
     if folder.is_empty() && !other_machine { home() } else { folder }
 }
@@ -5522,7 +5528,7 @@ mod tests {
     fn a_new_spaces_empty_folder_is_the_home_of_its_machine() {
         let home = || "/home/me".to_string();
         let new = |given: Option<&str>, focused: Option<&str>, other_machine: bool| {
-            super::new_space_folder(given.map(str::to_owned), || focused.map(str::to_owned), other_machine, home)
+            super::new_terminal_folder(given.map(str::to_owned), || focused.map(str::to_owned), other_machine, home)
         };
         // This computer: an empty folder is its home, like an omitted one with no focused terminal.
         assert_eq!(new(Some(""), None, false), "/home/me");
@@ -5786,9 +5792,17 @@ mod tests {
     /// shipped ones run programs on threads of their own, which the test
     /// executor refuses.
     fn open_window<'a>(cx: &'a mut gpui::TestAppContext, mod_name: &str, main_js: &str, layout: serde_json::Value) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
+        open_window_with_welcome(cx, mod_name, main_js, layout, false)
+    }
+
+    fn open_window_with_welcome<'a>(cx: &'a mut gpui::TestAppContext, mod_name: &str, main_js: &str, layout: serde_json::Value, first_run: bool) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
         use serde_json::json;
         let home = crate::mods::app_dir();
         crate::mods::write_workspace().unwrap();
+        if first_run {
+            // The shipped welcome starts background I/O, which the test executor rejects.
+            std::fs::write(crate::mods::frame_dir().join("welcome/main.js"), "").unwrap();
+        }
         let folder = home.join("mods").join(mod_name);
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("mod.json"), r#"{ "place": "none" }"#).unwrap();
@@ -5798,7 +5812,9 @@ mod tests {
         cx.update(crate::mods::init);
         let requests = crate::mods::install_policy();
         crate::mods::set_shared("layout".into(), json!("test"));
-        crate::mods::set_shared("frame.welcomed".into(), json!("test"));
+        if !first_run {
+            crate::mods::set_shared("frame.welcomed".into(), json!("test"));
+        }
         let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::new(crate::hc::offline(), requests, window, cx));
         assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
         (view, cx)
@@ -5942,6 +5958,34 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn dismissing_welcome_records_a_skipped_outcome() {
+        in_own_process("welcome_dismissal");
+    }
+
+    #[gpui::test]
+    fn welcome_dismissal(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("welcome_dismissal") {
+            return;
+        }
+        let (view, cx) = open_window_with_welcome(cx, "unused", "", json!({
+            "id": "root", "type": "block", "content": { "tab": "active" }
+        }), true);
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            assert!(crate::mods::shared("frame.welcomed").is_none());
+            this.open_overlay("other".into(), json!({"mod": "unused", "kind": "window"}), window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
+            assert!(crate::mods::shared("frame.welcomed").is_none());
+            this.open_welcome(window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
+            assert_eq!(crate::mods::shared("frame.welcomed"), Some(json!("skipped")));
+            crate::mods::set_shared("frame.welcomed".into(), json!("finished"));
+            this.open_welcome(window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
+            assert_eq!(crate::mods::shared("frame.welcomed"), Some(json!("finished")));
+        }));
+    }
     #[test]
     fn a_second_rename_press_closes_the_prompt() {
         in_own_process("rename_prompt_opens_once");
