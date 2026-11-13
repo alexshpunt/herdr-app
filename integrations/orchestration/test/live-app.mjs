@@ -81,9 +81,8 @@ await step('repeated creation reuses its receipt', async () => {
 await step('native follow-up reaches the selected Pi', async () => {
   const sent = await invoke('herdr_agent_send', { ...target(success), message: 'Follow-up with "quotes"\nand a newline' });
   assert.equal(sent.outcome, 'submitted');
+  await waitFor(async () => (await trace()).some(entry => entry.pid === success.pid && JSON.stringify(entry.context.messages).includes('Follow-up with')));
   await waitFor(() => inspect(success.terminal).status === 'done');
-  const entries = (await trace()).filter(entry => entry.pid === success.pid);
-  assert.ok(entries.some(entry => JSON.stringify(entry.context.messages).includes('Follow-up with')));
   return { terminal: sent.terminal, outcome: sent.outcome };
 });
 await step('stale PID and self-removal are refused', async () => {
@@ -132,7 +131,7 @@ await step('stop interrupts Pi without closing its tab', async () => {
 await step('remove ends only the selected dedicated agent', async () => {
   const removed = await invoke('herdr_agent_remove', { terminal: success.terminal, pid: success.pid, session: success.session });
   assert.equal(removed.outcome, 'removed');
-  assert.ok(!app('agent.list').agents.some(agent => agent.terminal === success.terminal));
+  await waitFor(() => !app('agent.list').agents.some(agent => agent.terminal === success.terminal));
   assert.equal(inspect(controller.terminal).pid, controller.pid);
   assert.equal(inspect(fallback.terminal).startup, 'started');
   return { removed: success.terminal, otherAgentsPreserved: true };
