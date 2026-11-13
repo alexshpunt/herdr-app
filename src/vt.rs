@@ -2543,6 +2543,16 @@ mod tests {
     }
 
     #[test]
+    fn encoded_unc_report_survives_core_replay() {
+        let mut vt = Vt::new(20, 3);
+        vt.write(b"\x1b]7;file://ZinLaptop/%5C%5Cserver%5Cshare%5Cx\x00\x1b\\");
+        let replayed = vt.take_pwd().unwrap();
+        let report = crate::folder_report::parse(&replayed).unwrap();
+        assert_eq!(report.host.as_deref(), Some("ZinLaptop"));
+        assert_eq!(report.path, r"\\server\share\x");
+    }
+
+    #[test]
     fn absolute_scroll_refreshes_search_highlights_across_pages() {
         let mut vt = Vt::new(80, 24);
         vt.write(b"ONLY TOP NEEDLE\r\n");

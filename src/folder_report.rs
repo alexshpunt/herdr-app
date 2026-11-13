@@ -32,7 +32,12 @@ pub fn parse(raw: &str) -> Option<Report> {
             let (host, path) = rest.split_at(rest.find('/')?);
             // A literal ? or # starts a query or fragment; in a path it is escaped.
             let path = path.split(['?', '#']).next().unwrap_or_default();
-            (Some(decode(host)?).filter(|h| !h.is_empty()), decode(path)?)
+            // Teleport encodes a UNC path under the reporting machine's host,
+            // not the share server, so an SSH report remains distinguishable.
+            let unc = path.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("/%5c%5c"));
+            let path = decode(path)?;
+            let path = if unc { path.strip_prefix('/').unwrap_or(&path).to_owned() } else { path };
+            (Some(decode(host)?).filter(|h| !h.is_empty()), path)
         }
         None => (None, raw.to_owned()),
     };
@@ -170,6 +175,18 @@ mod tests {
             parse(r"\\server\share\x"),
             report(None, r"\\server\share\x")
         );
+    }
+
+    #[test]
+    fn reads_unc_report_with_reporting_host() {
+        let raw = "file://ZinLaptop/%5C%5Cserver%5Cshare%5C%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%231%25";
+        let parsed = parse(raw).unwrap();
+        assert_eq!(parsed, report(Some("ZinLaptop"), r"\\server\share\проект #1%").unwrap());
+        assert_eq!(on_machine(parsed.host.as_deref(), Some("ZinLaptop")), Some(true));
+        assert_eq!(on_machine(parsed.host.as_deref(), Some("other")), Some(false));
+        assert_eq!(parse("file://ZinLaptop/%5C%5Cserver%5Cshare"), report(Some("ZinLaptop"), r"\\server\share"));
+        assert_eq!(parse("file://ZinLaptop/%5c%5cserver%5cshare"), report(Some("ZinLaptop"), r"\\server\share"));
+        assert_eq!(parse("file://server/share/x"), report(Some("server"), "/share/x"));
     }
 
     #[test]

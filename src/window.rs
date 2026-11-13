@@ -2422,6 +2422,7 @@ impl AppWindow {
             // stream that just broke (the core died) says neither.
             let closed = matches!(why.as_str(), "exited" | "killed" | "finished");
             if closed && self.model.address_of(block).as_deref() == Some(t.address.as_str()) {
+                self.reported.remove(&t.address);
                 self.model.remove_pane(block);
                 return self.sync(window, cx);
             }
@@ -2633,6 +2634,7 @@ impl AppWindow {
                 let mut changed = false;
                 for (pane, addr) in closed {
                     if this.model.address_of(&pane).as_deref() == Some(&addr) {
+                        this.reported.remove(&addr);
                         this.notify_launch_failure(&addr, window, cx);
                         this.model.remove_pane(&pane);
                         changed = true;
@@ -4840,15 +4842,13 @@ struct Reported {
 }
 
 impl Reported {
-    /// Whether the program in front is still the one that reported. A terminal
-    /// that isn't listed yet (`rec` None) keeps its report for its first listing.
+    /// A missing listing or PID does not establish that the program changed.
     fn still_in_front(&mut self, rec: Option<&Value>) -> bool {
-        let Some(rec) = rec else { return self.pid.is_none() };
-        let front = front_pid(rec);
+        let Some(front) = rec.and_then(front_pid) else { return true };
         if self.pid.is_none() {
-            self.pid = front;
+            self.pid = Some(front);
         }
-        self.pid == front
+        self.pid == Some(front)
     }
 }
 
@@ -5384,8 +5384,11 @@ mod tests {
         assert!(shell.still_in_front(Some(&json!({ "pid": 10 }))));
         // Another program came to the front: the report is over.
         assert!(!shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 11 } }))));
-        // The terminal is gone.
-        assert!(!shell.still_in_front(None));
+        // A missing or incomplete listing does not prove the terminal ended.
+        assert!(shell.still_in_front(None));
+        assert!(shell.still_in_front(Some(&json!({ "foreground": { "pid": null } }))));
+        assert!(shell.still_in_front(Some(&json!({ "pid": 10 }))));
+        assert!(!shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 11 } }))));
         // Reported before the terminal was listed: it waits, and its first listing names the program.
         let mut early = super::Reported { report: report(), pid: None };
         assert!(early.still_in_front(None));
