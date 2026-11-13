@@ -2260,8 +2260,7 @@ impl AppWindow {
     fn folder_reported(&mut self, addr: &str, report: Option<crate::folder_report::Report>, cx: &mut Context<Self>) {
         let news = match report {
             Some(report) => {
-                let pid = self.live.get(addr).and_then(front_pid);
-                let report = Reported { report, pid };
+                let report = Reported::new(report, self.live.get(addr));
                 // Shells repeat it at every prompt.
                 let news = self.reported.get(addr) != Some(&report);
                 self.reported.insert(addr.to_owned(), report);
@@ -2296,6 +2295,11 @@ impl AppWindow {
         let mut held = HashMap::new();
         let mut ask = HashSet::new();
         for (addr, r) in &self.reported {
+            // A PID-bearing report can arrive before the listing catches up.
+            // Keep it pending, but never show it until its reporter is in front.
+            if !r.confirmed {
+                continue;
+            }
             let machine = addr.split_once('/').map(|(m, _)| m.to_owned());
             // A program in a local terminal that runs another system, such as
             // WSL started from PowerShell: its path means nothing here.
@@ -4837,14 +4841,27 @@ struct FolderCheck {
 #[derive(Debug, PartialEq)]
 struct Reported {
     report: crate::folder_report::Report,
-    /// None: the terminal wasn't listed yet; its first listing names the program.
+    /// For an identified reporter, its PID; otherwise the first known foreground.
     pid: Option<u64>,
+    /// An identified reporter is shown only after the core has seen it in front.
+    confirmed: bool,
 }
 
 impl Reported {
+    fn new(report: crate::folder_report::Report, rec: Option<&Value>) -> Self {
+        let front = rec.and_then(front_pid);
+        let pid = report.pid.or(front);
+        let confirmed = report.pid.is_none() || report.pid == front;
+        Self { report, pid, confirmed }
+    }
+
     /// A missing listing or PID does not establish that the program changed.
     fn still_in_front(&mut self, rec: Option<&Value>) -> bool {
         let Some(front) = rec.and_then(front_pid) else { return true };
+        if !self.confirmed {
+            self.confirmed = self.pid == Some(front);
+            return true;
+        }
         if self.pid.is_none() {
             self.pid = Some(front);
         }
@@ -5378,7 +5395,7 @@ mod tests {
     fn a_reported_folder_holds_while_its_program_stays_in_front() {
         use serde_json::json;
         let report = || crate::folder_report::parse("file:///src/feature").unwrap();
-        let mut shell = super::Reported { report: report(), pid: Some(10) };
+        let mut shell = super::Reported { report: report(), pid: Some(10), confirmed: true };
         // Windows: the core names the PowerShell that Pi runs in, wherever Pi moves.
         assert!(shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 10, "cwd": "C:\\old" } }))));
         assert!(shell.still_in_front(Some(&json!({ "pid": 10 }))));
@@ -5390,12 +5407,29 @@ mod tests {
         assert!(shell.still_in_front(Some(&json!({ "pid": 10 }))));
         assert!(!shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 11 } }))));
         // Reported before the terminal was listed: it waits, and its first listing names the program.
-        let mut early = super::Reported { report: report(), pid: None };
+        let mut early = super::Reported { report: report(), pid: None, confirmed: true };
         assert!(early.still_in_front(None));
         assert!(early.still_in_front(Some(&json!({ "pid": 20 }))));
         assert!(!early.still_in_front(Some(&json!({ "pid": 20, "foreground": { "pid": 21 } }))));
     }
 
+    #[test]
+    fn reporter_pid_waits_for_the_right_process_and_rejects_stale_replay() {
+        use serde_json::json;
+        let report = || crate::folder_report::parse("file://box/src?herdr-pid=21").unwrap();
+        let shell = json!({ "pid": 20, "foreground": { "pid": 20 } });
+        let pi = json!({ "pid": 20, "foreground": { "pid": 21 } });
+        let mut early = super::Reported::new(report(), Some(&shell));
+        assert!(early.still_in_front(Some(&shell)));
+        assert!(!early.confirmed);
+        assert!(early.still_in_front(Some(&pi)));
+        assert!(early.confirmed);
+        assert!(early.still_in_front(None));
+        assert!(!early.still_in_front(Some(&shell)));
+        let mut replay = super::Reported::new(report(), Some(&shell));
+        assert!(replay.still_in_front(Some(&shell)));
+        assert!(!replay.confirmed, "a stale replay must not be shown as the shell's report");
+    }
     #[test]
     fn going_back_into_a_split_column_takes_its_top_pane_whatever_the_fractions() {
         let r = |x: f32, y: f32, w: f32, h: f32| gpui::Bounds::new(point(px(x), px(y)), size(px(w), px(h)));

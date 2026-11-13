@@ -10,6 +10,8 @@ pub struct Report {
     pub host: Option<String>,
     /// An absolute path in its machine's own form (`C:\src` on Windows).
     pub path: String,
+    /// The reporting process, when the program includes it in the URI.
+    pub pid: Option<u64>,
 }
 
 /// Reads what the terminal stored for a report (raw, as the program sent it).
@@ -21,6 +23,14 @@ pub fn parse(raw: &str) -> Option<Report> {
     if raw.is_empty() {
         return None;
     }
+    let pid = raw.split_once("://").and_then(|(_, uri)| {
+        let uri = uri.split('#').next()?;
+        let (_, query) = uri.split_once('?')?;
+        query.split('&').find_map(|part| {
+            let value = part.strip_prefix("herdr-pid=")?;
+            value.parse::<u64>().ok().filter(|pid| *pid != 0)
+        })
+    });
     let (host, path) = match raw.split_once("://") {
         Some((scheme, rest)) => {
             // kitty's shell integration sends the same URI under its own scheme.
@@ -44,6 +54,7 @@ pub fn parse(raw: &str) -> Option<Report> {
     Some(Report {
         host,
         path: native(&path)?,
+        pid,
     })
 }
 
@@ -130,6 +141,7 @@ mod tests {
         Some(Report {
             host: host.map(str::to_owned),
             path: path.to_owned(),
+            pid: None,
         })
     }
 
@@ -177,6 +189,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reads_reporter_pid_without_confusing_uri_fragments() {
+        assert_eq!(parse("file://box/src?herdr-pid=42").unwrap().pid, Some(42));
+        assert_eq!(parse("file://box/src?other=2&herdr-pid=42#fragment").unwrap().pid, Some(42));
+        assert_eq!(parse("file://box/src#herdr-pid=42").unwrap().pid, None);
+        assert_eq!(parse("file://box/src?herdr-pid=bad").unwrap().pid, None);
+        assert_eq!(parse("file://box/src?herdr-pid=0").unwrap().pid, None);
+    }
     #[test]
     fn reads_unc_report_with_reporting_host() {
         let raw = "file://ZinLaptop/%5C%5Cserver%5Cshare%5C%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%231%25";
