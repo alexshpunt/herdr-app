@@ -486,6 +486,20 @@ impl Model {
         self.select_tab(&ctx)
     }
 
+    /// The agent the selected tab was opened for, while it is an agent.
+    pub fn shown_tab_origin(&self) -> Option<String> {
+        let space = self.active_space()?;
+        tab_origin(space, space.active_tab()?).filter(|a| self.status(a).is_some())
+    }
+
+    /// The agent a focused mod pane (a review, a browser, an editor) belongs to:
+    /// its tab's origin, or none. `None` outside a mod pane, where the focused
+    /// pane's own terminal decides.
+    pub fn mod_pane_agent(&self) -> Option<Option<String>> {
+        let pane = self.focused_pane()?;
+        self.address_of(&pane).is_none().then(|| self.shown_tab_origin())
+    }
+
     /// The address shown in a pane block.
     pub fn address_of(&self, pane_id: &str) -> Option<String> {
         self.tabs().find_map(|c| c.root.find(pane_id)).and_then(|n| n.terminal()).map(str::to_owned)
@@ -743,6 +757,29 @@ mod tests {
         let json = space_json(&m, m.space("vps/s2").unwrap(), 1, None, "/home/can");
         assert_eq!(json["tabs"][1]["origin"], "vps/t1");
         assert_eq!(json["tabs"][0]["origin"], Value::Null);
+    }
+
+    #[test]
+    fn a_focused_mod_pane_belongs_to_its_origin_or_to_no_agent() {
+        let mut m = Model::default();
+        m.add_space("s1", "", "", Tab::new("agent-a", "", "a", "t1"));
+        m.add_tab("s1", Tab::new("agent-b", "", "b", "t2"));
+        m.add_tab("s1", review_tab("review", "t1", "r1"));
+        m.add_tab("s1", Tab::with_pane("notes", "Notes", mod_pane("n", "markdown", json!({ "file": "/r/a.md" }))));
+        m.add_tab("s1", Tab::with_pane("gone", "Gone", mod_pane("g", "markdown", json!({ "origin": "t9" }))));
+        for a in ["t1", "t2"] { m.set_word(a, Some("idle".into()), None, true); }
+
+        // A terminal pane decides by itself.
+        m.select_tab("agent-b");
+        assert_eq!(m.mod_pane_agent(), None);
+        // A review is its origin's, not the first agent's.
+        m.select_tab("review");
+        assert_eq!(m.mod_pane_agent(), Some(Some("t1".to_owned())));
+        // No origin, or one that is no agent: no agent.
+        m.select_tab("notes");
+        assert_eq!(m.mod_pane_agent(), Some(None));
+        m.select_tab("gone");
+        assert_eq!(m.mod_pane_agent(), Some(None));
     }
 
     #[test]
