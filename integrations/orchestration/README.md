@@ -37,3 +37,15 @@ npm test --prefix integrations/orchestration
 The suite covers request receipts, fallback boundaries and identity guards, plus real-Pi deferred registration, native tool error rendering and module refresh on reload. Run integration checks on the build worker. Verify the installed App and reloaded Pi when changing the runtime contract.
 
 For installed-App verification without paid inference, copy `test/fixtures/live-provider.ts` into an isolated test project's `.pi/extensions/`. It registers `herdr-fixture/{controller,success,primary-error,fallback-error,late-error,slow}`. Use a separate `HERDR_APP_HOME`, `HC_SESSION` and `PI_CODING_AGENT_DIR`. The controller's first user message is JSON `{ "name": "herdr_agent_list", "arguments": {} }`; it calls that actual deferred tool and prints its result. Never install the fixture in personal extension settings. Remove the test App, its own core holder and project after verification.
+
+### Workflow UI regression check
+
+In the installed App, open Workflow for a machine with a live Pi catalog:
+
+1. Open a primary model picker. Confirm model names and IDs are visible, then scroll to the last choice.
+2. Search for a model by name or ID. Confirm filtering, an empty result, and clearing the search all update the visible list.
+3. Select a different model. Close and reopen Workflow, then restart only the App and confirm the choice persists. Restore the original profile afterward.
+4. Open a fallback picker. Confirm the no-fallback choice and model choices are visible.
+5. Reduce the window height until the profiles no longer fit. Scroll the drawer to the final field; its header and save status must remain visible. Scroll an open picker independently of the drawer.
+
+These checks exercise native layout and input; catalog and model-filter tests do not replace them.

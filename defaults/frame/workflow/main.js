@@ -1,5 +1,5 @@
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar } from "gpui-base";
 import { workflow, machines, theme, props, closeOverlay } from "herdr";
 import { modelChoices, currentModelLabel } from "./models.js";
 
@@ -124,13 +124,15 @@ export default class Workflow extends View {
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .child(div().px(10).py(7).border_b(1).border_color(t.border)
         .child(Input.new(this.input).h(28).text_size(12.5).text_color(t.foreground)))
-      .child(div().id("wf-model-list").max_h(220).min_h(0).p(4).overflow_y_scrollbar()
-        .when(choices.length === 0, el => el.child(div().p(10).text_size(12).text_color(t.dim).child("No matching models")))
-        .children(choices.map((model, index) => v_flex().id(`wf-model-${index}`).px(8).py(7).gap(2).rounded(5).min_w(0)
-          .when(index === this.at, el => el.bg(t.hover))
-          .cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.choose(model, cx))
-          .child(div().truncate().text_size(12.5).text_color(t.foreground).child(model.name))
-          .when(Boolean(model.id), el => el.child(div().truncate().text_size(10.5).text_color(t.dim).tooltip(model.id).child(model.id))))));
+      .child(div().h(Math.min(220, Math.max(44, choices.length * 50 + 8))).flex_none().relative()
+        .child(v_flex().id("wf-model-list").absolute().inset_0().overflow_y_scroll().p(4)
+          .when(choices.length === 0, el => el.child(div().p(10).text_size(12).text_color(t.dim).child("No matching models")))
+          .children(choices.map((model, index) => v_flex().id(`wf-model-${index}`).h(50).flex_none().px(8).py(7).gap(2).rounded(5).min_w(0)
+            .when(index === this.at, el => el.bg(t.hover))
+            .cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.choose(model, cx))
+            .child(div().truncate().text_size(12.5).text_color(t.foreground).child(model.name))
+            .when(Boolean(model.id), el => el.child(div().truncate().text_size(10.5).text_color(t.dim).tooltip(model.id).child(model.id))))))
+        .child(Scrollbar.vertical("wf-model-list").absolute().inset_0()));
   }
 
   machineField(t) {
@@ -175,21 +177,23 @@ export default class Workflow extends View {
         .child(div().id("wf-close").size(28).rounded(6).flex().items_center().justify_center().text_color(t.muted)
           .cursor_pointer().hover(s => s.bg(t.hover)).tooltip("Close · Esc").on_click(() => this.close())
           .child(svg(icon("x")).size(16))))
-      .child(div().id("workflow-content").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(v_flex().w_full().px(22).py(20).gap(22)
-          .child(v_flex().gap(10).child(this.machineField(t))
-            .child(div().text_size(11.5).line_height("17px").text_color(t.dim).child("Choices come from a running Pi on this machine. Profiles are shared across machines.")))
-          .when(Boolean(this.catalog?.error), el => el.child(div().p(11).rounded(8).bg(t.raised).text_size(12).line_height("17px").text_color(t.muted).child(this.catalog.error)))
-          .when(Boolean(installationError), el => el.child(div().text_size(12).text_color(t.muted).child(`Extension installation failed: ${installationError}`)))
-          .when(this.loading, el => el.child(div().text_size(13).text_color(t.dim).child("Loading workflow profiles…")))
-          .children((this.config?.profiles ?? []).map(profile => v_flex().w_full().gap(14)
-            .child(h_flex().items_center().gap(8).child(div().flex_1().text_size(15).font_semibold().child(profile.name))
-              .child(div().text_size(10.5).text_color(t.dim).child(`Thinking: ${profile.thinking}`)))
-            .child(this.field(t, profile, "model", "Primary model", cx))
-            .child(this.field(t, profile, "fallbackModel", "Fallback model", cx))
-            .child(div().border_b(1).border_color(t.border).pt(6))))
-          .child(div().text_size(12).line_height("18px").text_color(t.dim)
-            .child("Fallback is used only when startup fails, before the first successful assistant response. Running agents keep their model."))))
+      .child(div().flex_1().min_h(0).relative()
+        .child(div().id("workflow-content").absolute().inset_0().overflow_y_scroll()
+          .child(v_flex().w_full().px(22).py(20).gap(22)
+            .child(v_flex().gap(10).child(this.machineField(t))
+              .child(div().text_size(11.5).line_height("17px").text_color(t.dim).child("Choices come from a running Pi on this machine. Profiles are shared across machines.")))
+            .when(Boolean(this.catalog?.error), el => el.child(div().p(11).rounded(8).bg(t.raised).text_size(12).line_height("17px").text_color(t.muted).child(this.catalog.error)))
+            .when(Boolean(installationError), el => el.child(div().text_size(12).text_color(t.muted).child(`Extension installation failed: ${installationError}`)))
+            .when(this.loading, el => el.child(div().text_size(13).text_color(t.dim).child("Loading workflow profiles…")))
+            .children((this.config?.profiles ?? []).map(profile => v_flex().w_full().gap(14)
+              .child(h_flex().items_center().gap(8).child(div().flex_1().text_size(15).font_semibold().child(profile.name))
+                .child(div().text_size(10.5).text_color(t.dim).child(`Thinking: ${profile.thinking}`)))
+              .child(this.field(t, profile, "model", "Primary model", cx))
+              .child(this.field(t, profile, "fallbackModel", "Fallback model", cx))
+              .child(div().border_b(1).border_color(t.border).pt(6))))
+            .child(div().text_size(12).line_height("18px").text_color(t.dim)
+              .child("Fallback is used only when startup fails, before the first successful assistant response. Running agents keep their model."))))
+        .child(Scrollbar.vertical("workflow-content").absolute().inset_0()))
       .child(v_flex().px(22).py(15).gap(9).flex_none().border_t(1).border_color(t.border)
         .when(Boolean(this.error), el => el.child(div().text_size(12).line_height("17px").text_color(t.foreground).child(this.error)))
         .child(h_flex().items_center().gap(10)
