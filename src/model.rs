@@ -309,10 +309,19 @@ impl Model {
         self.active = Some(id.to_owned());
     }
 
-    /// Adds a tab after the space's selected one and selects it (not the space).
+    /// Adds a tab and selects it (not the space). A tab opened for an agent (see
+    /// `tab_origin`) goes after that agent's tab and the tabs already opened for
+    /// it; any other tab goes after the space's selected one.
     pub fn add_tab(&mut self, space: &str, ctx: Tab) -> bool {
         let Some(p) = self.space_mut(space) else { return false };
-        let at = p.active.as_deref().and_then(|a| p.tabs.iter().position(|c| c.id == a)).map_or(p.tabs.len(), |i| i + 1);
+        let selected = || p.active.as_deref().and_then(|a| p.tabs.iter().position(|c| c.id == a)).map_or(p.tabs.len(), |i| i + 1);
+        let at = tab_origin(p, &ctx)
+            .and_then(|origin| {
+                let agent = p.tabs.iter().position(|tab| tab.root.panes().iter().any(|pane| matches!(pane.content(), Some(Content::Terminal { terminal }) if *terminal == origin)))?;
+                let opened = p.tabs[agent + 1..].iter().take_while(|tab| tab_origin(p, tab).as_deref() == Some(origin.as_str())).count();
+                Some(agent + 1 + opened)
+            })
+            .unwrap_or_else(selected);
         let id = ctx.id.clone();
         p.tabs.insert(at, ctx);
         p.active = Some(id);
@@ -913,6 +922,30 @@ mod tests {
         let order: Vec<&str> = m.spaces[0].tabs.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(order, ["c1", "c3", "c2"]);
         assert_eq!(m.active_tab().map(|c| c.id.as_str()), Some("c3"));
+    }
+
+    #[test]
+    fn a_tab_opened_for_an_agent_goes_after_that_agents_tabs() {
+        let ids = |m: &Model, space: &str| m.space(space).unwrap().tabs.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        let mut m = Model::default();
+        m.add_space("s1", "", "", Tab::new("a1", "", "x1", "t1"));
+        m.add_tab("s1", Tab::new("a2", "", "x2", "t2"));
+        m.add_tab("s1", Tab::new("a3", "", "x3", "t3"));
+        m.add_tab("s1", Tab::new("a4", "", "x4", "t4"));
+        m.select_tab("a1");
+
+        m.add_tab("s1", review_tab("r1", "t3", "1"));
+        assert_eq!(ids(&m, "s1"), ["a1", "a2", "a3", "r1", "a4"]);
+        assert_eq!(m.active_tab().map(|c| c.id.as_str()), Some("r1"));
+        m.add_tab("s1", review_tab("r2", "t3", "2"));
+        m.add_tab("s1", review_tab("r3", "t1", "3"));
+        assert_eq!(ids(&m, "s1"), ["a1", "r3", "a2", "a3", "r1", "r2", "a4"]);
+
+        // No origin, or an origin without a tab in the space: after the selected tab.
+        m.select_tab("a2");
+        m.add_tab("s1", Tab::with_pane("n1", "", mod_pane("n1", "markdown", json!({ "file": "/r/a.md" }))));
+        m.add_tab("s1", review_tab("r4", "t9", "4"));
+        assert_eq!(ids(&m, "s1"), ["a1", "r3", "a2", "n1", "r4", "a3", "r1", "r2", "a4"]);
     }
 
     fn three_panes_and_another_tab() -> Model {
