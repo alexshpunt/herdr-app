@@ -2,6 +2,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod agents;
+mod app_mailbox;
 mod workflow;
 mod pi_install;
 mod bench;

@@ -1,6 +1,7 @@
 //! Narrow, machine-aware transport for the Pi orchestration extension.
 //! Never return raw core labels: other integrations store private routing data there.
 use crate::hc::Core;
+use base64::Engine as _;
 use serde_json::{json, Value};
 
 pub fn placement(model: &crate::model::Model, address: &str) -> Option<Value> {
@@ -51,13 +52,16 @@ pub fn summary(address: &str, record: &Value, placement: Option<&Value>) -> Valu
         .as_str()
         .or_else(|| report(record)["state"].as_str());
     let foreground = &record["foreground"];
-    let exited = record["state"] != "live"
-        || (state.is_none()
+    let exited = record["state"]
+        .as_str()
+        .is_some_and(|state| state != "live")
+        || (!current
+            && label.is_some()
+            && state.is_none()
             && foreground["pid"].is_number()
-            && foreground["pid"] == record["pid"]
-            && foreground["argv"]
-                .as_array()
-                .is_some_and(|args| !args.iter().any(|a| a == "-c")));
+            && foreground["pid"] == record["pid"]);
+    // An unlabelled shell may still be launching Pi (-lic or -NoExit -Command).
+    // Its command line alone cannot prove that the first model attempt exited.
     // Keep proof of a successful startup after shell recovery. Clearing that
     // boundary could incorrectly relaunch a completed task on its fallback.
     let startup = label.as_ref().filter(|_| current || exited);
@@ -103,6 +107,42 @@ pub fn validate_identity(record: &Value, args: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn send_params(address: &str, record: &Value, args: &Value) -> Result<Value, String> {
+    let state = record["status"]
+        .as_str()
+        .or_else(|| report(record)["state"].as_str());
+    if state == Some("blocked") {
+        return Err("The agent is waiting for the user. Do not bypass its question.".into());
+    }
+    if pi_label(record).is_none_or(|label| label["startup"] != "started") {
+        return Err(
+            "The agent is still starting. Give its first message through create, not send.".into(),
+        );
+    }
+    let text = args["message"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("agent.send needs a non-empty message")?;
+    let label = pi_label(record).ok_or("The Pi identity is unavailable")?;
+    let route = |field: &str| -> Result<&str, String> {
+        label[field].as_str().filter(|s| !s.is_empty()).ok_or_else(|| "The Pi message integration is unavailable; reload this Pi before sending a follow-up".into())
+    };
+    for field in ["socket", "token"] {
+        route(field)?;
+    }
+    let input = serde_json::to_vec(&json!({"message":text})).map_err(|error| error.to_string())?;
+    if input.len() > 256 * 1024 - 1024 {
+        return Err("The Pi follow-up message is too large".into());
+    }
+    let (machine, id) = address
+        .split_once('/')
+        .map_or((None, address), |(machine, id)| (Some(machine), id));
+    // The helper calls the current Pi's authenticated local IPC. Native
+    // terminal.send cannot guard PID/session and could type into a shell.
+    Ok(
+        json!({"on":machine,"argv":[route("node")?,route("request")?,id,args["pid"].to_string(),args["session"].as_str().unwrap_or_default(),route("hc")?],"input":base64::engine::general_purpose::STANDARD.encode(input),"timeout":18}),
+    )
+}
 /// Runs on a worker. Re-read immediately before a mutation rather than trusting
 /// the window's event cache, which may describe a previous process in the pane.
 pub fn request(
@@ -147,27 +187,7 @@ pub fn request(
     }
     validate_identity(&record, args)?;
     let params = match action {
-        "agent.send" => {
-            if report(&record)["state"] == "blocked" {
-                return Err(
-                    "The agent is waiting for the user. Do not bypass its question.".into(),
-                );
-            }
-            if pi_label(&record).is_none_or(|label| label["startup"] != "started") {
-                return Err(
-                    "The agent is still starting. Give its first message through create, not send."
-                        .into(),
-                );
-            }
-            let text = args["message"]
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("agent.send needs a non-empty message")?;
-            (
-                "terminal.send",
-                json!({"terminal":address,"text":text,"force":false,"wait":false}),
-            )
-        }
+        "agent.send" => ("machine.exec", send_params(address, &record, args)?),
         "agent.stop" => (
             "terminal.interrupt",
             json!({"terminal":address,"timeout":10}),
@@ -182,9 +202,22 @@ pub fn request(
         json!({"terminal":address,"pid":args["pid"],"session":args["session"],"action":action});
     match action {
         "agent.send" => {
-            for key in ["started", "status", "turn"] {
-                result[key] = observed[key].clone();
+            if observed["code"].as_i64() != Some(0) || observed["timed_out"] == true {
+                return Err("Pi did not confirm follow-up submission. Inspect the agent before resending; the message may already have been submitted.".into());
             }
+            let output = base64::engine::general_purpose::STANDARD
+                .decode(observed["stdout"].as_str().unwrap_or_default())
+                .map_err(|_| {
+                    "Pi returned an invalid message confirmation; inspect before resending"
+                })?;
+            let confirmation: Value = serde_json::from_slice(&output)
+                .map_err(|_| "Pi returned no message confirmation; inspect before resending")?;
+            if confirmation["outcome"] != "submitted" {
+                return Err(
+                    "Pi did not confirm message submission; inspect before resending".into(),
+                );
+            }
+            result["outcome"] = json!("submitted");
         }
         "agent.stop" => {
             for key in ["outcome", "key"] {
@@ -263,6 +296,76 @@ mod tests {
         assert_eq!(result["tab"], "remote/tb1");
         assert!(!result.to_string().contains("private"));
         assert!(!result.to_string().contains("secret"));
+    }
+    #[test]
+    fn launch_shells_are_pending_until_a_pi_identity_was_observed() {
+        for argv in [
+            json!(["/bin/bash", "-lic", "pi --model provider/model"]),
+            json!(["pwsh", "-NoExit", "-Command", "pi --model provider/model"]),
+            json!(["bash"]),
+        ] {
+            let r = json!({"state":"live","pid":1,"foreground":{"pid":1,"argv":argv},"status":null,"labels":{}});
+            let agent = summary("t1", &r, None);
+            assert_eq!(agent["exited"], false);
+            assert_eq!(agent["startup"], Value::Null);
+            assert_eq!(agent["identityCurrent"], false);
+        }
+        for r in [
+            json!({}),
+            json!({"state":"live","pid":1,"foreground":null,"labels":{}}),
+        ] {
+            assert_eq!(summary("t1", &r, None)["exited"], false);
+        }
+        assert_eq!(
+            summary("t1", &json!({"state":"finished"}), None)["exited"],
+            true
+        );
+    }
+
+    #[test]
+    fn shell_recovery_after_a_failed_pi_preserves_the_observed_failure() {
+        let mut r = record();
+        r["status"] = Value::Null;
+        r["foreground"] = json!({"pid":1,"argv":["pwsh","-NoExit","-Command","pi"]});
+        r["labels"]["herdr.pi"] = json!({"version":1,"pid":7,"session":"s1","startup":"failed"})
+            .to_string()
+            .into();
+        let agent = summary("remote/t1", &r, None);
+        assert_eq!(agent["exited"], true);
+        assert_eq!(agent["startup"], "failed");
+        assert_eq!(agent["session"], Value::Null);
+    }
+
+    #[test]
+    fn send_uses_identity_checked_pi_ipc_for_done_and_working_agents() {
+        let mut r = record();
+        r["labels"]["herdr.pi"] = json!({"version":1,"pid":7,"session":"s1","startup":"started","socket":"private-pipe","token":"private-token","node":"/node","request":"/request.mjs","hc":"/hc"}).to_string().into();
+        let args = json!({"pid":7,"session":"s1","message":"follow-up"});
+        for status in ["idle", "working", "done", "error"] {
+            r["status"]["state"] = status.into();
+            let params = send_params("remote/t1", &r, &args).unwrap();
+            assert_eq!(params["on"], "remote");
+            assert_eq!(
+                params["argv"],
+                json!(["/node", "/request.mjs", "t1", "7", "s1", "/hc"])
+            );
+            let input = base64::engine::general_purpose::STANDARD
+                .decode(params["input"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&input).unwrap(),
+                json!({"message":"follow-up"})
+            );
+            assert!(params.get("text").is_none());
+            assert!(!params.to_string().contains("private-token"));
+        }
+        r["status"]["state"] = "blocked".into();
+        assert!(send_params("remote/t1", &r, &args).is_err());
+        r["status"]["state"] = "done".into();
+        r["labels"]["herdr.pi"] = json!({"version":1,"pid":7,"session":"s1","startup":"started"})
+            .to_string()
+            .into();
+        assert!(send_params("remote/t1", &r, &args).is_err());
     }
     #[test]
     fn recovered_shell_does_not_claim_a_previous_pi_session() {

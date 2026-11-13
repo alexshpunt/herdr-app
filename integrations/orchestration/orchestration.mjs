@@ -78,6 +78,8 @@ export class Orchestrator {
     }
     const launch = async (chosen, space) => {
       aborted(signal);
+      // A new attempt has no confirmed identity until its own launch/observation.
+      for (const field of ['terminal', 'tab', 'space', 'pid', 'session']) delete receipt[field];
       receipt.model = chosen;
       receipt.outcome = 'unknown';
       receipt.detail = 'Launch intent saved; inspect Herdr before retrying an unconfirmed launch.';
@@ -106,16 +108,22 @@ export class Orchestrator {
       receipt = { ...receipt, ...outcome };
       await this.save(file, receipt);
       if (fallback && fallback !== model && ['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {
-        const failed = { ...target, pid: outcome.pid, session: outcome.session };
-        // Persist fallback intent first. Unknown effects must not be retried.
-        target = await launch(fallback, target.space);
-        outcome = await observe(target);
-        receipt = { ...receipt, ...outcome, fallbackUsed: true };
+        // The user may have retried the primary after its first error. Re-read
+        // it before launching a replacement; a recovered agent stays primary.
+        const current = await this.client.inspect(target.terminal);
+        outcome = { outcome: startupOutcome(current), pid: current.pid, session: current.session, detail: current.error ?? current.message };
+        receipt = { ...receipt, ...outcome };
         await this.save(file, receipt);
-        // Leave failed evidence available unless the replacement really started.
-        if (outcome.outcome === 'started' && failed.pid && failed.session) {
-          try { await this.client.remove(failed); }
-          catch (error) { receipt.cleanupWarning = `Failed tab retained: ${error.message}`; }
+        if (['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {
+          const failed = { ...target, pid: outcome.pid, session: outcome.session };
+          receipt.retainedPrimary = failed;
+          target = await launch(fallback, target.space);
+          receipt.fallbackUsed = true;
+          outcome = await observe(target);
+          receipt = { ...receipt, ...outcome };
+          // Never remove a primary automatically. It is user-owned and may be
+          // resumed while fallback starts; retaining it also preserves evidence.
+          await this.save(file, receipt);
         }
       }
     } catch (error) {

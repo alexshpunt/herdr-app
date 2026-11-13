@@ -52,14 +52,15 @@ test('concurrent same-key calls do not duplicate a task', () => fixture(async ro
   assert.ok(results.some(r => r.status === 'fulfilled'));
 }));
 test('only explicit first-response failure starts fallback, exactly once', () => fixture(async root => {
-  const api = client([record('failed'), record('started')]);
+  const api = client([record('failed'), record('failed'), record('started')]);
   let next = 1;
   api.launch = async args => { api.calls.push(['launch', args]); return { terminal: `m/t${++next}`, tab: `m/tb${next}`, space: 'm/sp1' }; };
   const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
   assert.equal(result.outcome, 'started');
   assert.equal(result.model, 'p/backup');
   assert.deepEqual(api.calls.filter(c => c[0] === 'launch').map(c => c[1].model), ['p/main', 'p/backup']);
-  assert.equal(api.calls.filter(c => c[0] === 'remove').length, 1);
+  assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
+  assert.equal(result.retainedPrimary.terminal, 'm/t2');
 }));
 test('unknown launch effect is never retried after reload', () => fixture(async root => {
   const api = client();
@@ -92,4 +93,32 @@ test('stop preserves the core observation instead of claiming success', () => fi
   const result = await new Orchestrator(api, root).act('stop', { terminal: 'm/t2', pid: 22, session: 'child' });
   assert.equal(result.outcome, 'still_working');
   assert.equal(result.key, 'escape');
+}));
+test('a recovered primary is rechecked before starting fallback', () => fixture(async root => {
+  const api = client([record('failed'), record('started')]);
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.model, 'p/main');
+  assert.equal(api.calls.filter(c => c[0] === 'launch').length, 1);
+  assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
+}));
+test('pending fallback never inherits the primary PID or session', () => fixture(async root => {
+  const api = client([record('failed'), record('failed'), { ...record('pending'), pid: 33, session: 'fallback' }]);
+  let next = 1;
+  api.launch = async args => { api.calls.push(['launch', args]); return { terminal: `m/t${++next}`, tab: `m/tb${next}`, space: 'm/sp1' }; };
+  const result = await new Orchestrator(api, root, { pollMs: 0, startupMs: 0 }).create(input);
+  assert.equal(result.outcome, 'pending');
+  assert.equal(result.terminal, 'm/t3');
+  assert.equal(result.pid, undefined);
+  assert.equal(result.session, undefined);
+  assert.equal(result.attempts.length, 2);
+  assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
+}));
+test('fallback does not remove a primary which the user may resume', () => fixture(async root => {
+  const api = client([record('failed'), record('failed'), record('started')]);
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.fallbackUsed, true);
+  assert.equal(result.retainedPrimary.terminal, 'm/t2');
+  assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
 }));

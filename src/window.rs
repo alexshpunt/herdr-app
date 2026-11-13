@@ -409,6 +409,7 @@ pub struct AppWindow {
     watched: Watched,
     /// Core's terminal records by address.
     live: HashMap<String, Value>,
+    app_mailbox: crate::app_mailbox::State,
     listed_once: bool,
     /// Live folders by address (from the shell process).
     cwds: HashMap<String, String>,
@@ -516,6 +517,7 @@ impl AppWindow {
             looked: HashMap::new(),
             watched: Watched::default(),
             live: HashMap::new(),
+            app_mailbox: crate::app_mailbox::State::default(),
             listed_once: false,
             cwds: HashMap::new(),
             reported: HashMap::new(),
@@ -712,6 +714,7 @@ impl AppWindow {
                     if changed { this.sync(window, cx); }
                     this.fit_hidden_tabs(window, cx);
                     this.flush_documents(refresh, window, cx);
+                    this.poll_app_mailboxes(window, cx);
                 }).is_err() { break; }
                 cx.background_executor().timer(Duration::from_millis(500)).await;
             }
@@ -817,6 +820,7 @@ impl AppWindow {
         tracing::info!("reconnected to the core");
         crate::pi_install::start(core.clone(), None);
         self.core_generation += 1;
+        self.app_mailbox.reconnected();
         self.documents_watching = false;
         for (machine, slot) in &mut self.documents {
             slot.available = false;
@@ -2490,7 +2494,7 @@ impl AppWindow {
     fn spawn(&mut self, argv: Option<Vec<String>>, cwd: String, follow: bool, space: &str, ctx: &str, on: Option<&str>, size: Option<(u16, u16)>, window: &Window) -> Result<(String, String), String> {
         let argv = argv.unwrap_or_default();
         self.require_document(on)?;
-        let labels = json!({ "herdr.space": crate::mirror::local(space, on), "herdr.tab": crate::mirror::local(ctx, on), "herdr.seen": "0" });
+        let labels = json!({ "herdr.space": crate::mirror::local(space, on), "herdr.tab": crate::mirror::local(ctx, on), "herdr.seen": "0", "herdr.app": crate::app_mailbox::new_route().to_string() });
         let (addr, cwd) = run_following_folder(cwd, follow, on, |cwd| match self.core.run(argv.clone(), cwd.clone(), labels.clone(), on, size, crate::terminal::initial_display(window)) {
             // An agent on a machine without `sh` (Windows): in its PowerShell instead.
             Err(e) if on.is_some() && argv.first().map(String::as_str) == Some("sh") && format!("{e:#}").contains("not found") => {
@@ -4053,6 +4057,86 @@ impl AppWindow {
         self.reload_config(window, cx);
     }
 
+    /// Core label events carry requests back from remote Pi processes. All
+    /// document I/O and reply waits stay off the window thread.
+    fn poll_app_mailboxes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.app_mailbox.retain(&self.live);
+        let work: Vec<_> = self.live.iter().filter_map(|(address, record)| {
+            crate::agents::placement(&self.model, address)?;
+            self.app_mailbox.plan(address, record).map(|work| (address.clone(), work))
+        }).collect();
+        for (address, work) in work {
+            let core = self.core.clone();
+            let generation = self.core_generation;
+            match work {
+                crate::app_mailbox::Work::Route(route) => {
+                    cx.spawn_in(window, async move |this, cx| {
+                        let target = address.clone();
+                        let result = cx.background_executor().spawn(async move {
+                            crate::app_mailbox::publish(&core, &target, &route)
+                        }).await;
+                        if let Err(error) = result { tracing::warn!("cannot publish App route for {address}: {error:#}"); }
+                        let _ = this.update(cx, |this, _| {
+                            if generation == this.core_generation { this.app_mailbox.routed(&address); }
+                        });
+                    }).detach();
+                }
+                crate::app_mailbox::Work::Request(route) => {
+                    cx.spawn_in(window, async move |this, cx| {
+                        let source = address.clone();
+                        let expected = route.clone();
+                        let reader = core.clone();
+                        let claims = cx.background_executor().spawn(async move {
+                            crate::app_mailbox::claim(&reader, &source, &expected)
+                        }).await;
+                        let claims = match claims {
+                            Ok(claims) => claims,
+                            Err(error) => { tracing::warn!("App mailbox {address}: {error:#}"); return; }
+                        };
+                        for claim in claims {
+                            let (reply, receive) = std::sync::mpsc::channel();
+                            let wire = claim.wire.clone();
+                            let dispatched = this.update_in(cx, |this, window, cx| {
+                                if generation != this.core_generation || this.agent_placement(&address).is_none() {
+                                    let _ = reply.send(json!({"error":"The caller placement or core connection changed. Inspect Herdr before retrying."}));
+                                    return;
+                                }
+                                if crate::app_mailbox::targets_caller(&wire, &address) {
+                                    let _ = reply.send(json!({"error":"Do not manage the calling Pi through its own Herdr agent tool."}));
+                                    return;
+                                }
+                                this.handle(Request::Control { cmd: wire, reply }, window, cx);
+                            }).is_ok();
+                            if !dispatched { return; }
+                            let writer = core.clone();
+                            let source = address.clone();
+                            let expected = route.clone();
+                            let executor = cx.background_executor().clone();
+                            cx.background_executor().spawn(async move {
+                                // A blocking recv would occupy the same worker
+                                // pool needed by the command being awaited.
+                                let deadline = Instant::now() + crate::app_mailbox::REPLY_TIMEOUT;
+                                let result = loop {
+                                    match receive.try_recv() {
+                                        Ok(result) => break result,
+                                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break json!({"error":"App completion is unknown; inspect Herdr before retrying.","outcome":"unknown"}),
+                                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                                    }
+                                    if Instant::now() >= deadline {
+                                        break json!({"error":"App accepted the request, but completion is unknown. Inspect Herdr before repeating a mutation.","outcome":"unknown"});
+                                    }
+                                    executor.timer(Duration::from_millis(50)).await;
+                                };
+                                if let Err(error) = crate::app_mailbox::finish(&writer, &source, &expected, claim, result) {
+                                    tracing::warn!("App mailbox completion for {source}: {error:#}");
+                                }
+                            }).detach();
+                        }
+                    }).detach();
+                }
+            }
+        }
+    }
     fn agent_placement(&self, address: &str) -> Option<Value> {
         crate::agents::placement(&self.model, address)
     }

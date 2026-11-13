@@ -26,6 +26,13 @@ async function fixture(work) {
   const root = await mkdtemp(path.join(tmpdir(), 'herdr-pi-installer-'));
   try { await work(root); } finally { await rm(root, { recursive: true, force: true }); }
 }
+test('installs every embedded runtime file with its exact source', () => fixture(async root => {
+  const runtime = await Promise.all([...source.matchAll(/"([\w.-]+)",\s*include_str!\("([^"\n]+)"\)/g)].map(async ([, name, relative]) => [name, await readFile(path.resolve(here, '../src', relative), 'utf8')]));
+  assert.deepEqual(runtime.map(([name]) => name).sort(), ['client.mjs', 'index.ts', 'ipc.mjs', 'orchestration.mjs', 'package.json', 'request.mjs']);
+  const result = run(root, runtime);
+  assert.equal(result.status, 0, result.stderr);
+  for (const [name, content] of runtime) assert.equal(await readFile(path.join(root, 'extensions', 'herdr-orchestration', name), 'utf8'), content);
+}));
 test('installs bundled resources without modifying Pi settings or other extensions', () => fixture(async root => {
   await mkdir(path.join(root, 'extensions', 'personal'), { recursive: true });
   await writeFile(path.join(root, 'settings.json'), '{"model":"personal"}');

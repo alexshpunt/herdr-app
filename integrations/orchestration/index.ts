@@ -4,11 +4,14 @@ import { Text } from '@earendil-works/pi-tui';
 import { stripVTControlCharacters } from 'node:util';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { importFresh } from './client.mjs';
 
 export default function herdrOrchestration(pi: ExtensionAPI): void {
   let client: InstanceType<typeof import('./client.mjs').AppClient> | undefined;
   let service: InstanceType<typeof import('./orchestration.mjs').Orchestrator> | undefined;
+  let ipc: Awaited<ReturnType<typeof import('./ipc.mjs').startAgentIpc>> | undefined;
   let startup: 'pending' | 'started' | 'failed' = 'pending';
   let error: string | undefined;
   let ownerSession: string | undefined;
@@ -20,7 +23,9 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       if (!client) return;
       const available = ctx.scopedModels.length ? ctx.scopedModels.map(item => item.model) : ctx.modelRegistry.getAvailable();
       const models = [...new Map(available.map(model => [`${model.provider}/${model.id}`, { id: `${model.provider}/${model.id}`, name: model.name }])).values()];
-      const label = { version: 1, pid: process.pid, session: ctx.sessionManager.getSessionId(), models, startup, ...(error ? { error } : {}) };
+      const hc = process.env.HC_BIN || (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, process.platform === 'win32' ? 'hc.exe' : 'hc')).find(file => existsSync(file)) || 'hc';
+      const route = ipc ? { socket: ipc.socket, token: ipc.token, node: process.execPath, request: fileURLToPath(new URL('./request.mjs', import.meta.url)), hc } : {};
+      const label = { version: 1, pid: process.pid, session: ctx.sessionManager.getSessionId(), models, startup, ...route, ...(error ? { error } : {}) };
       const serialized = JSON.stringify(label);
       if (serialized === lastPublication) return;
       await client.publish(label);
@@ -29,6 +34,8 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     return publishing;
   };
   const initialize = async (ctx: ExtensionContext) => {
+    await publishing.catch(() => {});
+    await ipc?.stop(); ipc = undefined;
     client = undefined; service = undefined; lastPublication = '';
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;
     const session = ctx.sessionManager.getSessionId();
@@ -44,6 +51,22 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       const previous = JSON.parse(owner.labels?.['herdr.pi'] ?? '{}');
       if (previous.pid === process.pid && previous.session === session && previous.startup === 'started') startup = 'started';
     } catch { /* An unrelated/malformed label cannot establish successful startup. */ }
+    if (owner.foreground?.pid === process.pid) {
+      const ipcUrl = new URL('./ipc.mjs', import.meta.url); ipcUrl.searchParams.set('load', suffix);
+      const { startAgentIpc } = await importFresh(ipcUrl.href) as typeof import('./ipc.mjs');
+      const currentClient = client;
+      ipc = await startAgentIpc({ pid: process.pid, session,
+        validate: async () => {
+          const current = await currentClient!.owner();
+          if (ownerSession !== session || ctx.sessionManager.getSessionId() !== session) throw new Error('The Pi session changed; inspect the agent again');
+          if (startup !== 'started') throw new Error('The Pi agent has not completed startup');
+          const status = typeof current.status === 'object' ? current.status : current.report;
+          if (current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
+        },
+        submit: (message: string) => pi.sendUserMessage(message, { deliverAs: 'followUp' }),
+        report: (value: unknown) => report(ctx, value),
+      });
+    }
     service = new Orchestrator(client, path.join(getAgentDir(), 'herdr-orchestration', 'requests'));
     await publish(ctx);
   };
@@ -75,7 +98,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   });
   // Keep the last label after exit: the app rejects its stale PID for catalogs and
   // mutations, while the startup observer can distinguish success from early exit.
-  pi.on('session_shutdown', async () => { await publishing.catch(() => {}); client = undefined; service = undefined; });
+  pi.on('session_shutdown', async () => { await publishing.catch(() => {}); await ipc?.stop(); ipc = undefined; client = undefined; service = undefined; });
 
   const namespace = { name: 'Herdr', description: 'Manage the user’s independent agents in Herdr App', instructions: 'Start agents only for tasks the user explicitly asked to run independently. Use replicate for your own subtasks. Keep user-owned agents running after your task ends.' };
   const target = {
@@ -105,7 +128,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
           lines = [clean(data.outcome ?? data.status ?? data.state ?? 'Applied') + (data.model ? ` · ${clean(data.model)}` : '')];
           if (data.terminal) lines.push(clean(data.terminal));
           if (data.detail || data.message || data.error) lines.push(clean(data.detail ?? data.error ?? data.message));
-          if (data.cleanupWarning) lines.push(clean(data.cleanupWarning));
+          if (data.retainedPrimary?.terminal) lines.push(`Primary retained: ${clean(data.retainedPrimary.terminal)}`);
           if (options.expanded) {
             if (data.pid) lines.push(`Pi PID ${clean(data.pid)} · session ${clean(data.session)}`);
             if (data.space) lines.push(`Space ${clean(data.space)}`);
