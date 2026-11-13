@@ -161,7 +161,7 @@ jobs:
         if: matrix.platform == 'linux-x86_64'
         run: ~/.bun/bin/bun test tests/linear_target.test.mjs tests/github_target.test.mjs
       - name: Install Node for Pi integration checks
-        if: matrix.platform == 'linux-x86_64'
+        if: runner.os == 'Linux' || runner.os == 'Windows'
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.2'
@@ -171,6 +171,13 @@ jobs:
           npm ci --prefix integrations/plannotator
           npm run --prefix integrations/plannotator check
           npm test --prefix integrations/plannotator
+      - name: Check Pi orchestration and installer
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        run: |
+          node --test scripts/test_pi_install.mjs
+          npm ci --prefix integrations/orchestration
+          npm run --prefix integrations/orchestration check
+          npm test --prefix integrations/orchestration
       - name: Check fork synchronization
         if: matrix.platform == 'linux-x86_64'
         run: python3 -m unittest discover -s scripts -p test_fork_sync.py

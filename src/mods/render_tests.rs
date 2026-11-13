@@ -150,6 +150,24 @@ fn module(values: BTreeMap<String, Value>, calls: Rc<RefCell<Calls>>) -> HostMod
         module = module.function(name, |_| Ok(HostValue::Null));
     }
     module = module.async_function("feedbackPickImages", |_| Ok(async { Ok(HostValue::Array(vec![])) }));
+    module = module.async_function("workflow", |a| {
+        let action = a.string(0)?.to_owned();
+        let args = a.get(1).map(from_host).unwrap_or(Value::Null);
+        let mut config = crate::workflow::Config::default();
+        let result = match action.as_str() {
+            "get" => serde_json::to_value(config).unwrap(),
+            "set" => {
+                if let Some(profile) = config.profiles.iter_mut().find(|p| args["profile"] == p.id) {
+                    if let Some(model) = args["model"].as_str() { profile.model = model.to_owned(); }
+                    if let Some(fallback) = args.get("fallbackModel") { profile.fallback_model = fallback.as_str().map(str::to_owned); }
+                }
+                serde_json::to_value(config).unwrap()
+            }
+            "models" => json!({"machine":args["machine"],"models":[{"id":"provider/model-a","name":"Model A"},{"id":"provider/model-b","name":"Model B"}],"installation":{"state":"ready"}}),
+            _ => panic!("unexpected workflow action {action}"),
+        };
+        Ok(std::future::ready(Ok(to_host(&result))))
+    });
     module = module.async_function("knownAgents", |_| Ok(async { Ok(HostValue::Array(vec![])) }));
     module = module.async_function("pickFolder", |_| Ok(async { Ok(HostValue::Null) }));
     for name in ["nextCommand", "nextLink", "watchFolder"] {
@@ -671,6 +689,24 @@ fn option_key_settings_are_only_shown_on_macos(cx: &mut TestAppContext) {
         }
         assert_eq!(tree.contains("st-s-keyboard"), platform == "macos", "{platform}: {tree}");
     }
+}
+
+#[gpui::test]
+fn workflow_drawer_renders_profiles_live_dropdowns_and_missing_catalogs(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let config = serde_json::to_value(crate::workflow::Config::default()).unwrap();
+    for (field, expected) in [("model", "Model A"), ("fallbackModel", "No fallback")] {
+        let setup = format!("this.config = {config}; this.loading = false; this.catalog = {{models:[{{id:'provider/model-a',name:'Model A'}}]}}; this.picking = {{profile:'feature',field:'{field}'}};");
+        let tree = describe(cx, &staged, "frame/workflow", true, props(), updates("current", "current"), Some(&setup)).unwrap();
+        for label in ["Features", "Bugs", "Primary model", "Fallback model", expected, "first successful assistant response"] {
+            assert!(tree.contains(label), "missing {label}: {tree}");
+        }
+    }
+    let setup = format!("this.config = {config}; this.loading = false; this.catalog = {{models:[],error:'No current Pi catalog on remote'}};");
+    let tree = describe(cx, &staged, "frame/workflow", true, props(), updates("current", "current"), Some(&setup)).unwrap();
+    assert!(tree.contains("No current Pi catalog on remote"), "{tree}");
+    assert!(tree.contains("anthropic/claude-opus-5-5"), "saved model stays visible: {tree}");
 }
 
 #[gpui::test]

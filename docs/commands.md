@@ -453,6 +453,86 @@ Close an overlay by its id or mod name (default: the top dialog or popup, else t
 |---|---|
 | `id` | no |
 
+## `agent.list`
+
+List Pi agents in the running app, optionally in an exact space or on one machine (empty string: this computer). Returns stable terminal, space and tab ids, current PID and Pi session, and startup state.
+
+| Argument | Required |
+|---|---|
+| `space` | no |
+| `machine` | no |
+
+## `agent.inspect`
+
+Inspect an exact terminal address: current agent identity and status, plus its screen and up to 400 lines of history (default 80).
+
+| Argument | Required |
+|---|---|
+| `terminal` | yes |
+| `lines` | no |
+
+## `agent.send`
+
+Send a message to the inspected Pi agent. Rejects changed identities, agents still starting, and blocked user questions; never forces input.
+
+| Argument | Required |
+|---|---|
+| `terminal` | yes |
+| `pid` | yes |
+| `session` | yes |
+| `message` | yes |
+
+## `agent.stop`
+
+Interrupt the inspected Pi agent with its stop key. Does not kill it or escalate; returns the observed outcome.
+
+| Argument | Required |
+|---|---|
+| `terminal` | yes |
+| `pid` | yes |
+| `session` | yes |
+
+## `agent.remove`
+
+End the inspected Pi agent and remove its dedicated single-pane tab. Rejects changed identities and tabs with sibling panes.
+
+| Argument | Required |
+|---|---|
+| `terminal` | yes |
+| `pid` | yes |
+| `session` | yes |
+
+## `workflow.get`
+
+Read the persisted Features and Bugs workflow profiles, including their primary model, startup-only fallback model, and thinking level.
+
+No arguments.
+
+## `workflow.set`
+
+Update one workflow profile atomically. Models use provider/model ids; omit fallbackModel to keep it, or pass null to disable it. Existing agents keep their model.
+
+| Argument | Required |
+|---|---|
+| `profile` | yes |
+| `model` | yes |
+| `fallbackModel` | no |
+| `thinking` | no |
+
+## `workflow.models`
+
+Read live Pi model pickers for one configured machine (default: the selected space's; empty string: this computer). Reports missing or stale catalogs instead of fabricating model availability, plus extension installation status.
+
+| Argument | Required |
+|---|---|
+| `machine` | no |
+
+## `workflow.open`
+
+Toggle the right-side workflow settings drawer.
+
+No arguments.
+
 ## `app.help`
 
 Toggle the keys dialog.

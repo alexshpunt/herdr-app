@@ -16,6 +16,29 @@ export function exec(command: string, args?: string[], options?: { cwd?: string;
 /** Runs `hc` (herdr-core) with the given arguments. Add "--json" for machine output. */
 export function hc(args: string[]): Promise<ExecResult>;
 
+export interface WorkflowProfile {
+  id: string;
+  name: string;
+  model: string;
+  fallbackModel?: string;
+  thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+}
+export interface WorkflowConfig { version: 1; profiles: WorkflowProfile[]; }
+export interface WorkflowCatalog {
+  machine: string | null;
+  models: { id: string; name: string }[];
+  source?: string;
+  sessions?: number;
+  error?: string;
+  installation?: { state?: string; error?: string };
+}
+/** Read or update workflow profiles through the app. Writes are atomic.
+ * A models reply can contain an error and no choices when no current Pi published its picker.
+ * Omit machine for the selected space's machine; use an empty string for this computer. */
+export function workflow(action: "get"): Promise<WorkflowConfig>;
+export function workflow(action: "set", args: { profile: string; model: string; fallbackModel?: string | null; thinking?: WorkflowProfile["thinking"] }): Promise<WorkflowConfig>;
+export function workflow(action: "models", args?: { machine?: string }): Promise<WorkflowCatalog>;
+
 /** The user's home directory. */
 export function home(): string;
 /** The app's folder (`~/.config/herdr-app`, or `$HERDR_APP_HOME`): settings.json, keys.json, layouts/. */
@@ -364,8 +387,9 @@ export interface OverlaySpec {
    *  the mod); dragged by any press the mod doesn't stop (`cx.stop_propagation()` on its controls'
    *  mouse down) and stays where dropped; the one pressed last is on top; at `at` (its top left),
    *  else centered; as big as its content unless width/height. It doesn't take the keyboard
-   *  when it opens (a mod may focus itself). A layout switch closes windows. */
-  kind?: "dialog" | "popup" | "window";
+   *  when it opens (a mod may focus itself). A layout switch closes windows.
+   *  drawer: slides in at the right edge, without a backdrop; use height 1 for the full window. Esc closes it. */
+  kind?: "dialog" | "popup" | "window" | "drawer";
   /** A dialog a click beside it doesn't close (Esc and its own buttons still do). */
   modal?: boolean;
   /** "none": no border, rounded corners, shadow or background around it; the mod draws its own. */
