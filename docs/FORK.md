@@ -116,11 +116,12 @@ A terminal's folder follows what its program reports with OSC 7
 (`file://host/path`), OSC 9;9 or OSC 1337 CurrentDir. Pi's Teleport sends it when a
 session starts and after every move, so an agent moved to another folder or worktree
 appears there in the sidebar, the tab bar and the project context. Teleport identifies
-its reporting process, so Herdr accepts its report once the core sees that process in
-front and discards it when another program takes over. On Windows, terminals opened
-before the core's foreground-process update must be reopened. A Pi started through a
-shell wrapper may not be identified when the core reports the wrapper instead. Other
-programs' reports hold while the program in front when they arrived stays in front.
+its reporting process with a holder-issued token. Herdr asks the terminal's core to
+verify the process instance and that it is in front, including through shell wrappers.
+Herdr hides the report when the core cannot verify it and drops it when the confirmed
+process leaves the foreground. Update the core on the terminal's machine and reopen
+terminals with older holders; identified reports without verification are not shown.
+Other programs' reports hold while the program in front when they arrived stays in front.
 A report applies only when its host is empty, `localhost` or the terminal machine's
 own hostname (asked once per machine with `hostname`); a shell inside `ssh` therefore
 does not move a local terminal. In a terminal of this machine, the path must also be
