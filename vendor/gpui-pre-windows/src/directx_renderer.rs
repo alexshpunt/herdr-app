@@ -1796,7 +1796,7 @@ pub(crate) mod shader_resources {
     use windows::{
         core::{HSTRING, PCSTR},
         Win32::Graphics::Direct3D::{
-            Fxc::{D3DCompileFromFile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION},
+            Fxc::{D3DCompile, D3DCompileFromFile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION},
             ID3DBlob,
         },
     };
@@ -1940,27 +1940,57 @@ pub(crate) mod shader_resources {
 
             let mut compile_blob = None;
             let mut error_blob = None;
-            let shader_path = source_root.join("src").join(shader_name).canonicalize()?;
+            let shader_path = source_root.join("src").join(shader_name).canonicalize();
 
             let entry_point = PCSTR::from_raw(entry.as_ptr());
             let target_cstr = PCSTR::from_raw(target.as_ptr());
+            let flags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 
-            // really dirty trick because winapi bindings are unhappy otherwise
-            let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
-                D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
-            );
-
-            let ret = D3DCompileFromFile(
-                &HSTRING::from(shader_path.to_str().unwrap()),
-                None,
-                include_handler,
-                entry_point,
-                target_cstr,
-                D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
-                0,
-                &mut compile_blob,
-                Some(&mut error_blob),
-            );
+            let ret = match shader_path {
+                Ok(shader_path) => {
+                    // Use the live source when it is available for shader development.
+                    let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
+                        D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
+                    );
+                    D3DCompileFromFile(
+                        &HSTRING::from(shader_path.to_str().unwrap()),
+                        None,
+                        include_handler,
+                        entry_point,
+                        target_cstr,
+                        flags,
+                        0,
+                        &mut compile_blob,
+                        Some(&mut error_blob),
+                    )
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // A copied debug executable must not depend on the build machine's paths.
+                    let source = if shader_name == "color_text_raster.hlsl" {
+                        include_str!("color_text_raster.hlsl")
+                    } else {
+                        include_str!("shaders.hlsl")
+                    };
+                    let source = source.replace(
+                        "#include \"alpha_correction.hlsl\"",
+                        include_str!("alpha_correction.hlsl"),
+                    );
+                    D3DCompile(
+                        source.as_ptr().cast(),
+                        source.len(),
+                        PCSTR::null(),
+                        None,
+                        None::<&ID3DInclude>,
+                        entry_point,
+                        target_cstr,
+                        flags,
+                        0,
+                        &mut compile_blob,
+                        Some(&mut error_blob),
+                    )
+                }
+                Err(error) => return Err(error.into()),
+            };
             if ret.is_err() {
                 let Some(error_blob) = error_blob else {
                     return Err(anyhow::anyhow!("{ret:?}"));
@@ -1980,6 +2010,17 @@ pub(crate) mod shader_resources {
     mod tests {
         use super::*;
 
+        #[::core::prelude::v1::test]
+        fn debug_shader_uses_the_live_source_when_present() {
+            let root =
+                std::env::temp_dir().join(format!("herdr-invalid-shader-{}", std::process::id()));
+            let src = root.join("src");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(src.join("shaders.hlsl"), "not valid HLSL").unwrap();
+            let result = build_shader_blob_from(ShaderModule::Quad, ShaderTarget::Vertex, &root);
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(result.is_err());
+        }
         #[::core::prelude::v1::test]
         fn debug_shaders_compile_without_the_build_machine_sources() {
             let missing = std::env::temp_dir().join(format!(
