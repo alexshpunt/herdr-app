@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 export function bindOrigin(snapshot, terminal, pid, session) {
   if (terminal.state && terminal.state !== 'live') throw new Error('This Herdr terminal is not live');
-  if (terminal.foreground?.pid !== pid) throw new Error('This Pi is not the terminal foreground process; inherited HC context is not sufficient');
+  if (terminal.pid !== pid && terminal.foreground?.pid !== pid) throw new Error('This Pi is not the terminal foreground process; inherited HC context is not sufficient');
   const matches = [];
   const spaceId = terminal.labels?.['herdr.space'];
   for (const space of snapshot.spaces ?? []) {

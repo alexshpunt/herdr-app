@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,5 +21,8 @@ test('real Pi exposes a deferred catalog and refuses inherited or missing contex
     assert.ok(!catalog.active.some(name=>name.startsWith('herdr_agent_')));
     assert.equal(getToolExecution(run,'missing').isError,true);
     assert.match(getToolResultText(run,'missing'),/Herdr agent context is unavailable/);
+    const rendered = await readFile(path.resolve(here,'../.tmp/test-runs/herdr-deferred-catalog/tui-rendered.log'),'utf8');
+    assert.match(rendered.replace(/\s+/g,' '), /Herdr agent context is unavailable/);
+    assert.doesNotMatch(rendered, /Herdr list\s+Applied/);
   } finally { await rm(root,{recursive:true,force:true}); }
 });

@@ -46,11 +46,13 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     client = new AppClient(bindOrigin, process.pid, session);
     const owner = await client!.owner();
     // /reload must never reopen the fallback window of an already-started agent.
+    // Session history also proves success when publishing the label was interrupted.
+    if (ctx.sessionManager.getBranch().some(entry => entry.type === 'message' && entry.message.role === 'assistant' && entry.message.stopReason !== 'error' && entry.message.stopReason !== 'aborted')) startup = 'started';
     try {
       const previous = JSON.parse(owner.labels?.['herdr.pi'] ?? '{}');
       if (previous.pid === process.pid && previous.session === session && previous.startup === 'started') startup = 'started';
     } catch { /* An unrelated/malformed label cannot establish successful startup. */ }
-    if (owner.foreground?.pid === process.pid) {
+    if (owner.pid === process.pid || owner.foreground?.pid === process.pid) {
       const ipcUrl = new URL('./ipc.mjs', import.meta.url); ipcUrl.searchParams.set('load', suffix);
       const { startAgentIpc } = await importFresh(ipcUrl.href) as typeof import('./ipc.mjs');
       const currentClient = client;
@@ -115,7 +117,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         return new Text(theme.fg('toolTitle', `${name.replace('herdr_agent_', 'Herdr ')}${identity ? ` · ${stripVTControlCharacters(String(identity))}` : ''}`), 0, 0);
       },
       renderResult(result, options, theme, context) {
-        if (context.isError && !result.details) return new Text(theme.fg('error', result.content.filter(item => item.type === 'text').map(item => stripVTControlCharacters(item.text)).join('\n')), 0, 0);
+        if (context.isError && (!result.details || typeof result.details !== 'object' || Object.keys(result.details).length === 0)) return new Text(theme.fg('error', result.content.filter(item => item.type === 'text').map(item => stripVTControlCharacters(item.text)).join('\n')), 0, 0);
         const data = (result.details ?? {}) as Record<string, any>;
         const clean = (value: unknown) => stripVTControlCharacters(String(value ?? ''));
         let lines: string[];

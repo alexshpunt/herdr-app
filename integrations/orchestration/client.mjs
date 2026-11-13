@@ -141,7 +141,7 @@ export class AppClient {
   async owner() {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) throw new Error('Run this Pi in a Herdr App terminal; HC terminal identity is missing');
     const terminal = await runJson(this.hc, ['get', process.env.HC_TERMINAL_ID, '--json']);
-    if (terminal.foreground?.pid !== this.pid) throw new Error('This Pi is not the Herdr terminal foreground process');
+    if (terminal.pid !== this.pid && terminal.foreground?.pid !== this.pid) throw new Error('This Pi is not the Herdr terminal foreground process');
     return terminal;
   }
   async context() {

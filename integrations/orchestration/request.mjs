@@ -10,7 +10,7 @@ import { MESSAGE_LIMIT, requestAgentMessage } from './ipc.mjs';
 export function reachable(record, pid, session) {
   let label;
   try { label = JSON.parse(record?.labels?.['herdr.pi'] ?? 'null'); } catch { return null; }
-  return record?.state === 'live' && record.foreground?.pid === pid && label?.version === 1 && label.pid === pid && label.session === session
+  return record?.state === 'live' && (record.pid === pid || record.foreground?.pid === pid) && label?.version === 1 && label.pid === pid && label.session === session
     && ['socket', 'token', 'node', 'request', 'hc'].every(key => typeof label[key] === 'string' && label[key]) ? label : null;
 }
 

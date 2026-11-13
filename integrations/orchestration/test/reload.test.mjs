@@ -44,6 +44,9 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'toolUse',content:[]}});
   assert.equal((await label()).startup,'started');
   await writeFile(path.join(root,'client.mjs'),clientModule('second'));
+  // A successful response may be recorded even if publishing its label was interrupted.
+  session.sessionManager.appendMessage({ role:'assistant', content:[{type:'text',text:'Started before publication'}], api:'openai-completions', provider:'fixture', model:'fixture', stopReason:'stop', timestamp:Date.now(), usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}} });
+  await writeFile(path.join(root,'label.json'),JSON.stringify({...(await label()),startup:'pending'}));
   await session.reload();
   assert.equal((await request()).structuredContent.version,'second');
   assert.equal((await label()).startup,'started');

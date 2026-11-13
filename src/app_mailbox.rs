@@ -198,7 +198,7 @@ fn valid_request(id: &str, request: &Value, record: &Value, now: u64) -> bool {
         && id.len() <= 80
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         && crate::agents::current_pi(record)
-        && request["pid"] == record["foreground"]["pid"]
+        && request["pid"] == label["pid"]
         && request["session"] == label["session"]
         && request["expires"]
             .as_u64()

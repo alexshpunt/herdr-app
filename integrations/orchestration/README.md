@@ -8,9 +8,9 @@ The six `herdr_agent_*` tools use Pi's native deferred exposure in the `Herdr` n
 
 ## Identity and transport
 
-Only the terminal's foreground Pi publishes `herdr.pi`. Its version-1 label contains `pid`, `session`, the available model catalog (`models` with `id` and `name`), and `startup`. The catalog uses the scoped picker models when present, otherwise the authenticated model registry. Refresh happens on session load, model selection and before a run.
+Only the terminal's own Pi publishes `herdr.pi`. Its version-1 label contains `pid`, `session`, the available model catalog (`models` with `id` and `name`), and `startup`. The catalog uses the scoped picker models when present, otherwise the authenticated model registry. Refresh happens on session load, model selection and before a run.
 
-The App accepts a catalog only while the terminal is live and the label PID matches its foreground process. Agent mutations also require the inspected PID and session. The requesting Pi's prompt includes its PID and exact App terminal, machine and space IDs after verifying its placement. A nested Pi cannot claim an inherited terminal.
+The App accepts a catalog only while the terminal is live and the label PID matches the terminal's root Pi process or its verified foreground process. Root identity also works before the core's first foreground sample and while Pi runs a child tool. Agent mutations also require the inspected PID and session. The requesting Pi's prompt includes its PID and exact App terminal, machine and space IDs after verifying its placement. A nested Pi cannot claim an inherited terminal.
 
 Local `hc` verifies and labels the requesting terminal. The App publishes a private `herdr.app` route before launch. Requests travel back to that originating App through a bounded, versioned core document and a small label trigger, not an executable on the Pi machine. This works over the App's existing local/SSH connections, including machines unknown to the calling Pi's core. Requests are claimed with compare-and-set before dispatch; accepted or uncertain mutations are never replayed. App restarts change the route epoch. Missing routes require updating the App and reloading Pi.
 

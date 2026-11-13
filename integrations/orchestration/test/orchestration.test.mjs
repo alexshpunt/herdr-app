@@ -26,6 +26,7 @@ test('origin requires this foreground PID and an unambiguous stable placement', 
   const terminal = { address: 't1', foreground: { pid: 12 }, labels: { 'herdr.space': 'sp1' } };
   const snapshot = { spaces: [{ id: 'm/sp1', machine: 'm', tabs: [{ id: 'm/tb1', terminals: [{ terminal: 'm/t1', pane: 'm/p1' }] }] }] };
   assert.equal(bindOrigin(snapshot, terminal, 12, 's').terminal, 'm/t1');
+  assert.equal(bindOrigin(snapshot, { ...terminal, pid: 12, foreground: undefined }, 12, 's').terminal, 'm/t1');
   assert.throws(() => bindOrigin(snapshot, terminal, 13, 's'), /foreground/);
   assert.throws(() => bindOrigin({ spaces: [...snapshot.spaces, ...snapshot.spaces] }, terminal, 12, 's'), /unambiguous/);
 });

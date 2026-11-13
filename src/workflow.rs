@@ -165,7 +165,7 @@ pub fn set(args: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Only a foreground Pi may publish the picker for its machine. Old labels
+/// Only the terminal's root or foreground Pi may publish its picker. Old labels
 /// survive shell recovery, so labels alone never prove current availability.
 pub fn catalog<'a>(records: impl IntoIterator<Item = &'a Value>, machine: Option<&str>) -> Value {
     let mut models = BTreeMap::<String, String>::new();
@@ -183,11 +183,7 @@ pub fn catalog<'a>(records: impl IntoIterator<Item = &'a Value>, machine: Option
         else {
             continue;
         };
-        if label["version"] != 1
-            || label["pid"].as_u64().is_none()
-            || label["pid"] != record["foreground"]["pid"]
-            || label["session"].as_str().is_none_or(str::is_empty)
-        {
+        if !crate::agents::current_pi(record) {
             continue;
         }
         sessions += 1;

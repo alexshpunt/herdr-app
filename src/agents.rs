@@ -22,11 +22,20 @@ pub fn require_dedicated(placement: Option<&Value>) -> Result<(), String> {
 
 /// Core lifecycle events can remove the tab before the kill reply reaches the
 /// window. Treat that completed removal as success, but never close a replacement.
-pub fn removal_tab(current: Option<&Value>, expected: Option<&Value>, expected_tab_exists: bool) -> Result<Option<String>, String> {
-    if current.is_none() && !expected_tab_exists { return Ok(None); }
+pub fn removal_tab(
+    current: Option<&Value>,
+    expected: Option<&Value>,
+    expected_tab_exists: bool,
+) -> Result<Option<String>, String> {
+    if current.is_none() && !expected_tab_exists {
+        return Ok(None);
+    }
     if let Some(current) = current {
-        if current["dedicated"] == true && expected.is_some_and(|old| old["tab"] == current["tab"]) {
-            if let Some(tab) = current["tab"].as_str() { return Ok(Some(tab.into())); }
+        if current["dedicated"] == true && expected.is_some_and(|old| old["tab"] == current["tab"])
+        {
+            if let Some(tab) = current["tab"].as_str() {
+                return Ok(Some(tab.into()));
+            }
         }
     }
     Err("The agent ended, but its tab changed during removal. The tab was retained.".into())
@@ -49,7 +58,9 @@ fn report(record: &Value) -> &Value {
 
 pub fn current_pi(record: &Value) -> bool {
     record["state"] == "live"
-        && pi_label(record).is_some_and(|label| label["pid"] == record["foreground"]["pid"])
+        && pi_label(record).is_some_and(|label| {
+            label["pid"] == record["pid"] || label["pid"] == record["foreground"]["pid"]
+        })
 }
 
 pub fn is_pi(record: &Value) -> bool {
@@ -79,7 +90,7 @@ pub fn summary(address: &str, record: &Value, placement: Option<&Value>) -> Valu
     let mut value = json!({
         "terminal": address, "machine": address.split_once('/').map(|(m, _)| m),
         "state": record["state"], "status": state,
-        "message": report(record)["msg"], "pid": foreground["pid"],
+        "message": report(record)["msg"], "pid": if current { &label.as_ref().unwrap()["pid"] } else { &foreground["pid"] },
         "session": label.as_ref().filter(|_| current).map(|p| &p["session"]),
         "startup": startup.map(|p| &p["startup"]),
         "startupError": startup.map(|p| &p["error"]), "exited": exited, "identityCurrent": current,
@@ -265,11 +276,24 @@ mod tests {
     #[test]
     fn removal_requires_a_dedicated_tab_and_preserves_split_panes() {
         let expected = json!({"tab":"tb1","dedicated":true});
-        assert_eq!(removal_tab(Some(&expected), Some(&expected), true).unwrap(), Some("tb1".into()));
+        assert_eq!(
+            removal_tab(Some(&expected), Some(&expected), true).unwrap(),
+            Some("tb1".into())
+        );
         assert_eq!(removal_tab(None, Some(&expected), false).unwrap(), None);
         assert!(removal_tab(None, Some(&expected), true).is_err());
-        assert!(removal_tab(Some(&json!({"tab":"tb2","dedicated":true})), Some(&expected), true).is_err());
-        assert!(removal_tab(Some(&json!({"tab":"tb1","dedicated":false})), Some(&expected), true).is_err());
+        assert!(removal_tab(
+            Some(&json!({"tab":"tb2","dedicated":true})),
+            Some(&expected),
+            true
+        )
+        .is_err());
+        assert!(removal_tab(
+            Some(&json!({"tab":"tb1","dedicated":false})),
+            Some(&expected),
+            true
+        )
+        .is_err());
         let mut model = crate::model::Model::default();
         model.add_space(
             "sp1",
@@ -309,6 +333,19 @@ mod tests {
         let mut r = record();
         let args = json!({"pid":7,"session":"s1"});
         assert!(validate_identity(&r, &args).is_ok());
+        let mut root = r.clone();
+        root["pid"] = json!(7);
+        root["foreground"] = Value::Null;
+        assert!(
+            current_pi(&root),
+            "terminal root PID is authoritative before foreground sampling"
+        );
+        assert_eq!(summary("remote/t1", &root, None)["pid"], 7);
+        root["foreground"] = json!({"pid":8});
+        assert!(
+            validate_identity(&root, &args).is_ok(),
+            "a child tool does not replace the root Pi"
+        );
         assert!(validate_identity(&r, &json!({"pid":7,"session":"other"})).is_err());
         r["foreground"]["pid"] = json!(8);
         assert!(!current_pi(&r));
