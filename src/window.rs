@@ -4283,7 +4283,7 @@ impl AppWindow {
                 // Preserve the person's first-tab behavior without leaving a
                 // selection-dependent tab request pending during installation.
                 return self.pi_launch("space.new", &json!({
-                    "name":"New workspace", "tab":args["name"], "argv":argv, "folder":args["folder"],
+                    "name":"", "tab":args["name"], "argv":argv, "folder":args["folder"],
                     "task":args["task"], "focus":args["focus"], "machine":""
                 }), person);
             }
