@@ -3938,6 +3938,12 @@ impl AppWindow {
 
     /// Closes an overlay; a kept window stays closed on the next start too.
     fn close_overlay(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if mods::shared("frame.welcomed").is_none()
+            && self.overlays.iter().find(|o| o.id == id)
+                .is_some_and(|o| self.copies.get(&o.slot).is_some_and(|c| c.inst.name == "frame-welcome"))
+        {
+            mods::set_shared("frame.welcomed".into(), json!("skipped"));
+        }
         if let Some(k) = self.overlays.iter().find(|o| o.id == id).and_then(|o| o.key.clone()) {
             movable::forget(&self.layout_name, &k);
         }
@@ -5926,6 +5932,9 @@ mod tests {
             "id": "root", "type": "block", "content": { "tab": "active" }
         }), true);
         cx.update(|window, cx| view.update(cx, |this, cx| {
+            assert!(crate::mods::shared("frame.welcomed").is_none());
+            this.open_overlay("other".into(), json!({"mod": "unused", "kind": "window"}), window, cx);
+            this.run_as("overlay.close", json!({}), false, window, cx);
             assert!(crate::mods::shared("frame.welcomed").is_none());
             this.open_welcome(window, cx);
             this.run_as("overlay.close", json!({}), false, window, cx);
