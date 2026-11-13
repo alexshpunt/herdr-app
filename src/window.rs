@@ -6080,6 +6080,42 @@ mod tests {
     }
 
     #[test]
+    fn a_workflow_dock_reserves_width_and_restores_the_layout() {
+        in_own_process("workflow_dock_layout");
+    }
+
+    #[gpui::test]
+    fn workflow_dock_layout(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("workflow_dock_layout") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "block", "titlebar": "layout", "content": { "mod": "probe" }
+        }));
+        let viewport = cx.update(|window, _| window.viewport_size());
+        let original = view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap());
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.open_overlay("workflow".into(), json!({
+                "mod": "probe", "kind": "dock", "width": 300, "height": 1, "frame": "none"
+            }), window, cx);
+        }));
+        cx.run_until_parked();
+        let dock = cx.debug_bounds("dock-workflow").expect("the Workflow dock is part of the layout");
+        let main = cx.debug_bounds("herdr-layout").expect("the existing layout stays beside the dock");
+        assert_eq!(dock.size.width, crate::settings::z(300.0));
+        assert_eq!(dock.right(), viewport.width);
+        assert_eq!(main.right(), dock.left());
+        assert_eq!(main.size.height, dock.size.height);
+        assert_eq!(view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap()), original);
+        assert!(!view.update(cx, |this, _| this.overlays.last().unwrap().kind.modal_keys()));
+        cx.update(|window, cx| view.update(cx, |this, cx| this.close_overlay("workflow", window, cx)));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("dock-workflow").is_none());
+        assert_eq!(cx.debug_bounds("herdr-layout").unwrap().size.width, viewport.width);
+    }
+
+    #[test]
     fn showing_the_tab_again_gives_its_pane_the_keyboard() {
         in_own_process("tab_shown_again");
     }
