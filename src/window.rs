@@ -4279,7 +4279,7 @@ impl AppWindow {
             machine
         } else {
             let space = Self::owned(&args, "space").or_else(|| self.model.active.clone());
-            if space.is_none() && person && args.get("space").is_none() && Self::owned(&args, "mod").is_none() {
+            if space.is_none() && person && args["space"].is_null() && Self::owned(&args, "mod").is_none() {
                 // Preserve the person's first-tab behavior without leaving a
                 // selection-dependent tab request pending during installation.
                 return self.pi_launch("space.new", &json!({
@@ -6248,6 +6248,9 @@ mod tests {
             assert_eq!(pinned["tab"], args["name"]);
             for field in ["argv", "folder", "task", "focus"] { assert_eq!(pinned[field], args[field]); }
             assert_eq!(machine, None);
+            let mut null_space = args.clone();
+            null_space["space"] = json!(null);
+            assert_eq!(this.pi_launch("tab.new", &null_space, true).unwrap().0, "space.new");
             assert!(this.pi_launch("tab.new", &args, false).is_none());
             for person in [true, false] {
                 assert!(this.pi_launch("pane.split", &json!({"argv":["pi"], "direction":"right"}), person).is_none());
