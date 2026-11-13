@@ -146,6 +146,7 @@ test('discovers the Windows npm Pi CLI from its declared bin, not a hardcoded fi
   assert.deepEqual(await discover(prefix, 'win32', []), { launch: [process.execPath, await fsForDiscovery.realpath(cli)] });
 }));
 test('discovers a POSIX Pi symlink and follows package bin metadata', () => fixture(async root => {
+  // Keep host Windows drive letters out of an emulated POSIX PATH list.
   const pkg = path.join(root, 'package'), bin = path.join(root, 'bin');
   await mkdir(path.join(pkg, 'bin'), { recursive: true });
   await writeFile(path.join(pkg, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-coding-agent', bin: { pi: './bin/pi' } }));
@@ -153,15 +154,15 @@ test('discovers a POSIX Pi symlink and follows package bin metadata', () => fixt
   await writeFile(cli, '#!/usr/bin/env node\nconsole.log("fixture");\n');
   if (process.platform === 'win32') await symlink(path.join(pkg, 'bin'), bin, 'junction');
   else { await mkdir(bin); await symlink(cli, path.join(bin, 'pi')); }
-  assert.deepEqual(await discover(bin, 'linux', []), { launch: [process.execPath, await fsForDiscovery.realpath(cli)] });
+  assert.deepEqual(await discover('', 'linux', [bin]), { launch: [process.execPath, await fsForDiscovery.realpath(cli)] });
 }));
 test('a missing or non-Node Pi command does not prevent extension installation', () => fixture(async root => {
-  const missing = await discover(root, 'linux', []);
+  const missing = await discover('', 'linux', [root]);
   assert.equal(missing.launch, undefined);
   assert.equal(typeof missing.launchError, 'string');
   assert.ok(missing.launchError.length);
   await writeFile(path.join(root, 'pi'), '#!/bin/sh\necho not-node\n');
-  const incompatible = await discover(root, 'linux', []);
+  const incompatible = await discover('', 'linux', [root]);
   assert.equal(incompatible.launch, undefined);
   assert.equal(typeof incompatible.launchError, 'string');
   assert.ok(incompatible.launchError.length);
