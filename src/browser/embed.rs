@@ -231,27 +231,78 @@ fn person_program(program: &std::path::Path) -> std::process::Command {
     command
 }
 
+/// When, after VS Code's window was adopted, files handed to it go again.
+/// A new window takes a few seconds to connect to its machine (WSL, SSH):
+/// before that it opens a file but drops its line (VS Code 1.146), and the
+/// files come to front in no fixed order. Its title is no sign of it: it
+/// names a file before the window has connected.
+const VSCODE_HAND_AGAIN: [std::time::Duration; 3] =
+    [std::time::Duration::from_secs(3), std::time::Duration::from_secs(8), std::time::Duration::from_secs(15)];
+
+/// The files handed to one VS Code window while it is new, in the order
+/// asked (each once, at its latest place), and the last time they went again.
+#[derive(Default)]
+pub(super) struct Handed {
+    uris: Vec<String>,
+    again: Option<std::time::Instant>,
+}
+
+/// A new VS Code window: when Herdr adopted it, and what it was handed.
+type NewWindow = (std::time::Instant, Arc<std::sync::Mutex<Handed>>);
+
+/// One hand-off at a time, so files reach VS Code in the order asked.
+static HANDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Hands file URIs (`:line:column` after each) to the running VS Code, which
 /// opens each in the window that has its folder. They go one after another,
 /// so the last one ends up in front; at once, the order would be VS Code's.
-fn vscode_goto(program: &std::path::Path, uris: Vec<String>) -> std::io::Result<()> {
-    let hand = |program: &std::path::Path, uri: &str| person_program(program).args(["--goto", "--file-uri", uri])
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-    let mut uris = uris.into_iter();
-    let Some(first) = uris.next() else { return Ok(()) };
-    let mut child = hand(program, &first)?;
+/// While the window is new, every file it was handed goes again at each of
+/// `VSCODE_HAND_AGAIN` still ahead, in the order asked: a file open by then
+/// takes its line, and the last one asked comes to front.
+fn vscode_goto(program: &std::path::Path, uris: Vec<String>, window: Option<NewWindow>) {
+    if uris.is_empty() { return; }
     let program = program.to_owned();
-    // Off the UI thread: each Code.exe hands its file over and exits.
-    std::thread::spawn(move || {
-        let _ = child.wait();
+    // The caller holds HANDING: one Code.exe at a time, each handing its file
+    // over and exiting.
+    let hand_all = move |uris: &[String]| {
         for uri in uris {
-            match hand(&program, &uri) {
+            let child = person_program(&program).args(["--goto", "--file-uri", uri])
+                .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+            match child {
                 Ok(mut child) => { let _ = child.wait(); }
                 Err(error) => tracing::warn!(%error, "cannot hand {uri} to VS Code"),
             }
         }
+    };
+    if let Some((_, handed)) = &window {
+        let mut handed = handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for uri in &uris {
+            handed.uris.retain(|u| u != uri);
+            handed.uris.push(uri.clone());
+        }
+    }
+    // Off the UI thread, which must never wait for HANDING.
+    std::thread::spawn(move || {
+        let handing = || HANDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let _handing = handing();
+            hand_all(&uris);
+        }
+        let Some((adopted, handed)) = window else { return };
+        for at in VSCODE_HAND_AGAIN.map(|after| adopted + after) {
+            let Some(wait) = at.checked_duration_since(std::time::Instant::now()) else { continue };
+            std::thread::sleep(wait);
+            let _handing = handing();
+            // Another hand-off to this window may have done this round.
+            let again = {
+                let mut handed = handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if handed.again.is_some_and(|done| done >= at) { continue; }
+                handed.again = Some(at);
+                handed.uris.clone()
+            };
+            hand_all(&again);
+        }
     });
-    Ok(())
 }
 
 /// A Fork (git client) process of the pane's own on a repository. `target`
@@ -567,7 +618,12 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
                 app.goto = Some(uri.clone());
                 return Ok(ComponentDataValue::Null);
             }
-            vscode_goto(&vscode(&app.target)?.program, vec![uri.clone()])?;
+            // A window that just started may still be connecting to its machine.
+            #[cfg(windows)]
+            let window = app.embedded.as_ref().map(win::new_window);
+            #[cfg(not(windows))]
+            let window = None;
+            vscode_goto(&vscode(&app.target)?.program, vec![uri.clone()], window);
             Ok(ComponentDataValue::Null)
         }),
         StateMethodDescriptor::new::<State>("focus", "(): void", |state, _, _, _| {
@@ -620,6 +676,10 @@ mod win {
         /// The program's other windows of the same class (Unity's floating
         /// editor windows), hidden while the pane is.
         hidden: Vec<HWND>,
+        /// When Herdr adopted it, and the files handed to it since: a VS
+        /// Code window still connects to its machine for a while after that.
+        adopted: Instant,
+        handed: std::sync::Arc<std::sync::Mutex<super::Handed>>,
     }
 
     #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -743,11 +803,8 @@ mod win {
         if let Some(embedded) = left.or_else(|| held(state, &app, &target)).map(|e| moved_to(e, host)) {
             // A window taken from another pane is running: it gets the file on
             // its own. A restarted copy's window opened it when it started.
-            if !restarted
-                && let Some(uri) = &goto
-                && let Err(error) = super::vscode_goto(&launch.program, vec![uri.clone()])
-            {
-                tracing::warn!(%error, "cannot hand {uri} to VS Code");
+            if !restarted && let Some(uri) = &goto {
+                super::vscode_goto(&launch.program, vec![uri.clone()], Some(new_window(&embedded)));
             }
             let child = embedded.child as usize;
             show(state, embedded);
@@ -859,14 +916,12 @@ mod win {
             apply(&state);
             focus::give(found);
             // The launch's line, then a file asked for while the window
-            // started. That one goes twice: a window still connecting to its
-            // machine opens the file but drops its line (VS Code 1.146), and
-            // the second hand-off finds it open and places it.
+            // started, the last in front; again while the window may still be
+            // connecting to its machine (vscode_goto).
             let asked = state.borrow_mut().goto.take();
-            let uris = place.into_iter().chain(asked.into_iter().flat_map(|uri| [uri.clone(), uri])).collect();
-            if let Err(error) = super::vscode_goto(&launch.program, uris) {
-                tracing::warn!(%error, "cannot hand files to VS Code");
-            }
+            let uris = place.into_iter().chain(asked).collect();
+            let window = state.borrow().embedded.as_ref().map(new_window);
+            super::vscode_goto(&launch.program, uris, window);
             // Only the pane holds its state: closing the pane drops it, and
             // with it the window.
             drop(state);
@@ -1041,6 +1096,12 @@ mod win {
         }
     }
 
+    /// When Herdr adopted a window, and what it was handed: for files handed
+    /// to VS Code while the window may still be connecting to its machine.
+    pub(super) fn new_window(embedded: &Embedded) -> super::NewWindow {
+        (embedded.adopted, embedded.handed.clone())
+    }
+
     /// The one window whose title has `part` as a " - "-separated part.
     fn showing(windows: &[HWND], part: &str) -> Option<HWND> {
         if part.is_empty() { return None; }
@@ -1146,7 +1207,7 @@ mod win {
         };
         if menu { cx.background_executor().spawn(async move { reparent() }).await } else { reparent() }
         focus::adopt(host, container, hwnd, menu);
-        Embedded { child: hwnd, container, style, ex_style, crop: Crop::default(), applied: None, popup: menu, hidden: Vec::new() }
+        Embedded { child: hwnd, container, style, ex_style, crop: Crop::default(), applied: None, popup: menu, hidden: Vec::new(), adopted: Instant::now(), handed: Default::default() }
     }
 
     /// Give the container the pane's latest geometry, visibility and holes.

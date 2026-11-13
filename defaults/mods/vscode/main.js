@@ -12,10 +12,7 @@ export default class VsCode extends View {
   init(_props, cx) {
     this.target = props()?.uri || props()?.folder || focused()?.cwd || "";
     this.app = NativeAppState("vscode", this.target);
-    // A tab opened for a file (props.goto: its file URI) starts its window on it.
-    if (props()?.goto) {
-      try { this.app.goto(props().goto); } catch (error) { console.error(`Cannot open ${props().goto}: ${error}`); }
-    }
+    this.openGoto();
     this.register();
     cx.spawn(async (cx) => {
       // The new tab can join panes() only after this init.
@@ -36,6 +33,22 @@ export default class VsCode extends View {
         if (now !== last) { last = now; cx.notify(); }
       }
     });
+  }
+
+  // A tab opened for a file (props.goto: its file URI) starts its window on
+  // it, once: shared("vscode.goto.opened")[its pane] remembers that it did, so
+  // the window a restarted Herdr opens again is not moved to that line.
+  openGoto() {
+    const { goto, pane } = props() ?? {};
+    if (!goto) return;
+    const opened = shared("vscode.goto.opened") ?? {};
+    if (pane && opened[pane] === goto) return;
+    try { this.app.goto(goto); } catch (error) { console.error(`Cannot open ${goto}: ${error}`); }
+    if (!pane) return;
+    // Panes that are gone drop out; this one may not be in panes() yet.
+    const live = new Set(panes().map((p) => p.pane));
+    const kept = Object.fromEntries(Object.entries(opened).filter(([p]) => live.has(p)));
+    setShared("vscode.goto.opened", { ...kept, [pane]: goto });
   }
 
   // A file shown in this tab (a mod waiting in nextLink()) is asked for as

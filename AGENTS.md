@@ -15,3 +15,7 @@ A Linux `cargo build` or `cargo test` needs the Rust and Zig versions that READM
 # CI
 
 Only the Windows build matters: this fork ships for Windows alone. Before merging a pull request, wait for the Windows jobs only. Do not wait for, rerun or fix the macOS and Linux jobs.
+
+# Pull requests
+
+A new or changed command ships with its documentation in the same pull request: `the_guide_names_every_command` fails when `defaults/AGENTS.md` does not name a command, and `just docs-check` fails when `docs/commands.md` is out of date. Do not split them into a separate documentation PR.
