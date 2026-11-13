@@ -6218,6 +6218,44 @@ mod tests {
     }
 
     #[test]
+    fn pi_launch_keeps_empty_app_and_selected_targets_stable() {
+        in_own_process("pi_launch_targets");
+    }
+
+    #[gpui::test]
+    fn pi_launch_targets(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("pi_launch_targets") { return; }
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "block", "titlebar": "none", "content": {"tab": "active"}
+        }));
+        view.update(cx, |this, _| {
+            assert!(this.model.active_space().is_none());
+            let args = json!({"argv":["pi"], "name":"first", "folder":"/repo", "task":"task", "focus":false});
+            let (name, pinned, machine) = this.pi_launch("tab.new", &args, true).unwrap();
+            assert_eq!(name, "space.new");
+            assert_eq!(pinned["tab"], args["name"]);
+            for field in ["argv", "folder", "task", "focus"] { assert_eq!(pinned[field], args[field]); }
+            assert_eq!(machine, None);
+            assert!(this.pi_launch("tab.new", &args, false).is_none());
+            for person in [true, false] {
+                assert!(this.pi_launch("pane.split", &json!({"argv":["pi"], "direction":"right"}), person).is_none());
+                assert!(this.pi_launch("tab.new", &json!({"argv":["pi"], "space":"missing"}), person).is_none());
+                assert!(this.pi_launch("pane.split", &json!({"argv":["pi"], "pane":"missing", "direction":"right"}), person).is_none());
+            }
+            this.model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"));
+            this.model.space_mut("remote").unwrap().machine = Some("second".into());
+            let tab = this.pi_launch("tab.new", &args, true).unwrap();
+            let split = this.pi_launch("terminal.open", &json!({"argv":["pi"], "place":"right"}), true).unwrap();
+            this.model.add_space("local", "", "", crate::model::Tab::new("local-tab", "", "local-pane", "t2"));
+            assert_eq!(this.model.active.as_deref(), Some("local"));
+            assert_eq!(tab.1["space"], "remote");
+            assert_eq!(tab.2.as_deref(), Some("second"));
+            assert_eq!(split.1["pane"], "pane");
+            assert_eq!(split.2.as_deref(), Some("second"));
+        });
+    }
+    #[test]
     fn a_workflow_dock_reserves_width_and_restores_the_layout() {
         in_own_process("workflow_dock_layout");
     }
