@@ -238,7 +238,9 @@ export function terminals(): any[];
  *  the same way (`pane` and `shown` null); implicit pane commands still act on the
  *  focused pane under the window.
  *  pane.focus {terminal} prefers the first visible layout terminal block, then a model pane.
- *  `shown`: terminal.show replacement, if any. `agent`: the agent an agent block shows.
+ *  `shown`: terminal.show replacement, if any. `agent`: the agent an agent block shows;
+ *  without an agent block, with a mod pane focused, the agent the tab was opened for
+ *  (its `origin`) or null.
  *  `terminal` is null for mod panes. Live. */
 export function focused(): { space: string; tab: string; pane: string | null; terminal: string | null; shown: string | null; agent: string | null; cwd: string | null } | null;
 

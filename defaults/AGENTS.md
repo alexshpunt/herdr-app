@@ -1055,7 +1055,10 @@ All of it is in `herdr.d.ts`. In short:
   dark themes name the same ones), `settings()` (with `dark`: the
   appearance now), `keys()`, `commands()` (every app
   command, its arguments and what it does), `layouts()` (the layout names).
-  `focused().agent` is the agent an agent block shows.
+  `focused().agent` is the agent an agent block shows. Without an agent block and
+  with a mod pane focused (a review, a browser, an editor), it is the agent the tab
+  was opened for (`origin` of the tab in `herdr-app ls`), or null when the tab has
+  none.
   `focused().space`/`tab` describe the current window context. With a layout terminal
   block focused, `pane` and `shown` are null; `terminal` and `cwd` describe that block,
   not its source pane. A terminal in a window (`openOverlay` with a `layout`) that has

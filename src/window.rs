@@ -1345,14 +1345,27 @@ impl AppWindow {
     }
 
     /// The agent an agent block shows: the chosen one while it lives, else the
-    /// focused pane if it's an agent, else the first agent.
+    /// focused pane if it's an agent, else the agent the shown tab was opened
+    /// for, else the first agent.
     fn shown_agent(&self) -> Option<String> {
         let focused = self.model.focused_pane().and_then(|p| self.model.address_of(&p));
         self.agent
             .clone()
             .filter(|a| self.live.contains_key(a))
             .or_else(|| focused.filter(|a| self.model.status(a).is_some()))
+            .or_else(|| self.model.shown_tab_origin())
             .or_else(|| self.agent_order().into_iter().next())
+    }
+
+    /// The agent `focused().agent` reports. With an agent block it is the one
+    /// the block shows. Without one, a focused mod pane (a review, a browser, an
+    /// editor) belongs to its tab's origin, or to no agent: the first agent of
+    /// the list is unrelated to it.
+    fn focused_agent(&self) -> Option<String> {
+        if self.shows_agent() {
+            return self.shown_agent();
+        }
+        self.model.mod_pane_agent().unwrap_or_else(|| self.shown_agent())
     }
 
     /// The terminal view showing `addr` in an agent block: its pane's, or the block's own.
@@ -1771,7 +1784,7 @@ impl AppWindow {
             let pane = ctx.focused_pane()?;
             let cwd = (if self.shows_agent() { self.shown_agent() } else { m.address_of(&pane) }).and_then(|a| self.cwds.get(&a).cloned());
             Some(json!({ "space": p.id, "tab": ctx.id, "terminal": m.address_of(&pane), "shown": self.swapped.get(&pane),
-                "pane": pane, "agent": self.shown_agent(), "cwd": cwd }))
+                "pane": pane, "agent": self.focused_agent(), "cwd": cwd }))
         });
         let machines = self.documents.iter().map(|(name, slot)| json!({
             "name": (!name.is_empty()).then_some(name), "layout": slot.layout(),
