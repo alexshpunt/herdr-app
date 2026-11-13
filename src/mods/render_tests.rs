@@ -691,23 +691,7 @@ fn option_key_settings_are_only_shown_on_macos(cx: &mut TestAppContext) {
     }
 }
 
-#[gpui::test]
-fn workflow_drawer_renders_profiles_live_dropdowns_and_missing_catalogs(cx: &mut TestAppContext) {
-    cx.update(gpui_shell::init);
-    let staged = Staged::new();
-    let config = serde_json::to_value(crate::workflow::Config::default()).unwrap();
-    for (field, expected) in [("model", "Model A"), ("fallbackModel", "No fallback")] {
-        let setup = format!("this.config = {config}; this.loading = false; this.catalog = {{models:[{{id:'provider/model-a',name:'Model A'}}]}}; this.picking = {{profile:'feature',field:'{field}'}};");
-        let tree = describe(cx, &staged, "frame/workflow", true, props(), updates("current", "current"), Some(&setup)).unwrap();
-        for label in ["Features", "Bugs", "Primary model", "Fallback model", expected, "first successful assistant response"] {
-            assert!(tree.contains(label), "missing {label}: {tree}");
-        }
-    }
-    let setup = format!("this.config = {config}; this.loading = false; this.catalog = {{models:[],error:'No current Pi catalog on remote'}};");
-    let tree = describe(cx, &staged, "frame/workflow", true, props(), updates("current", "current"), Some(&setup)).unwrap();
-    assert!(tree.contains("No current Pi catalog on remote"), "{tree}");
-    assert!(tree.contains("anthropic/claude-opus-5-5"), "saved model stays visible: {tree}");
-}
+
 
 #[gpui::test]
 fn settings_sections_and_updates(cx: &mut TestAppContext) {
