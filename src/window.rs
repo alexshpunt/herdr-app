@@ -4268,17 +4268,28 @@ impl AppWindow {
         }
         let machine = if name == "space.new" {
             let machine = new_space_machine(&args, person, &self.model);
-            args["machine"] = json!(machine);
+            // Null means selection fallback; an empty string pins this computer.
+            args["machine"] = json!(machine.as_deref().unwrap_or(""));
             machine
         } else if name == "pane.split" {
-            let pane = Self::owned(&args, "pane").or_else(|| self.model.focused_pane());
-            let machine = pane.as_deref().and_then(|p| self.model.space_of(p)).and_then(|s| s.machine.clone());
+            let pane = Self::owned(&args, "pane").or_else(|| self.model.focused_pane())?;
+            let space = self.model.space_of(&pane)?;
+            let machine = self.model.address_of(&pane).and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| space.machine.clone());
             args["pane"] = json!(pane);
             machine
         } else {
             let space = Self::owned(&args, "space").or_else(|| self.model.active.clone());
-            let machine = space.as_deref().and_then(|s| self.machine_of(s));
-            if name == "tab.new" { args["space"] = json!(space); }
+            if space.is_none() && person && args.get("space").is_none() && Self::owned(&args, "mod").is_none() {
+                // Preserve the person's first-tab behavior without leaving a
+                // selection-dependent tab request pending during installation.
+                return self.pi_launch("space.new", &json!({
+                    "name":"", "tab":args["name"], "argv":argv, "folder":args["folder"],
+                    "task":args["task"], "focus":args["focus"], "machine":""
+                }), person);
+            }
+            let space = space?;
+            let machine = self.model.space(&space)?.machine.clone();
+            args["space"] = json!(space);
             machine
         };
         Some((name.into(), args, machine))
@@ -6245,6 +6256,7 @@ mod tests {
             }
             this.model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"));
             this.model.space_mut("remote").unwrap().machine = Some("second".into());
+            assert_eq!(super::new_space_machine(&pinned, true, &this.model), None);
             let tab = this.pi_launch("tab.new", &args, true).unwrap();
             let split = this.pi_launch("terminal.open", &json!({"argv":["pi"], "place":"right"}), true).unwrap();
             this.model.add_space("local", "", "", crate::model::Tab::new("local-tab", "", "local-pane", "t2"));
