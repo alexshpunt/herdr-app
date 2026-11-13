@@ -2522,14 +2522,14 @@ impl AppWindow {
         vec!["powershell.exe".into(), "-NoLogo".into(), "-NoExit".into(), "-Command".into(), crate::programs::powershell_line(cmd)]
     }
 
-    /// A verified Pi runs directly: core keep=true restores a shell after exit.
+    /// A verified Pi runs directly: core keep=true recovers program loss, not ordinary exits.
     /// Other agents retain the machine's existing shell-wrapper behavior.
     fn agent_argv(argv: Option<Vec<String>>, task: Option<&str>, on: Option<&str>) -> Option<Vec<String>> {
         let task = task.map(str::trim).filter(|t| !t.is_empty());
         argv.filter(|a| !a.is_empty()).map(|mut cmd| {
             cmd.extend(task.map(str::to_owned));
             // The installer resolved this machine's actual Node/Pi entrypoint.
-            // Core keep=true already recovers a shell when Pi exits.
+            // Core keep=true already recovers a shell after program loss.
             if crate::pi_install::is_direct_pi(&cmd) { return cmd; }
             if on.is_some() {
                 return crate::remote_shell::launch(cmd);
@@ -4200,6 +4200,9 @@ impl AppWindow {
     /// while Node starts cannot put the agent in another space or machine.
     fn pi_launch(&self, name: &str, args: &Value, person: bool) -> Option<(String, Value, Option<String>)> {
         if !matches!(name, "space.new" | "tab.new" | "pane.split" | "terminal.open") { return None; }
+        // Validate the original request before defaults can replace malformed
+        // targets or terminal.open can discard unknown keys while translating it.
+        crate::commands::validate_args(crate::commands::find(name)?, args).ok()?;
         let argv = Self::argv(args)?;
         let program = argv.first()?.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
         if !matches!(program.as_str(), "pi" | "pi.cmd" | "pi.exe") { return None; }
@@ -6106,6 +6109,42 @@ mod tests {
         let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::new(crate::hc::offline(), requests, window, cx));
         assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
         (view, cx)
+    }
+
+    #[test]
+    fn invalid_pi_launch_arguments_cannot_be_retargeted_or_discarded() {
+        in_own_process("pi_launch_validation");
+    }
+
+    #[gpui::test]
+    fn pi_launch_validation(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("pi_launch_validation") { return; }
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "block", "titlebar": "none", "content": {"tab": "active"}
+        }));
+        view.update(cx, |this, _| {
+            this.model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"));
+            this.model.space_mut("remote").unwrap().machine = Some("second".into());
+            for person in [true, false] {
+                for (name, args) in [
+                    ("space.new", json!({"argv":["pi"], "machien":"second"})),
+                    ("tab.new", json!({"argv":["pi"], "space":123})),
+                    ("pane.split", json!({"argv":["pi"], "pane":123})),
+                    ("terminal.open", json!({"argv":["pi"], "sapce":"remote"})),
+                ] {
+                    assert!(this.pi_launch(name, &args, person).is_none(), "{name}: {args}");
+                }
+                let (name, pinned, machine) = this.pi_launch("tab.new", &json!({"argv":["pi"]}), person).unwrap();
+                assert_eq!(name, "tab.new");
+                assert_eq!(pinned["space"], "remote");
+                assert_eq!(machine.as_deref(), Some("second"));
+                let (name, pinned, machine) = this.pi_launch("terminal.open", &json!({"argv":["pi"], "place":"right"}), person).unwrap();
+                assert_eq!(name, "pane.split");
+                assert_eq!(pinned["pane"], "pane");
+                assert_eq!(machine.as_deref(), Some("second"));
+            }
+        });
     }
 
     #[test]

@@ -100,6 +100,18 @@ const fallback = await step('first-response failure permits exactly one fallback
   assert.equal(primary.startup, 'failed'); assert.ok(primary.startupError); assert.equal(primary.state, 'live');
   return { terminal: created.terminal, attempts: created.attempts.length, primaryRetained: primary.terminal };
 });
+await step('exit before extension initialization permits exactly one fallback', async () => {
+  const missingModel = 'herdr-review-missing/model';
+  const created = await invoke('herdr_agent_create', input('early-exit', { model: missingModel, fallbackModel: 'herdr-fixture/success' }));
+  assert.equal(created.outcome, 'started'); assert.equal(created.fallbackUsed, true);
+  assert.deepEqual(created.attempts.map(attempt => attempt.model), [missingModel, 'herdr-fixture/success']);
+  const primary = inspect(created.retainedPrimary.terminal);
+  assert.equal(primary.exited, true); assert.equal(primary.identityCurrent, false);
+  assert.equal(primary.startup, null); assert.equal(primary.session, null);
+  const replacement = inspect(created.terminal);
+  assert.equal(replacement.identityCurrent, true); assert.equal(replacement.startup, 'started');
+  return { terminal: created.terminal, attempts: created.attempts.length, primaryState: primary.state, primaryExited: primary.exited };
+});
 profile('primary-error', 'fallback-error');
 await step('failed fallback stops after its second attempt', async () => {
   const created = await invoke('herdr_agent_create', input('failed-fallback'), true);

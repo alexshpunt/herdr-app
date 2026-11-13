@@ -388,8 +388,10 @@ export interface OverlaySpec {
    *  mouse down) and stays where dropped; the one pressed last is on top; at `at` (its top left),
    *  else centered; as big as its content unless width/height. It doesn't take the keyboard
    *  when it opens (a mod may focus itself). A layout switch closes windows.
-   *  drawer: slides in at the right edge, without a backdrop; use height 1 for the full window. Esc closes it. */
-  kind?: "dialog" | "popup" | "window" | "drawer";
+   *  dock: reserves space at the workspace's right edge, below its toolbar and above its status.
+   *  No backdrop or keyboard capture; terminals remain usable. Its height follows the workspace.
+   *  A layout switch closes docks. */
+  kind?: "dialog" | "popup" | "window" | "dock";
   /** A dialog a click beside it doesn't close (Esc and its own buttons still do). */
   modal?: boolean;
   /** "none": no border, rounded corners, shadow or background around it; the mod draws its own. */

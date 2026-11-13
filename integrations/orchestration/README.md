@@ -2,7 +2,7 @@
 
 Herdr App embeds this extension and installs it on each connected machine. Pi discovers it in the managed `extensions/herdr-orchestration` directory under its agent directory. Reload an already running Pi after an update. No runtime dependency installation is needed.
 
-Herdr resolves the target machine's Pi npm entrypoint and starts it directly with Node. This preserves the first task's quotes and newlines and lets the core verify Pi's actual PID. The core restores a shell after Pi exits. A standalone binary or shell alias that cannot be resolved safely produces a launch error instead of guessing another command.
+Herdr resolves the target machine's Pi npm entrypoint and starts it directly with Node. This preserves the first task's quotes and newlines and lets the core verify Pi's actual PID. An ordinary Pi exit remains finished; core keep-mode restores a shell only after program loss. A standalone binary or shell alias that cannot be resolved safely produces a launch error instead of guessing another command.
 
 The six `herdr_agent_*` tools use Pi's native deferred exposure in the `Herdr` namespace. Discover them through `tool_search`. They manage independent user-owned agents in visible App tabs. Use `replicate` for the calling agent's own subtasks.
 
