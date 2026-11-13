@@ -2553,8 +2553,8 @@ impl AppWindow {
             return Err(format!("no space {space:?}"));
         }
         let follow = folder.is_none();
-        let folder = folder.unwrap_or_else(|| self.folder_for(&space));
         let on = self.machine_of(&space);
+        let folder = new_space_folder(folder, || Some(self.folder_for(&space)), on.is_some(), home);
         let (ctx, pane) = (self.model.fresh_id_on("tb", on.as_deref()), self.model.fresh_id_on("p", on.as_deref()));
         let size = self.initial_size(&Tab::new(&ctx, "", &pane, "").root, &pane, window);
         let (addr, _) = self.spawn(Self::agent_argv(argv.clone(), task, on.as_deref()).or(argv), folder, follow, &space, &ctx, on.as_deref(), size, window)?;
@@ -2586,9 +2586,9 @@ impl AppWindow {
         let (space, ctx, fallback) = (p.id.clone(), c.id.clone(), p.folder.clone());
         let target_addr = self.model.address_of(&target);
         let follow = folder.is_none();
-        let cwd = folder.unwrap_or_else(|| target_addr.as_ref().and_then(|a| self.cwds.get(a).cloned()).unwrap_or(fallback));
         // A split stays on the machine of the pane it splits (else its space's).
-        let on = target_addr.and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| self.machine_of(&space));
+        let on = target_addr.as_ref().and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| self.machine_of(&space));
+        let cwd = new_space_folder(folder, || Some(target_addr.as_ref().and_then(|a| self.cwds.get(a).cloned()).unwrap_or(fallback)), on.is_some(), home);
         let new = self.model.fresh_id_on("p", on.as_deref());
         let mut root = self.model.tab(&ctx).expect("target tab").root.clone();
         root.split(&target, axis, Node::block(new.clone(), Content::Terminal { terminal: String::new() }), "initial-size".into());
@@ -3195,7 +3195,7 @@ impl AppWindow {
                 };
                 let r = match Self::owned(a, "mod") {
                     Some(name) => self.split_mod(Self::owned(a, "pane"), axis, name, a.get("props").cloned().unwrap_or(Value::Null)),
-                    None => self.split(Self::owned(a, "pane"), axis, Self::argv(a), None, window),
+                    None => self.split(Self::owned(a, "pane"), axis, Self::argv(a), Self::owned(a, "folder"), window),
                 };
                 self.answer(r);
             }
