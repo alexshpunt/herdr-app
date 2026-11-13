@@ -293,8 +293,8 @@ enum OverlayKind {
     Dialog,
     Popup,
     Toast,
-    /// App-owned, full-height panel sliding in from the right edge.
-    Drawer,
+    /// Full-height panel beside the layout, without modal keyboard handling.
+    Dock,
     /// Stays until closed, moves where it's dropped, comes to the front when
     /// pressed (`movable.rs`). Never holds the keyboard on its own.
     Window,
@@ -303,8 +303,13 @@ enum OverlayKind {
 impl OverlayKind {
     /// Dialogs and popups hold the keyboard while open (Esc closes them).
     fn modal_keys(self) -> bool {
-        matches!(self, OverlayKind::Dialog | OverlayKind::Popup | OverlayKind::Drawer)
+        matches!(self, OverlayKind::Dialog | OverlayKind::Popup)
     }
+}
+
+// Up to 1: a share of the window; larger values use logical pixels.
+fn overlay_span(value: f32, full: Pixels) -> Pixels {
+    if value <= 1.0 { full * value } else { settings::z(value) }
 }
 
 struct Overlay {
@@ -315,7 +320,6 @@ struct Overlay {
     /// As designed; drawn at the current zoom. Up to 1: a share of the window.
     size: Size<f32>,
     expires: Option<Instant>,
-    opened: Instant,
     focus: FocusHandle,
     /// Blocks instead of one mod (terminals too), ids prefixed with the overlay's.
     layout: Option<Node>,
@@ -3111,7 +3115,7 @@ impl AppWindow {
                 if self.overlays.iter().any(|o| o.id == "workflow") { self.close_overlay("workflow", window, cx); }
                 else {
                     let machine = self.model.active_space().and_then(|s| s.machine.as_deref());
-                    let spec = json!({"mod":"frame-workflow","kind":"drawer","width":440,"height":1,"frame":"none","props":{"machine":machine}});
+                    let spec = json!({"mod":"frame-workflow","kind":"dock","width":300,"height":1,"frame":"none","props":{"machine":machine}});
                     self.open_overlay("workflow".into(), spec, window, cx);
                 }
                 return;
@@ -3850,7 +3854,7 @@ impl AppWindow {
     fn open_overlay(&mut self, id: String, spec: Value, window: &mut Window, cx: &mut Context<Self>) {
         let kind = match spec.get("kind").and_then(Value::as_str) {
             Some("popup") => OverlayKind::Popup,
-            Some("drawer") => OverlayKind::Drawer,
+            Some("dock") => OverlayKind::Dock,
             Some("toast") => OverlayKind::Toast,
             Some("window") => OverlayKind::Window,
             _ => OverlayKind::Dialog,
@@ -3926,7 +3930,6 @@ impl AppWindow {
             at,
             size,
             expires: (kind == OverlayKind::Toast).then(|| Instant::now() + Duration::from_millis(timeout as u64)),
-            opened: Instant::now(),
             focus,
             layout,
             top,
@@ -3937,14 +3940,6 @@ impl AppWindow {
             key: key.clone(),
             frame: spec.get("mod").and_then(Value::as_str).is_some_and(|m| m.starts_with("frame-")),
         });
-        if kind == OverlayKind::Drawer {
-            cx.spawn_in(window, async move |this, cx| {
-                for _ in 0..12 {
-                    cx.background_executor().timer(Duration::from_millis(16)).await;
-                    if this.update(cx, |_, cx| cx.notify()).is_err() { break; }
-                }
-            }).detach();
-        }
         if let Some(k) = &key {
             if spec.get("keep").and_then(Value::as_bool) == Some(true) {
                 movable::keep(&self.layout_name, k, &spec);
@@ -4864,6 +4859,25 @@ impl AppWindow {
         }
     }
 
+    fn render_docks(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.overlays.iter().filter(|o| o.kind == OverlayKind::Dock).map(|o| {
+            let id = format!("dock-{}", o.id);
+            let selector = id.clone();
+            let content = match &o.layout {
+                Some(layout) => self.render_node(layout, &HashSet::new(), None, cx),
+                None => self.render_slot(&o.slot, cx),
+            };
+            div().id(SharedString::from(id)).debug_selector(move || selector.into())
+                .track_focus(&o.focus)
+                .w(overlay_span(o.size.width, viewport.width).min(viewport.width))
+                .h_full().min_h_0().flex_none().flex()
+                .when(!o.bare, |d| d.bg(c("popover")).border_l_1().border_color(c("border")))
+                .overflow_hidden().occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(content).child(crate::browser::cover()).into_any_element()
+        }).collect()
+    }
+
     fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut out = Vec::new();
         let mut toast_y = 16.0;
@@ -4876,11 +4890,11 @@ impl AppWindow {
         // (a window pressed last is last: on top).
         let order = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window).chain(self.overlays.iter().filter(|o| o.kind != OverlayKind::Window));
         for o in order {
+            if o.kind == OverlayKind::Dock {
+                continue;
+            }
             let id = o.id.clone();
-            // Up to 1: a share of the window (terminals in overlays want room, not px).
-            let span = |v: f32, full: Pixels| if v <= 1.0 { full * v } else { settings::z(v) };
-            let (w, h) = (span(o.size.width, viewport.width), span(o.size.height, viewport.height));
-            let w = if o.kind == OverlayKind::Drawer { w.min(viewport.width) } else { w };
+            let (w, h) = (overlay_span(o.size.width, viewport.width), overlay_span(o.size.height, viewport.height));
             let sized = |v: f32| v > 0.0 || o.kind != OverlayKind::Window;
             let content = match &o.layout {
                 Some(l) => self.render_node(l, &HashSet::new(), None, cx),
@@ -4904,11 +4918,7 @@ impl AppWindow {
                 .child(crate::browser::cover());
             match o.kind {
                 OverlayKind::Window => out.push(self.render_window(o, body, viewport, cx)),
-                OverlayKind::Drawer => {
-                    let progress = (o.opened.elapsed().as_secs_f32() / 0.18).min(1.0);
-                    let eased = 1.0 - (1.0 - progress).powi(3);
-                    out.push(div().absolute().right(-w * (1.0 - eased)).top_0().child(body).into_any_element());
-                }
+                OverlayKind::Dock => {}
                 OverlayKind::Dialog => out.push(
                     div()
                         .absolute()
@@ -5530,6 +5540,11 @@ impl Render for AppWindow {
         }
         let focused = self.focused_path(window, cx);
         let tree = self.render_node(&self.chrome, &focused, None, cx);
+        let docks = self.render_docks(window.viewport_size(), cx);
+        let tree = div().size_full().flex()
+            .child(div().id("herdr-layout").debug_selector(|| "herdr-layout".into())
+                .flex_1().min_w_0().h_full().child(tree))
+            .children(docks).into_any_element();
         let tree = self.window_frame(tree, window, cx);
         let overlays = self.render_overlays(window.viewport_size(), cx);
         let tracker = self.float_tracker(cx);

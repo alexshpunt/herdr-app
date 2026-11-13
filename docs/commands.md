@@ -530,7 +530,7 @@ Read live Pi model pickers for one configured machine (default: the selected spa
 
 ## `workflow.open`
 
-Toggle the right-side workflow settings drawer.
+Toggle the right-side workflow settings dock.
 
 No arguments.
 

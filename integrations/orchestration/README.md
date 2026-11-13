@@ -24,7 +24,7 @@ Create saves a write-ahead receipt under the Pi agent directory's `herdr-orchest
 
 Create observes startup for up to 90 seconds. Only a verified first-response failure or early exit permits one configured fallback attempt. A blocked, cancelled, disconnected or timed-out observation leaves the existing agent intact and reports its state. The primary is rechecked before fallback. A recovered primary is not replaced. A failed primary stays available for inspection rather than being removed automatically: the user may resume it while fallback starts. Use explicit removal only at the user's request.
 
-Workflow profiles and models live in the App's Workflow settings. List returns those profiles alongside agent identities. Create uses the selected profile unless explicit overrides are supplied.
+Workflow settings dock beside the entire App layout. Their compact controls follow the Spaces sidebar style. Primary model, fallback model and thinking level save on selection, without a Refresh button or footer. List returns those persisted profiles alongside agent identities. Create uses the selected profile unless explicit overrides are supplied.
 
 ## Checks
 
@@ -42,10 +42,11 @@ For installed-App verification without paid inference, copy `test/fixtures/live-
 
 In the installed App, open Workflow for a machine with a live Pi catalog:
 
-1. Open a primary model picker. Confirm model names and IDs are visible, then scroll to the last choice.
-2. Search for a model by name or ID. Confirm filtering, an empty result, and clearing the search all update the visible list.
-3. Select a different model. Close and reopen Workflow, then restart only the App and confirm the choice persists. Restore the original profile afterward.
-4. Open a fallback picker. Confirm the no-fallback choice and model choices are visible.
-5. Reduce the window height until the profiles no longer fit. Scroll the drawer to the final field; its header and save status must remain visible. Scroll an open picker independently of the drawer.
+1. Open and close Workflow. Confirm the whole layout, including its header, narrows beside the dock and regains its width on close.
+2. Open a primary model picker. Confirm model names and IDs are visible, then scroll to the last choice. Its scrollbar stays visible while the list overflows.
+3. Search for a model by name or ID. Confirm filtering, an empty result, and clearing the search all update the visible list.
+4. Select a different model and thinking level. Close and reopen Workflow, then restart only the App and confirm both choices persist. Restore the original profile afterward.
+5. Open a fallback picker. Confirm the no-fallback choice and model choices are visible.
+6. Reduce the window height until the profiles no longer fit. Confirm the body scrollbar appears and stays visible, then scroll to the final field. The header remains visible; there is no footer. Scroll an open picker independently of the body.
 
 These checks exercise native layout and input; catalog and model-filter tests do not replace them.

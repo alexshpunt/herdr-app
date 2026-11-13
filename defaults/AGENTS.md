@@ -707,7 +707,7 @@ The main ones:
   changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
   `workflow.models {machine?}` reads the live Pi model pickers for one machine (default: the selected space's;
   empty string: this computer) and the extension installation status. A missing catalog is an explicit error,
-  not evidence that no models exist. `workflow.open` toggles the right-side settings drawer.
+  not evidence that no models exist. `workflow.open` toggles a dock beside the entire app layout. Primary, fallback and thinking selections save automatically.
   The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
   an agent that produced a successful assistant response never switches models automatically.
   The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
@@ -1090,9 +1090,9 @@ All of it is in `herdr.d.ts`. In short:
 - Workflow: `await workflow("get")`, `await workflow("set", {profile, model, fallbackModel?, thinking?})`,
   `await workflow("models", {machine?})`. The models reply keeps its explicit catalog error and installation status;
   do not invent picker choices when a Pi has not published them.
-- Overlays: `openOverlay({ mod, props, kind: "dialog" | "popup" | "window" | "drawer", width, height, at, frame })`
+- Overlays: `openOverlay({ mod, props, kind: "dialog" | "popup" | "window" | "dock", width, height, at, frame })`
   returns an id; the mod gets `props().overlay` and closes itself with
-  `closeOverlay(id)`; Esc closes the top dialog, popup or drawer. A drawer slides in at the right edge; use height 1 for a full-height panel. `frame: "none"`
+  `closeOverlay(id)`; Esc closes the top dialog or popup. A dock reserves its width beside the entire layout and fills its height; it does not hold the keyboard or change the saved layout. `frame: "none"`
   drops Herdr's border, corners and shadow so the mod draws its own.
   `notify({ title, body, level, icon, timeout })` posts a notification, drawn
   by the layout-chosen mod (default: `toast`).

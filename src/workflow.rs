@@ -197,7 +197,7 @@ pub fn catalog<'a>(records: impl IntoIterator<Item = &'a Value>, machine: Option
     }
     let mut result = json!({ "machine": machine, "models": models.into_iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(), "source": "live-pi", "sessions": sessions });
     if sessions == 0 {
-        result["error"] = json!("No current Pi model catalog on this machine. Start or reload Pi in Herdr with the orchestration extension, then refresh.");
+        result["error"] = json!("No current Pi model catalog on this machine. Start or reload Pi in Herdr with the orchestration extension. The catalog updates automatically.");
     }
     result
 }
@@ -241,6 +241,23 @@ mod tests {
         assert_eq!(changed.profiles[0].fallback_model, None);
         assert_eq!(changed.profiles[1], original.profiles[1]);
         assert_eq!(load_at(&path).unwrap(), changed);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn thinking_levels_persist_without_changing_either_model_or_the_other_profile() {
+        let path = scratch();
+        let original = load_at(&path).unwrap();
+        for level in ["off", "minimal", "low", "medium", "high", "xhigh"] {
+            let changed = set_at(&path, &json!({
+                "profile": "feature", "model": original.profiles[0].model, "thinking": level
+            })).unwrap();
+            assert_eq!(changed.profiles[0].thinking, level);
+            assert_eq!(changed.profiles[0].model, original.profiles[0].model);
+            assert_eq!(changed.profiles[0].fallback_model, original.profiles[0].fallback_model);
+            assert_eq!(changed.profiles[1], original.profiles[1]);
+            assert_eq!(load_at(&path).unwrap(), changed);
+        }
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
