@@ -1357,10 +1357,14 @@ impl AppWindow {
             .or_else(|| self.agent_order().into_iter().next())
     }
 
-    /// The agent `focused().agent` reports. A focused mod pane (a review, a
-    /// browser, an editor) belongs to its tab's origin, or to no agent: the
-    /// first agent of the list is unrelated to it.
+    /// The agent `focused().agent` reports. With an agent block it is the one
+    /// the block shows. Without one, a focused mod pane (a review, a browser, an
+    /// editor) belongs to its tab's origin, or to no agent: the first agent of
+    /// the list is unrelated to it.
     fn focused_agent(&self) -> Option<String> {
+        if self.shows_agent() {
+            return self.shown_agent();
+        }
         self.model.mod_pane_agent().unwrap_or_else(|| self.shown_agent())
     }
 
