@@ -115,15 +115,18 @@ current session in that case.
 A terminal's folder follows what its program reports with OSC 7
 (`file://host/path`), OSC 9;9 or OSC 1337 CurrentDir. Pi's Teleport sends it when a
 session starts and after every move, so an agent moved to another folder or worktree
-appears there in the sidebar, the tab bar and the project context. This also covers
-Windows, where herdr-core sees only the PowerShell that Pi runs in. A report holds
-while the program that was in front when it arrived stays in front, and only when its
-host is empty, `localhost` or the terminal machine's own hostname (asked once per
-machine with `hostname`); a shell inside `ssh` therefore does not move a local
-terminal. In a terminal of this machine, the path must also be in its system's form:
-a Unix path from WSL started in a Windows terminal is ignored. Otherwise the folder of
-the process in front applies, as before. The core replays the last report when the app
-reattaches, so it survives an app restart.
+appears there in the sidebar, the tab bar and the project context. Teleport identifies
+its reporting process, so Herdr accepts its report once the core sees that process in
+front and discards it when another program takes over. On Windows, terminals opened
+before the core's foreground-process update must be reopened. A Pi started through a
+shell wrapper may not be identified when the core reports the wrapper instead. Other
+programs' reports hold while the program in front when they arrived stays in front.
+A report applies only when its host is empty, `localhost` or the terminal machine's
+own hostname (asked once per machine with `hostname`); a shell inside `ssh` therefore
+does not move a local terminal. In a terminal of this machine, the path must also be
+in its system's form: a Unix path from WSL started in a Windows terminal is ignored.
+Otherwise the folder of the process in front applies, as before. The core replays the
+last report when the app reattaches, so it survives an app restart.
 
 ## Native view limits
 
