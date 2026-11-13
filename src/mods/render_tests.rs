@@ -691,8 +691,6 @@ fn option_key_settings_are_only_shown_on_macos(cx: &mut TestAppContext) {
     }
 }
 
-
-
 #[gpui::test]
 fn settings_sections_and_updates(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
