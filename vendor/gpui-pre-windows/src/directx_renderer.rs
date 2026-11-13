@@ -2014,8 +2014,9 @@ pub(crate) mod shader_resources {
         fn debug_shader_uses_the_live_source_when_present() {
             let root =
                 std::env::temp_dir().join(format!("herdr-invalid-shader-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
             let src = root.join("src");
-            std::fs::create_dir_all(&src).unwrap();
+            std::fs::create_dir(&src).unwrap();
             std::fs::write(src.join("shaders.hlsl"), "not valid HLSL").unwrap();
             let result = build_shader_blob_from(ShaderModule::Quad, ShaderTarget::Vertex, &root);
             std::fs::remove_dir_all(&root).unwrap();
