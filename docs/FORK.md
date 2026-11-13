@@ -34,11 +34,13 @@ from PowerShell, without building:
 powershell -c "irm https://github.com/alexshpunt/herdr-app/releases/latest/download/install.ps1 | iex"
 ```
 
-The installer verifies the build's SHA-256, replaces `%LOCALAPPDATA%\Programs\herdr-app`
-(a running app keeps running until it quits) and installs herdr-core only if
-there is none. These builds do not update themselves, because a release build
-of upstream's updater would replace the fork with the upstream app; run the
-installer again for a newer build.
+The installer verifies the app build's SHA-256 and stages the personal
+herdr-core fork and its checksum from the same GitHub release before replacing
+anything. It installs the core or updates the core the app uses, keeping running
+terminals alive. It replaces `%LOCALAPPDATA%\Programs\herdr-app`; an open app
+keeps running until it quits. These app builds do not update themselves, because
+upstream's updater would replace the fork with the upstream app. Run the
+installer again for newer builds.
 
 Upstream's `release.yml` publishes only for its maintainer and is disabled in
 this fork (`gh workflow disable release.yml`). Do not re-enable it.
