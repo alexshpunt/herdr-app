@@ -6106,10 +6106,22 @@ mod tests {
             return;
         }
         let (view, cx) = open_window(cx, "probe", "", json!({
-            "id": "root", "type": "block", "titlebar": "layout", "content": { "mod": "probe" }
+            "id": "root", "type": "row", "titlebar": "layout", "children": [
+                {"id":"sidebar", "type":"block", "size":{"px":100}, "content":{"mod":"probe"}},
+                {"id":"work", "type":"column", "children":[
+                    {"id":"toolbar", "type":"block", "size":{"px":42}, "content":{"mod":"probe"}},
+                    {"id":"main", "type":"block", "content":{"tab":"active"}},
+                    {"id":"status", "type":"block", "size":{"px":28}, "content":{"mod":"probe"}}
+                ]}
+            ]
         }));
+        cx.run_until_parked();
         let viewport = cx.update(|window, _| window.viewport_size());
         let original = view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap());
+        let bars = view.update(cx, |this, _| {
+            let bounds = this.bounds.borrow();
+            (bounds["toolbar"], bounds["status"])
+        });
         cx.update(|window, cx| view.update(cx, |this, cx| {
             this.open_overlay("workflow".into(), json!({
                 "mod": "probe", "kind": "dock", "width": 300, "height": 1, "frame": "none"
@@ -6117,17 +6129,25 @@ mod tests {
         }));
         cx.run_until_parked();
         let dock = cx.debug_bounds("dock-workflow").expect("the Workflow dock is part of the layout");
-        let main = cx.debug_bounds("herdr-layout").expect("the existing layout stays beside the dock");
+        let after = view.update(cx, |this, _| {
+            let bounds = this.bounds.borrow();
+            (bounds["toolbar"], bounds["status"])
+        });
+        assert_eq!(dock.top(), bars.0.bottom());
+        assert_eq!(dock.bottom(), bars.1.top());
+        assert_eq!(after, bars, "the toolbar and status keep their geometry");
+        let main = cx.debug_bounds("herdr-workspace").expect("the workspace stays beside the dock");
         assert_eq!(dock.size.width, crate::settings::z(300.0));
         assert_eq!(dock.right(), viewport.width);
         assert_eq!(main.right(), dock.left());
+        assert_eq!(main.left(), crate::settings::z(100.0));
         assert_eq!(main.size.height, dock.size.height);
         assert_eq!(view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap()), original);
         assert!(!view.update(cx, |this, _| this.overlays.last().unwrap().kind.modal_keys()));
         cx.update(|window, cx| view.update(cx, |this, cx| this.close_overlay("workflow", window, cx)));
         cx.run_until_parked();
         assert!(cx.debug_bounds("dock-workflow").is_none());
-        assert_eq!(cx.debug_bounds("herdr-layout").unwrap().size.width, viewport.width);
+        assert_eq!(cx.debug_bounds("herdr-workspace").unwrap().size.width, viewport.width - crate::settings::z(100.0));
     }
 
     #[test]
