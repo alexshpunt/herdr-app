@@ -101,12 +101,39 @@ function Find-ForkCore($dir, $configured, $path) {
     if (Test-Path -LiteralPath (Join-Path $dir 'herdr-core.exe') -PathType Leaf) { Fail "existing core does not run: $dir" }
     return $null
 }
+# A missing core can be started by update. Give it the login environment,
+# not variables injected into the installer by the current agent.
+function Invoke-ForkCoreUpdate($existing, $new) {
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $existing
+    $start.Arguments = 'update --from "' + $new + '"'
+    $start.UseShellExecute = $false
+    $child = $start.EnvironmentVariables
+    $child.Clear()
+    $machine = [Environment]::GetEnvironmentVariables('Machine')
+    $user = [Environment]::GetEnvironmentVariables('User')
+    foreach ($variables in @($machine, $user)) {
+        foreach ($key in $variables.Keys) {
+            if ($key -ine 'Path') { $child[$key] = [Environment]::ExpandEnvironmentVariables([string]$variables[$key]) }
+        }
+    }
+    $child['Path'] = [Environment]::ExpandEnvironmentVariables(([string]$machine['Path'] + ';' + [string]$user['Path']))
+    # These describe the current Windows login or explicitly select an isolated core.
+    foreach ($key in @('SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'HC_SESSION', 'HC_SOCKET')) {
+        $value = [Environment]::GetEnvironmentVariable($key, 'Process')
+        if ($null -ne $value) { $child[$key] = $value }
+    }
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { Fail "updating $existing failed" }
+    } finally { $process.Dispose() }
+}
 # Replace an existing core through its updater, which keeps its terminals running.
 function Install-ForkCore($source, $dir, $existing) {
     $new = Join-Path $source 'herdr-core.exe'
     if ($existing) {
-        & $existing update --from $new
-        if ($LASTEXITCODE) { Fail "updating $existing failed" }
+        Invoke-ForkCoreUpdate $existing $new
     } else {
         if (Test-Path -LiteralPath $dir) { Fail "core destination already exists: $dir" }
         $parent = Split-Path -Parent $dir

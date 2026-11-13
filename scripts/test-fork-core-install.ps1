@@ -8,7 +8,7 @@ $tokens = $null
 $installer = Join-Path $PSScriptRoot '..\distribution\fork-install.ps1'
 $ast = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw $errors[0] }
-foreach ($name in @('Get-ForkSha256', 'ForkCoreReleaseBase', 'Stage-ForkCore', 'Find-ForkCore', 'Install-ForkCore')) {
+foreach ($name in @('Get-ForkSha256', 'ForkCoreReleaseBase', 'Stage-ForkCore', 'Find-ForkCore', 'Invoke-ForkCoreUpdate', 'Install-ForkCore')) {
     $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $function) { throw "Missing installer function: $name" }
     Invoke-Expression $function.Extent.Text
@@ -83,6 +83,21 @@ try {
         Assert ((Find-ForkCore $dest $null '') -eq (Join-Path $usual 'herdr-core.exe')) 'App default core was not selected before custom destination'
     } finally { $env:USERPROFILE = $oldHome; $env:LOCALAPPDATA = $oldLocal }
 
+    # Updating an installed core while no server is running must not pass the
+    # installer's agent-only environment into terminals started afterward.
+    $env:LPT1417_INSTALLER_SENTINEL = 'agent-only'
+    Install-ForkCore $source $dest $exe
+    $observation = Join-Path $root 'environment.txt'
+    $script = "[IO.File]::WriteAllText('$observation', [string]`$env:LPT1417_INSTALLER_SENTINEL)"
+    & $exe run -- powershell.exe -NoProfile -Command $script | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot run isolated environment probe' }
+    Assert ([IO.File]::ReadAllText($observation) -eq '') 'Core inherited the installer-only environment'
+    Assert ($env:LPT1417_INSTALLER_SENTINEL -eq 'agent-only') 'Update changed the installer environment'
+    $failed = $false
+    try { Invoke-ForkCoreUpdate (Join-Path $root 'missing-core.exe') $exe } catch { $failed = $true }
+    Assert $failed 'A missing updater did not fail'
+    Assert ($env:LPT1417_INSTALLER_SENTINEL -eq 'agent-only') 'A failed update changed the installer environment'
+    $env:LPT1417_INSTALLER_SENTINEL = $null
     # An existing core must use its own updater, preserving the terminal.
     $terminal = & $exe run --bg -- powershell.exe -NoProfile -Command 'Start-Sleep 60' | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or -not $terminal.address) { throw 'Isolated test terminal did not start' }
