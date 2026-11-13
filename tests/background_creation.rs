@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     path::PathBuf,
     process::{Child, Command},
@@ -135,6 +135,51 @@ impl Drop for App {
     }
 }
 
+#[test]
+#[ignore = "requires an isolated desktop and a private core session"]
+fn empty_folder_starts_tabs_and_split_panes_in_home() {
+    let app = App::start();
+    let folder = app.root.to_string_lossy();
+    let space = app.run("space.new", json!({"folder": folder}));
+    let source_pane = app.query(&["status"])["focused_pane"].clone();
+    let home = std::env::home_dir().unwrap();
+    for (command, args, expected) in [
+        (
+            "tab.new",
+            json!({"space": space["space"], "folder": ""}),
+            home,
+        ),
+        (
+            "pane.split",
+            json!({"pane": source_pane, "direction": "right", "folder": ""}),
+            std::env::home_dir().unwrap(),
+        ),
+        (
+            "pane.split",
+            json!({"pane": source_pane, "direction": "down", "folder": folder}),
+            app.root.clone(),
+        ),
+    ] {
+        let result = app.run(command, args);
+        let terminal = result["terminal"].as_str().unwrap();
+        let output = app
+            .command("hc")
+            .args(["get", terminal, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let record: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            std::path::Path::new(record["cwd"].as_str().unwrap()),
+            expected,
+            "{command}"
+        );
+    }
+}
 #[test]
 fn creation_commands_advertise_optional_focus() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr-app"))
