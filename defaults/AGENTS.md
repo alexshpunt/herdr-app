@@ -90,6 +90,9 @@ prop with that agent's terminal as on the space's machine (`$HC_TERMINAL_ID`),
 as `tab.new {space, mod, props: {..., origin}}`. `TabInfo.origin` and the tab
 in `herdr-app ls` report it as a full address, as `AgentInfo.address`, also
 after that agent ends. Plannotator reviews record their agent this way.
+Such a tab opens right after that agent's tab and the tabs already opened for
+it, so they stay in opening order; without an `origin`, or when the agent has no
+tab in the space, a new tab opens after the selected one.
 
 ## What mods are written in
 
