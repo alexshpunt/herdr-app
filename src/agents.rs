@@ -143,6 +143,13 @@ fn send_params(address: &str, record: &Value, args: &Value) -> Result<Value, Str
         json!({"on":machine,"argv":[route("node")?,route("request")?,id,args["pid"].to_string(),args["session"].as_str().unwrap_or_default(),route("hc")?],"input":base64::engine::general_purpose::STANDARD.encode(input),"timeout":18}),
     )
 }
+fn include_screen(args: &Value) -> Result<bool, String> {
+    match args.get("screen") {
+        None | Some(Value::Null) => Ok(true),
+        Some(Value::Bool(screen)) => Ok(*screen),
+        _ => Err("screen must be a boolean".into()),
+    }
+}
 /// Runs on a worker. Re-read immediately before a mutation rather than trusting
 /// the window's event cache, which may describe a previous process in the pane.
 pub fn request(
@@ -175,6 +182,9 @@ pub fn request(
             })
             .transpose()?
             .unwrap_or(80);
+        if !include_screen(args)? {
+            return Ok(summary(address, &record, placement));
+        }
         let read = core
             .call("terminal.read", json!({"terminal":address,"lines":lines}))
             .map_err(|e| format!("Cannot read {address}: {e:#}"))?;
@@ -259,6 +269,9 @@ mod tests {
 
     #[test]
     fn display_names_cannot_select_an_unintended_agent() {
+        assert!(include_screen(&json!({})).unwrap());
+        assert!(!include_screen(&json!({"screen":false})).unwrap());
+        assert!(include_screen(&json!({"screen":"false"})).is_err());
         for address in ["t7", "remote/t1a", "laptop-wsl/t16h"] {
             assert!(exact_address(address));
         }

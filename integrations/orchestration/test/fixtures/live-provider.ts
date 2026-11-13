@@ -20,7 +20,7 @@ export default function fixture(pi: ExtensionAPI) {
       const text = (message: any) => typeof message?.content === 'string' ? message.content : (message?.content ?? []).filter((part: any) => part.type === 'text').map((part: any) => part.text).join('\n');
       if (process.env.HERDR_FIXTURE_LOG) appendFileSync(process.env.HERDR_FIXTURE_LOG, `${JSON.stringify({ pid: process.pid, model: model.id, context })}\n`);
       void (async () => {
-        if (model.id === 'slow') await new Promise<void>(resolve => {
+        if (model.id === 'slow' && successful) await new Promise<void>(resolve => {
           const timer = setTimeout(resolve, 30000);
           options?.signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
         });

@@ -95,7 +95,7 @@ export class Orchestrator {
       const deadline = Date.now() + this.startupMs;
       do {
         if (signal?.aborted) return { outcome: 'pending', detail: 'Observation cancelled; the agent is left running. Inspect it before further action.' };
-        const agent = await this.client.inspect(target.terminal);
+        const agent = await this.client.inspect(target.terminal, 0, false);
         const outcome = startupOutcome(agent);
         if (outcome !== 'pending') return { outcome, pid: agent.pid, session: agent.session, detail: agent.startupError ?? agent.message };
         await delay(this.pollMs, undefined, { signal }).catch(error => { if (!signal?.aborted) throw error; });
@@ -110,7 +110,7 @@ export class Orchestrator {
       if (fallback && fallback !== model && ['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {
         // The user may have retried the primary after its first error. Re-read
         // it before launching a replacement; a recovered agent stays primary.
-        const current = await this.client.inspect(target.terminal);
+        const current = await this.client.inspect(target.terminal, 0, false);
         outcome = { outcome: startupOutcome(current), pid: current.pid, session: current.session, detail: current.startupError ?? current.message };
         receipt = { ...receipt, ...outcome };
         await this.save(file, receipt);
@@ -137,7 +137,7 @@ export class Orchestrator {
   async act(action, input) {
     const origin = await this.client.context();
     if (input.terminal === origin.terminal) throw new Error('Do not manage this Pi through its own Herdr agent tool');
-    const agent = await this.client.inspect(input.terminal);
+    const agent = await this.client.inspect(input.terminal, 0, false);
     if (!input.pid || !input.session || agent.pid !== input.pid || agent.session !== input.session) throw new Error('The agent identity changed or is unavailable; inspect it and use its current PID and session');
     if (action === 'send' && agent.status === 'blocked') throw new Error('The agent is blocked on a user question; let the user answer it instead of bypassing the prompt');
     if (action === 'send' && agent.startup !== 'started') throw new Error('The agent has not completed startup; give its first message through create and inspect its startup state');

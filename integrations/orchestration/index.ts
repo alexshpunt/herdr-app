@@ -153,7 +153,8 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   }), false, async args => { await client!.context(); return client!.list(args); });
   register('herdr_agent_inspect', 'Use herdr_agent_inspect to read one agent’s state, current PID and session, startup outcome and screen before acting on it.', Type.Object({
     terminal: target.terminal, lines: Type.Optional(Type.Integer({ minimum: 0, maximum: 400, default: 40, description: 'Lines of history above the screen.' })),
-  }), false, async args => { await client!.context(); return client!.inspect(args.terminal, args.lines); });
+    screen: Type.Optional(Type.Boolean({ default: true, description: 'Set false for identity and status only, without waiting for terminal output.' })),
+  }), false, async args => { await client!.context(); return client!.inspect(args.terminal, args.lines, args.screen); });
   register('herdr_agent_create', 'Use herdr_agent_create to start an independent task for the user in a visible Herdr tab. Use replicate for your own subtasks. The first message is submitted at launch; fallback is limited to startup before the first successful assistant response.', Type.Object({
     requestId: Type.String({ minLength: 1, description: 'Stable unique task key, such as its issue ID. Reuse the same key and inputs after interruption; do not choose a new key to retry an unknown launch.' }),
     name: Type.String({ minLength: 1, description: 'Visible agent tab name.' }),

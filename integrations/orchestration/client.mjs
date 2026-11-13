@@ -148,7 +148,7 @@ export class AppClient {
     const [agents, workflow] = await Promise.all([this.command('agent.list', args), this.workflow()]);
     return { ...agents, workflow };
   }
-  async inspect(terminal, lines = 40) { return this.command('agent.inspect', { terminal, lines }); }
+  async inspect(terminal, lines = 40, screen = true) { return this.command('agent.inspect', { terminal, lines, screen }); }
   async send(input) { return this.command('agent.send', input); }
   async stop(input) { return this.command('agent.stop', input); }
   async remove(input) {

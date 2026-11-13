@@ -122,3 +122,11 @@ test('fallback does not remove a primary which the user may resume', () => fixtu
   assert.equal(result.retainedPrimary.terminal, 'm/t2');
   assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
 }));
+test('startup and mutation guards read metadata without capturing a starting terminal', () => fixture(async root => {
+  const api = client();
+  const inspections = [];
+  api.inspect = async (...args) => { inspections.push(args); return record('started'); };
+  await new Orchestrator(api, root).create(input);
+  await new Orchestrator(api, root).act('send', { terminal: 'm/t2', pid: 22, session: 'child', message: 'Follow up' });
+  assert.deepEqual(inspections, [['m/t2', 0, false], ['m/t2', 0, false]]);
+}));

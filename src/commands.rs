@@ -93,7 +93,7 @@ pub const COMMANDS: &[Command] = &[
     // The app.
     // User-owned Pi agents and workflow choices.
     cmd("agent.list", &[opt("space"), opt("machine")], "List Pi agents in the running app, optionally in an exact space or on one machine (empty string: this computer). Returns stable terminal, space and tab ids, current PID and Pi session, and startup state."),
-    cmd("agent.inspect", &[req("terminal"), opt("lines")], "Inspect an exact terminal address: current agent identity and status, plus its screen and up to 400 lines of history (default 80)."),
+    cmd("agent.inspect", &[req("terminal"), opt("lines"), opt("screen")], "Inspect an exact terminal address: current agent identity and status, plus its screen and up to 400 lines of history (default 80). Set screen false for metadata only, without waiting for terminal output."),
     cmd("agent.send", &[req("terminal"), req("pid"), req("session"), req("message")], "Send a message to the inspected Pi agent. Rejects changed identities, agents still starting, and blocked user questions; never forces input."),
     cmd("agent.stop", &[req("terminal"), req("pid"), req("session")], "Interrupt the inspected Pi agent with its stop key. Does not kill it or escalate; returns the observed outcome."),
     cmd("agent.remove", &[req("terminal"), req("pid"), req("session")], "End the inspected Pi agent and remove its dedicated single-pane tab. Rejects changed identities and tabs with sibling panes."),
