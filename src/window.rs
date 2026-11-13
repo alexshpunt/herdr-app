@@ -5002,7 +5002,8 @@ fn new_space_machine(args: &Value, person: bool, model: &Model) -> Option<String
 /// Without either (or when the given one is empty) it is the home of its machine:
 /// this computer's, or on another machine the empty folder its core reads as home.
 fn new_space_folder(given: Option<String>, focused: impl FnOnce() -> Option<String>, other_machine: bool, home: impl FnOnce() -> String) -> String {
-    given.or_else(focused).unwrap_or_else(|| if other_machine { String::new() } else { home() })
+    let folder = given.or_else(focused).unwrap_or_default();
+    if folder.is_empty() && !other_machine { home() } else { folder }
 }
 
 fn home() -> String {
