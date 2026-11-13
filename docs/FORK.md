@@ -34,11 +34,13 @@ from PowerShell, without building:
 powershell -c "irm https://github.com/alexshpunt/herdr-app/releases/latest/download/install.ps1 | iex"
 ```
 
-The installer verifies the build's SHA-256, replaces `%LOCALAPPDATA%\Programs\herdr-app`
-(a running app keeps running until it quits) and installs herdr-core only if
-there is none. These builds do not update themselves, because a release build
-of upstream's updater would replace the fork with the upstream app; run the
-installer again for a newer build.
+The installer verifies the app build's SHA-256 and stages the personal
+herdr-core fork and its checksum from the same GitHub release before replacing
+anything. It installs the core or updates the core the app uses, keeping running
+terminals alive. It replaces `%LOCALAPPDATA%\Programs\herdr-app`; an open app
+keeps running until it quits. These app builds do not update themselves, because
+upstream's updater would replace the fork with the upstream app. Run the
+installer again for newer builds.
 
 Upstream's `release.yml` publishes only for its maintainer and is disabled in
 this fork (`gh workflow disable release.yml`). Do not re-enable it.
@@ -115,15 +117,19 @@ current session in that case.
 A terminal's folder follows what its program reports with OSC 7
 (`file://host/path`), OSC 9;9 or OSC 1337 CurrentDir. Pi's Teleport sends it when a
 session starts and after every move, so an agent moved to another folder or worktree
-appears there in the sidebar, the tab bar and the project context. This also covers
-Windows, where herdr-core sees only the PowerShell that Pi runs in. A report holds
-while the program that was in front when it arrived stays in front, and only when its
-host is empty, `localhost` or the terminal machine's own hostname (asked once per
-machine with `hostname`); a shell inside `ssh` therefore does not move a local
-terminal. In a terminal of this machine, the path must also be in its system's form:
-a Unix path from WSL started in a Windows terminal is ignored. Otherwise the folder of
-the process in front applies, as before. The core replays the last report when the app
-reattaches, so it survives an app restart.
+appears there in the sidebar, the tab bar and the project context. Teleport identifies
+its reporting process with a holder-issued token. Herdr asks the terminal's core to
+verify the process instance and that it is in front, including through shell wrappers.
+Herdr hides the report when the core cannot verify it and drops it when the confirmed
+process leaves the foreground. Update the core on the terminal's machine and reopen
+terminals with older holders; identified reports without verification are not shown.
+Other programs' reports hold while the program in front when they arrived stays in front.
+A report applies only when its host is empty, `localhost` or the terminal machine's
+own hostname (asked once per machine with `hostname`); a shell inside `ssh` therefore
+does not move a local terminal. In a terminal of this machine, the path must also be
+in its system's form: a Unix path from WSL started in a Windows terminal is ignored.
+Otherwise the folder of the process in front applies, as before. The core replays the
+last report when the app reattaches, so it survives an app restart.
 
 ## Native view limits
 

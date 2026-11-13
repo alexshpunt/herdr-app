@@ -419,6 +419,8 @@ pub struct AppWindow {
     cwds: HashMap<String, String>,
     /// The folders programs reported themselves (OSC 7), by address.
     reported: HashMap<String, Reported>,
+    /// Monotonic request identity prevents late replies from reviving another report.
+    next_report_check: u64,
     /// Each machine's own hostname (None: this one), to check a report's host.
     hostnames: HashMap<Option<String>, Hostname>,
     /// When each terminal's repo and branch were last read, and what it was doing.
@@ -525,6 +527,7 @@ impl AppWindow {
             listed_once: false,
             cwds: HashMap::new(),
             reported: HashMap::new(),
+            next_report_check: 0,
             hostnames: HashMap::new(),
             folders_checked: HashMap::new(),
             born: RefCell::new(HashMap::new()),
@@ -825,6 +828,10 @@ impl AppWindow {
         crate::pi_install::start(core.clone(), None);
         self.core_generation += 1;
         self.app_mailbox.reconnected();
+        for report in self.reported.values_mut().filter(|r| r.report.pid.is_some()) {
+            report.verification.disconnected();
+            report.last_check = None;
+        }
         self.documents_watching = false;
         for (machine, slot) in &mut self.documents {
             slot.available = false;
@@ -2276,12 +2283,13 @@ impl AppWindow {
     fn folder_reported(&mut self, addr: &str, report: Option<crate::folder_report::Report>, cx: &mut Context<Self>) {
         let news = match report {
             Some(report) => {
-                let pid = self.live.get(addr).and_then(front_pid);
-                let report = Reported { report, pid };
-                // Shells repeat it at every prompt.
-                let news = self.reported.get(addr) != Some(&report);
-                self.reported.insert(addr.to_owned(), report);
-                news
+                // Repeated identical reports keep the observation already in flight.
+                if self.reported.get(addr).is_some_and(|r| r.report == report) {
+                    false
+                } else {
+                    self.reported.insert(addr.to_owned(), Reported::new(report, self.live.get(addr)));
+                    true
+                }
             }
             None => self.reported.remove(addr).is_some(),
         };
@@ -2301,17 +2309,33 @@ impl AppWindow {
         }
     }
 
-    /// The reported folders that still hold, by address: the program in front
-    /// is the one that was when the report came (a shell's report doesn't
-    /// outlive it into the next program, nor the next program's into the
-    /// shell), and it named the terminal's own machine, not one it reached
-    /// through ssh. A machine's hostname is asked for once.
+    /// Reported folders whose process is still in front and whose host is
+    /// the terminal's machine. Legacy reports bind to the observed foreground;
+    /// identified reports are checked with the holder.
     fn reported_folders(&mut self, cx: &mut Context<Self>) -> HashMap<String, String> {
         let live = &self.live;
         self.reported.retain(|addr, r| r.still_in_front(live.get(addr)));
+        let mut checks = Vec::new();
+        for (addr, r) in &mut self.reported {
+            let (Some(pid), Some(token)) = (r.report.pid, r.report.token.as_ref()) else { continue };
+            if r.last_check.is_some_and(|at| at.elapsed() < Duration::from_millis(500)) { continue; }
+            self.next_report_check = self.next_report_check.wrapping_add(1);
+            let id = self.next_report_check;
+            if r.verification.begin(id) {
+                r.last_check = Some(Instant::now());
+                checks.push((addr.clone(), pid, token.clone(), id));
+            }
+        }
+        for (addr, pid, token, id) in checks {
+            self.check_reporter(addr, pid, token, id, cx);
+        }
         let mut held = HashMap::new();
         let mut ask = HashSet::new();
         for (addr, r) in &self.reported {
+            // Identified reporters need a live process observation from core.
+            if !r.confirmed() {
+                continue;
+            }
             let machine = addr.split_once('/').map(|(m, _)| m.to_owned());
             // A program in a local terminal that runs another system, such as
             // WSL started from PowerShell: its path means nothing here.
@@ -2336,6 +2360,30 @@ impl AppWindow {
             self.ask_hostname(machine, cx);
         }
         held
+    }
+
+    fn check_reporter(&mut self, addr: String, pid: u64, token: String, id: u64, cx: &mut Context<Self>) {
+        let core = self.core.clone();
+        let generation = self.core_generation;
+        cx.spawn(async move |this, cx| {
+            let address = addr.clone();
+            let result = cx.background_executor().spawn(async move {
+                core.call_timeout(
+                    "terminal.process",
+                    json!({"terminal": address, "pid": pid, "token": token}),
+                    Duration::from_secs(1),
+                ).ok().and_then(|reply| reply.get("in_front").and_then(Value::as_bool))
+            }).await;
+            let _ = this.update(cx, |this, cx| {
+                if generation != this.core_generation { return; }
+                let Some(report) = this.reported.get_mut(&addr) else { return };
+                let before = report.confirmed();
+                let keep = report.verification.finish(id, result);
+                let changed = !keep || before != report.confirmed();
+                if !keep { this.reported.remove(&addr); }
+                if changed { this.folders_moved(cx); }
+            });
+        }).detach();
     }
 
     fn ask_hostname(&mut self, machine: Option<String>, cx: &mut Context<Self>) {
@@ -2438,6 +2486,7 @@ impl AppWindow {
             // stream that just broke (the core died) says neither.
             let closed = matches!(why.as_str(), "exited" | "killed" | "finished");
             if closed && self.model.address_of(block).as_deref() == Some(t.address.as_str()) {
+                self.reported.remove(&t.address);
                 self.model.remove_pane(block);
                 return self.sync(window, cx);
             }
@@ -2652,6 +2701,7 @@ impl AppWindow {
                 let mut changed = false;
                 for (pane, addr) in closed {
                     if this.model.address_of(&pane).as_deref() == Some(&addr) {
+                        this.reported.remove(&addr);
                         this.notify_launch_failure(&addr, window, cx);
                         this.model.remove_pane(&pane);
                         changed = true;
@@ -5156,20 +5206,28 @@ struct FolderCheck {
 #[derive(Debug, PartialEq)]
 struct Reported {
     report: crate::folder_report::Report,
-    /// None: the terminal wasn't listed yet; its first listing names the program.
+    /// For a legacy report, the first known foreground.
     pid: Option<u64>,
+    verification: crate::folder_report::Verification,
+    last_check: Option<Instant>,
 }
 
 impl Reported {
-    /// Whether the program in front is still the one that reported. A terminal
-    /// that isn't listed yet (`rec` None) keeps its report for its first listing.
+    fn new(report: crate::folder_report::Report, rec: Option<&Value>) -> Self {
+        let pid = rec.and_then(front_pid);
+        Self { report, pid, verification: Default::default(), last_check: None }
+    }
+
+    fn confirmed(&self) -> bool {
+        self.report.pid.is_none() || self.verification.confirmed
+    }
+
+    /// A missing listing or PID does not establish that a legacy reporter changed.
     fn still_in_front(&mut self, rec: Option<&Value>) -> bool {
-        let Some(rec) = rec else { return self.pid.is_none() };
-        let front = front_pid(rec);
-        if self.pid.is_none() {
-            self.pid = front;
-        }
-        self.pid == front
+        if self.report.pid.is_some() { return true; }
+        let Some(front) = rec.and_then(front_pid) else { return true };
+        if self.pid.is_none() { self.pid = Some(front); }
+        self.pid == Some(front)
     }
 }
 
@@ -5700,21 +5758,33 @@ mod tests {
     fn a_reported_folder_holds_while_its_program_stays_in_front() {
         use serde_json::json;
         let report = || crate::folder_report::parse("file:///src/feature").unwrap();
-        let mut shell = super::Reported { report: report(), pid: Some(10) };
-        // Windows: the core names the PowerShell that Pi runs in, wherever Pi moves.
+        let mut shell = super::Reported::new(report(), Some(&json!({ "pid": 10 })));
+        // A legacy shell report holds while the shell stays in front.
         assert!(shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 10, "cwd": "C:\\old" } }))));
         assert!(shell.still_in_front(Some(&json!({ "pid": 10 }))));
         // Another program came to the front: the report is over.
         assert!(!shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 11 } }))));
-        // The terminal is gone.
-        assert!(!shell.still_in_front(None));
+        // A missing or incomplete listing does not prove the terminal ended.
+        assert!(shell.still_in_front(None));
+        assert!(shell.still_in_front(Some(&json!({ "foreground": { "pid": null } }))));
+        assert!(shell.still_in_front(Some(&json!({ "pid": 10 }))));
+        assert!(!shell.still_in_front(Some(&json!({ "pid": 10, "foreground": { "pid": 11 } }))));
         // Reported before the terminal was listed: it waits, and its first listing names the program.
-        let mut early = super::Reported { report: report(), pid: None };
+        let mut early = super::Reported::new(report(), None);
         assert!(early.still_in_front(None));
         assert!(early.still_in_front(Some(&json!({ "pid": 20 }))));
         assert!(!early.still_in_front(Some(&json!({ "pid": 20, "foreground": { "pid": 21 } }))));
     }
 
+    #[test]
+    fn pid_alone_never_confirms_a_report() {
+        use serde_json::json;
+        let report = crate::folder_report::parse("file://box/src?herdr-pid=21").unwrap();
+        let mut r = super::Reported::new(report, Some(&json!({ "foreground": { "pid": 21 } })));
+        assert!(!r.confirmed());
+        assert!(r.still_in_front(Some(&json!({ "foreground": { "pid": 21 } }))));
+        assert!(!r.confirmed());
+    }
     #[test]
     fn going_back_into_a_split_column_takes_its_top_pane_whatever_the_fractions() {
         let r = |x: f32, y: f32, w: f32, h: f32| gpui::Bounds::new(point(px(x), px(y)), size(px(w), px(h)));

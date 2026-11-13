@@ -3,11 +3,10 @@
 #   powershell -c "irm https://github.com/alexshpunt/herdr-app/releases/latest/download/install.ps1 | iex"
 #
 # The app goes into %LOCALAPPDATA%\Programs\herdr-app (added to your PATH for
-# `herdr-app`), Herdr into the Start menu. herdr-core is installed from the
-# upstream installer only if none is there yet. Running it again updates the
-# app; an open one keeps running until it quits. No admin needed. The build
-# does not update itself: run this again for a newer one. HERDR_FORK_RELEASE_URL
-# points elsewhere (tests).
+# `herdr-app`), Herdr into the Start menu. The matching herdr-core fork is
+# installed or updated as well; running terminals stay alive. An open app keeps
+# running until it quits. No admin needed. Run this again for newer builds.
+# HERDR_FORK_RELEASE_URL and HERDR_CORE_FORK_RELEASE_URL select test mirrors.
 
 # Its own scope: under `irm | iex` it would otherwise set the caller's variables.
 & {
@@ -17,7 +16,151 @@ $ProgressPreference = "SilentlyContinue"
 # throw, not exit: under `irm | iex`, exit would close the person's window.
 function Fail($why) { throw "herdr: $why" }
 
+function Get-ForkSha256($path) {
+    $stream = [IO.File]::OpenRead($path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) }
+    finally { $stream.Close(); $sha.Dispose() }
+}
+
+# Use one immutable release for both the archive and its checksum.
+function ForkCoreReleaseBase($release) {
+    if ($release.tag_name -notmatch '^fork-[0-9]+-[0-9]+$') { Fail 'latest core release is not a fork build' }
+    return "https://github.com/alexshpunt/herdr-core/releases/download/$($release.tag_name)"
+}
+# Download, verify and check the entire core release before changing either installation.
+function Stage-ForkCore($base, $tmp, $tar) {
+    $name = 'herdr-core-windows-x86_64.zip'
+    $zip = Join-Path $tmp 'core.zip'
+    $checksum = Join-Path $tmp 'core.sha256'
+    curl.exe -fsSL "$base/$name.sha256" -o $checksum
+    if ($LASTEXITCODE) { Fail "cannot download $base/$name.sha256" }
+    $want = ((Get-Content -Raw -LiteralPath $checksum) -split '\s+')[0].ToLowerInvariant()
+    if ($want -notmatch '^[0-9a-f]{64}$') { Fail 'invalid core checksum' }
+    curl.exe -fsSL "$base/$name" -o $zip
+    if ($LASTEXITCODE) { Fail "cannot download $base/$name" }
+    if ((Get-ForkSha256 $zip) -ne $want) { Fail 'core checksum mismatch' }
+    $entries = & $tar -tf $zip
+    if ($LASTEXITCODE) { Fail 'cannot inspect core archive' }
+    foreach ($entry in $entries) {
+        if ($entry -match '^[/\\]' -or $entry -match '^[a-zA-Z]:' -or ($entry -split '[/\\]') -contains '..') {
+            Fail 'unsafe path in core archive'
+        }
+    }
+    $stage = Join-Path $tmp 'core'
+    New-Item -ItemType Directory -Force $stage | Out-Null
+    & $tar -xf $zip -C $stage
+    $new = Join-Path $stage 'herdr-core.exe'
+    if ($LASTEXITCODE -or -not (Test-Path -LiteralPath $new -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $stage 'conpty\conpty.dll') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $stage 'conpty\x64\OpenConsole.exe') -PathType Leaf)) {
+        Fail 'core archive is incomplete'
+    }
+    $version = & $new --version
+    if ($LASTEXITCODE -or -not ($version -match '^hc ')) { Fail 'downloaded core does not run' }
+    return $stage
+}
+
+# Follow the app's configured-core and PATH order; refuse an ambiguous hc-only install.
+function Find-ForkCore($dir, $configured, $path) {
+    $workingCore = {
+        param($candidate)
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $false }
+        try {
+            $version = & $candidate --version 2>$null
+            return ($LASTEXITCODE -eq 0 -and $version -match '^hc ')
+        } catch { return $false }
+    }
+    if ($configured) {
+        if ($configured.StartsWith('~/')) { $configured = Join-Path $env:USERPROFILE $configured.Substring(2) }
+        if (-not [IO.Path]::IsPathRooted($configured)) { Fail 'configured core path must be absolute before updating' }
+        if (-not (& $workingCore $configured)) { Fail "configured core does not run: $configured" }
+        if ([IO.Path]::GetFileName($configured) -ine 'herdr-core.exe') { Fail "configured core must name herdr-core.exe: $configured" }
+        return $configured
+    }
+    foreach ($folder in ($path -split ';' | Where-Object { $_ })) {
+        foreach ($name in @('herdr-core.exe', 'hc.exe')) {
+            $candidate = [IO.Path]::Combine($folder, $name)
+            if (& $workingCore $candidate) {
+                if ($name -eq 'hc.exe') { Fail "existing core $candidate has no herdr-core.exe beside it" }
+                return $candidate
+            }
+        }
+    }
+    # Match the app's remaining usual locations before a custom destination.
+    $usual = @((Join-Path $env:LOCALAPPDATA 'Programs\herdr-core'), (Join-Path $env:USERPROFILE '.cargo\bin'), $dir)
+    foreach ($folder in $usual) {
+        foreach ($name in @('herdr-core.exe', 'hc.exe')) {
+            $candidate = Join-Path $folder $name
+            if (& $workingCore $candidate) {
+                if ($name -eq 'hc.exe') { Fail "existing core $candidate has no herdr-core.exe beside it" }
+                return $candidate
+            }
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path $dir 'herdr-core.exe') -PathType Leaf) { Fail "existing core does not run: $dir" }
+    return $null
+}
+# A missing core can be started by update. Give it the login environment,
+# not variables injected into the installer by the current agent.
+function Invoke-ForkCoreUpdate($existing, $new) {
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $existing
+    $start.Arguments = 'update --from "' + $new + '"'
+    $start.UseShellExecute = $false
+    $child = $start.EnvironmentVariables
+    $child.Clear()
+    $machine = [Environment]::GetEnvironmentVariables('Machine')
+    $user = [Environment]::GetEnvironmentVariables('User')
+    foreach ($variables in @($machine, $user)) {
+        foreach ($key in $variables.Keys) {
+            if ($key -ine 'Path') { $child[$key] = [Environment]::ExpandEnvironmentVariables([string]$variables[$key]) }
+        }
+    }
+    $child['Path'] = [Environment]::ExpandEnvironmentVariables(([string]$machine['Path'] + ';' + [string]$user['Path']))
+    # These describe the current Windows login or explicitly select an isolated core.
+    foreach ($key in @('SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'HC_SESSION', 'HC_SOCKET')) {
+        $value = [Environment]::GetEnvironmentVariable($key, 'Process')
+        if ($null -ne $value) { $child[$key] = $value }
+    }
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { Fail "updating $existing failed" }
+    } finally { $process.Dispose() }
+}
+# Replace an existing core through its updater, which keeps its terminals running.
+function Install-ForkCore($source, $dir, $existing) {
+    $new = Join-Path $source 'herdr-core.exe'
+    if ($existing) {
+        Invoke-ForkCoreUpdate $existing $new
+    } else {
+        if (Test-Path -LiteralPath $dir) { Fail "core destination already exists: $dir" }
+        $parent = Split-Path -Parent $dir
+        New-Item -ItemType Directory -Force $parent | Out-Null
+        $stage = "$dir.install-$([guid]::NewGuid().ToString('N'))"
+        try {
+            New-Item -ItemType Directory $stage | Out-Null
+            Copy-Item -LiteralPath $new -Destination $stage
+            Copy-Item -LiteralPath (Join-Path $source 'conpty') -Destination $stage -Recurse
+            $notices = Join-Path $source 'THIRD-PARTY-NOTICES'
+            if (Test-Path -LiteralPath $notices) { Copy-Item -LiteralPath $notices -Destination $stage }
+            New-Item -ItemType HardLink -Path (Join-Path $stage 'hc.exe') -Target (Join-Path $stage 'herdr-core.exe') | Out-Null
+            Move-Item -LiteralPath $stage -Destination $dir
+        } finally {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 $base = if ($env:HERDR_FORK_RELEASE_URL) { $env:HERDR_FORK_RELEASE_URL.TrimEnd("/") } else { "https://github.com/alexshpunt/herdr-app/releases/latest/download" }
+$coreBase = if ($env:HERDR_CORE_FORK_RELEASE_URL) {
+    $env:HERDR_CORE_FORK_RELEASE_URL.TrimEnd('/')
+} else {
+    $release = Invoke-RestMethod 'https://api.github.com/repos/alexshpunt/herdr-core/releases/latest' -Headers @{ 'User-Agent' = 'herdr-app-installer' }
+    ForkCoreReleaseBase $release
+}
+$coreDir = if ($env:HC_INSTALL_DIR) { $env:HC_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\herdr-core' }
 $dir = Join-Path $env:LOCALAPPDATA "Programs\herdr-app"
 $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if ($arch -ne "AMD64") { Fail "no build for $arch Windows (x64 only)" }
@@ -44,6 +187,25 @@ try {
     & $tar -xzf "$tmp\app.tar.gz" -C $tmp
     if ($LASTEXITCODE -or -not (Test-Path "$tmp\herdr-app\herdr-app.exe")) { Fail "the download holds no complete app" }
 
+    Write-Host 'Downloading the latest herdr-core fork build...'
+    $coreStage = Stage-ForkCore $coreBase $tmp $tar
+    $appHome = if ($env:HERDR_APP_HOME) { $env:HERDR_APP_HOME } elseif ($env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME 'herdr-app' } else { Join-Path $env:USERPROFILE '.config\herdr-app' }
+    $settingsFile = Join-Path $appHome 'settings.json'
+    $configured = $null
+    if (Test-Path -LiteralPath $settingsFile -PathType Leaf) {
+        try { $configured = (Get-Content -LiteralPath $settingsFile -Raw | ConvertFrom-Json).core }
+        catch { Fail "cannot read $settingsFile before choosing a core" }
+    }
+    $coreExe = Find-ForkCore $coreDir $configured $env:Path
+    if ($coreExe) {
+        $foundDir = Split-Path -Parent $coreExe
+        if ($env:HC_INSTALL_DIR -and [IO.Path]::GetFullPath($foundDir).TrimEnd('\') -ine [IO.Path]::GetFullPath($coreDir).TrimEnd('\')) {
+            Fail "the app's core is at $coreExe, outside HC_INSTALL_DIR"
+        }
+        $coreDir = $foundDir
+    }
+    Install-ForkCore $coreStage $coreDir $coreExe
+
     # A running app's folder can be renamed, not deleted: the old one goes
     # now if it can, else on the next install.
     New-Item -ItemType Directory -Force (Split-Path $dir) | Out-Null
@@ -64,28 +226,26 @@ try {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
     try {
         $raw = [string]$key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        $listed = $raw -split ";" | Where-Object { $_.Trim().TrimEnd("\") -ieq $dir.TrimEnd("\") }
-        if (-not $listed) {
-            $kind = if ($key.GetValueNames() -contains "Path") { $key.GetValueKind("Path") } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
-            $key.SetValue("Path", $(if ($raw) { "$($raw.TrimEnd(';'));$dir" } else { $dir }), $kind)
+        $changed = $false
+        foreach ($path in @($dir, $coreDir)) {
+            $listed = $raw -split ';' | Where-Object { $_.Trim().TrimEnd('\') -ieq $path.TrimEnd('\') }
+            if (-not $listed) {
+                $raw = if ($raw) { "$($raw.TrimEnd(';'));$path" } else { $path }
+                $changed = $true
+            }
+        }
+        if ($changed) {
+            $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+            $key.SetValue('Path', $raw, $kind)
             # Setting any user variable tells running programs the environment changed.
-            [Environment]::SetEnvironmentVariable("HERDR_INSTALLING", "1", "User")
-            [Environment]::SetEnvironmentVariable("HERDR_INSTALLING", $null, "User")
+            [Environment]::SetEnvironmentVariable('HERDR_INSTALLING', '1', 'User')
+            [Environment]::SetEnvironmentVariable('HERDR_INSTALLING', $null, 'User')
         }
     } finally {
         $key.Close()
     }
-    if (($env:Path -split ";") -notcontains $dir) { $env:Path += ";$dir" }
-
-    # The core is upstream's own release; installed only if there is none yet.
-    # One that's already there is left alone; the app updates it.
-    $core = Join-Path $env:LOCALAPPDATA "Programs\herdr-core\herdr-core.exe"
-    if (-not (Test-Path $core) -and -not (Get-Command herdr-core -ErrorAction SilentlyContinue)) {
-        try {
-            Invoke-RestMethod "https://releases.herdr.dev/core/install.ps1" | Invoke-Expression
-        } catch {
-            Write-Host "herdr-core didn't install; Herdr will offer it when it opens."
-        }
+    foreach ($path in @($dir, $coreDir)) {
+        if (($env:Path -split ';') -notcontains $path) { $env:Path += ";$path" }
     }
 
     Write-Host "Herdr is installed. Quit and reopen it to use the new build, or run: herdr-app"
