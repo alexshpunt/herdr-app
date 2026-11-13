@@ -2534,7 +2534,7 @@ impl AppWindow {
         let here = || self.model.focused_pane().and_then(|p| self.model.address_of(&p))
             .filter(|a| a.split_once('/').map(|(m, _)| m) == on)
             .and_then(|a| self.cwds.get(&a).cloned());
-        let folder = new_space_folder(folder, here, on.is_some(), home);
+        let folder = new_terminal_folder(folder, here, on.is_some(), home);
         let (space, ctx, pane) = (self.model.fresh_id_on("sp", on), self.model.fresh_id_on("tb", on), self.model.fresh_id_on("p", on));
         let size = self.initial_size(&Tab::new(&ctx, "", &pane, "").root, &pane, window);
         let (addr, folder) = self.spawn(Self::agent_argv(argv.clone(), task, on).or(argv), folder, follow, &space, &ctx, on, size, window)?;
@@ -2554,7 +2554,7 @@ impl AppWindow {
         }
         let follow = folder.is_none();
         let on = self.machine_of(&space);
-        let folder = new_space_folder(folder, || Some(self.folder_for(&space)), on.is_some(), home);
+        let folder = new_terminal_folder(folder, || Some(self.folder_for(&space)), on.is_some(), home);
         let (ctx, pane) = (self.model.fresh_id_on("tb", on.as_deref()), self.model.fresh_id_on("p", on.as_deref()));
         let size = self.initial_size(&Tab::new(&ctx, "", &pane, "").root, &pane, window);
         let (addr, _) = self.spawn(Self::agent_argv(argv.clone(), task, on.as_deref()).or(argv), folder, follow, &space, &ctx, on.as_deref(), size, window)?;
@@ -2588,7 +2588,7 @@ impl AppWindow {
         let follow = folder.is_none();
         // A split stays on the machine of the pane it splits (else its space's).
         let on = target_addr.as_ref().and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| self.machine_of(&space));
-        let cwd = new_space_folder(folder, || Some(target_addr.as_ref().and_then(|a| self.cwds.get(a).cloned()).unwrap_or(fallback)), on.is_some(), home);
+        let cwd = new_terminal_folder(folder, || Some(target_addr.as_ref().and_then(|a| self.cwds.get(a).cloned()).unwrap_or(fallback)), on.is_some(), home);
         let new = self.model.fresh_id_on("p", on.as_deref());
         let mut root = self.model.tab(&ctx).expect("target tab").root.clone();
         root.split(&target, axis, Node::block(new.clone(), Content::Terminal { terminal: String::new() }), "initial-size".into());
@@ -5011,10 +5011,10 @@ fn new_space_machine(args: &Value, person: bool, model: &Model) -> Option<String
         .filter(|m| !m.is_empty()).map(str::to_owned)
 }
 
-/// The folder a new space starts in: the one given, else the focused terminal's.
+/// The folder a new terminal starts in: the one given, else the focused terminal's.
 /// Without either (or when the given one is empty) it is the home of its machine:
 /// this computer's, or on another machine the empty folder its core reads as home.
-fn new_space_folder(given: Option<String>, focused: impl FnOnce() -> Option<String>, other_machine: bool, home: impl FnOnce() -> String) -> String {
+fn new_terminal_folder(given: Option<String>, focused: impl FnOnce() -> Option<String>, other_machine: bool, home: impl FnOnce() -> String) -> String {
     let folder = given.or_else(focused).unwrap_or_default();
     if folder.is_empty() && !other_machine { home() } else { folder }
 }
@@ -5485,7 +5485,7 @@ mod tests {
     fn a_new_spaces_empty_folder_is_the_home_of_its_machine() {
         let home = || "/home/me".to_string();
         let new = |given: Option<&str>, focused: Option<&str>, other_machine: bool| {
-            super::new_space_folder(given.map(str::to_owned), || focused.map(str::to_owned), other_machine, home)
+            super::new_terminal_folder(given.map(str::to_owned), || focused.map(str::to_owned), other_machine, home)
         };
         // This computer: an empty folder is its home, like an omitted one with no focused terminal.
         assert_eq!(new(Some(""), None, false), "/home/me");
