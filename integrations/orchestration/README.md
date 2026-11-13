@@ -24,7 +24,7 @@ Create saves a write-ahead receipt under the Pi agent directory's `herdr-orchest
 
 Create observes startup for up to 90 seconds. Only a verified first-response failure or early exit permits one configured fallback attempt. A blocked, cancelled, disconnected or timed-out observation leaves the existing agent intact and reports its state. The primary is rechecked before fallback. A recovered primary is not replaced. A failed primary stays available for inspection rather than being removed automatically: the user may resume it while fallback starts. Use explicit removal only at the user's request.
 
-Workflow settings dock beside the entire App layout. Their compact controls follow the Spaces sidebar style. Primary model, fallback model and thinking level save on selection, without a Refresh button or footer. List returns those persisted profiles alongside agent identities. Create uses the selected profile unless explicit overrides are supplied.
+Workflow settings open from the toolbar button and dock beside the active-tab workspace, below the global App header. Their compact controls follow the Spaces sidebar style. Primary model, fallback model and thinking level save on selection, without a Refresh button or footer. List returns those persisted profiles alongside agent identities. Create uses the selected profile unless explicit overrides are supplied.
 
 ## Checks
 
@@ -42,7 +42,7 @@ For installed-App verification without paid inference, copy `test/fixtures/live-
 
 In the installed App, open Workflow for a machine with a live Pi catalog:
 
-1. Open and close Workflow. Confirm the whole layout, including its header, narrows beside the dock and regains its width on close.
+1. Use the toolbar button to open and close Workflow. Confirm the terminal workspace narrows beside the dock and regains its width on close. The global header, its actions and window controls keep their width above the dock; the dock aligns with the workspace's top and bottom.
 2. Open a primary model picker. Confirm model names and IDs are visible, then scroll to the last choice. Its scrollbar stays visible while the list overflows.
 3. Search for a model by name or ID. Confirm filtering, an empty result, and clearing the search all update the visible list.
 4. Select a different model and thinking level. Close and reopen Workflow, then restart only the App and confirm both choices persist. Restore the original profile afterward.

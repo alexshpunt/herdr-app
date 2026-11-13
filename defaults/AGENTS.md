@@ -707,7 +707,8 @@ The main ones:
   changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
   `workflow.models {machine?}` reads the live Pi model pickers for one machine (default: the selected space's;
   empty string: this computer) and the extension installation status. A missing catalog is an explicit error,
-  not evidence that no models exist. `workflow.open` toggles a dock beside the entire app layout. Primary, fallback and thinking selections save automatically.
+  not evidence that no models exist. `workflow.open` toggles a dock beside the active-tab workspace, below the unchanged app header.
+  Its toolbar button opens the same panel. Primary, fallback and thinking selections save automatically.
   The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
   an agent that produced a successful assistant response never switches models automatically.
   The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
@@ -1092,7 +1093,8 @@ All of it is in `herdr.d.ts`. In short:
   do not invent picker choices when a Pi has not published them.
 - Overlays: `openOverlay({ mod, props, kind: "dialog" | "popup" | "window" | "dock", width, height, at, frame })`
   returns an id; the mod gets `props().overlay` and closes itself with
-  `closeOverlay(id)`; Esc closes the top dialog or popup. A dock reserves its width beside the entire layout and fills its height; it does not hold the keyboard or change the saved layout. `frame: "none"`
+  `closeOverlay(id)`; Esc closes the top dialog or popup. A dock reserves width beside the first active-tab workspace, keeping its header and status outside.
+  Layouts without an active-tab block dock beside the root. A dock does not hold the keyboard or change the saved layout. `frame: "none"`
   drops Herdr's border, corners and shadow so the mod draws its own.
   `notify({ title, body, level, icon, timeout })` posts a notification, drawn
   by the layout-chosen mod (default: `toast`).

@@ -4681,21 +4681,24 @@ impl AppWindow {
                     .child("no agents yet. start claude, codex or pi in a terminal")
                     .into_any_element(),
             },
-            Content::Context { .. } => match self.model.active_tab() {
-                Some(c) => self.render_node(c.shown(), focused, self.pane_frame(), cx),
-                None if self.documents.get("").is_some_and(|s| s.layout() == "loading") => div().size_full().into_any_element(),
-                None => {
-                    let key = crate::keys::listing().into_iter().find(|(_, _, a)| a == "space.new").map(|(_, k, _)| format!(" ({k})"));
-                    div()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(c("dim"))
-                        .child(format!("No space open. Make one{}.", key.unwrap_or_default()))
-                        .into_any_element()
-                }
-            },
+            Content::Context { .. } => {
+                let body = match self.model.active_tab() {
+                    Some(c) => self.render_node(c.shown(), focused, self.pane_frame(), cx),
+                    None if self.documents.get("").is_some_and(|s| s.layout() == "loading") => div().size_full().into_any_element(),
+                    None => {
+                        let key = crate::keys::listing().into_iter().find(|(_, _, a)| a == "space.new").map(|(_, k, _)| format!(" ({k})"));
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(c("dim"))
+                            .child(format!("No space open. Make one{}.", key.unwrap_or_default()))
+                            .into_any_element()
+                    }
+                };
+                if self.dock_host() == Some(n.id.as_str()) { self.render_workspace(body, cx) } else { body }
+            }
         }
     }
 
@@ -4859,7 +4862,20 @@ impl AppWindow {
         }
     }
 
-    fn render_docks(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn dock_host(&self) -> Option<&str> {
+        self.chrome.visible_blocks().into_iter()
+            .find(|node| matches!(node.content(), Some(Content::Context { .. })))
+            .map(|node| node.id.as_str())
+    }
+
+    fn render_workspace(&self, body: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        div().size_full().flex()
+            .child(div().id("herdr-workspace").debug_selector(|| "herdr-workspace".into())
+                .flex_1().min_w_0().h_full().flex().child(body))
+            .children(self.render_docks(cx)).into_any_element()
+    }
+
+    fn render_docks(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.overlays.iter().filter(|o| o.kind == OverlayKind::Dock).map(|o| {
             let id = format!("dock-{}", o.id);
             let selector = id.clone();
@@ -4869,7 +4885,9 @@ impl AppWindow {
             };
             div().id(SharedString::from(id)).debug_selector(move || selector.into())
                 .track_focus(&o.focus)
-                .w(overlay_span(o.size.width, viewport.width).min(viewport.width))
+                .when(o.size.width <= 1.0, |d| d.w(relative(o.size.width)))
+                .when(o.size.width > 1.0, |d| d.w(settings::z(o.size.width)))
+                .max_w_full()
                 .h_full().min_h_0().flex_none().flex()
                 .when(!o.bare, |d| d.bg(c("popover")).border_l_1().border_color(c("border")))
                 .overflow_hidden().occlude()
@@ -5540,11 +5558,7 @@ impl Render for AppWindow {
         }
         let focused = self.focused_path(window, cx);
         let tree = self.render_node(&self.chrome, &focused, None, cx);
-        let docks = self.render_docks(window.viewport_size(), cx);
-        let tree = div().size_full().flex()
-            .child(div().id("herdr-layout").debug_selector(|| "herdr-layout".into())
-                .flex_1().min_w_0().h_full().child(tree))
-            .children(docks).into_any_element();
+        let tree = if self.dock_host().is_none() { self.render_workspace(tree, cx) } else { tree };
         let tree = self.window_frame(tree, window, cx);
         let overlays = self.render_overlays(window.viewport_size(), cx);
         let tracker = self.float_tracker(cx);
@@ -6106,7 +6120,7 @@ mod tests {
             return;
         }
         let (view, cx) = open_window(cx, "probe", "", json!({
-            "id": "root", "type": "row", "titlebar": "layout", "children": [
+            "id": "root", "type": "row", "titlebar": "none", "children": [
                 {"id":"sidebar", "type":"block", "size":{"px":100}, "content":{"mod":"probe"}},
                 {"id":"work", "type":"column", "children":[
                     {"id":"toolbar", "type":"block", "size":{"px":42}, "content":{"mod":"probe"}},
@@ -6115,8 +6129,10 @@ mod tests {
                 ]}
             ]
         }));
+        cx.refresh().unwrap();
         cx.run_until_parked();
         let viewport = cx.update(|window, _| window.viewport_size());
+        assert!(view.update(cx, |this, _| this.layout_file_ok), "the fixture layout must load without a default fallback");
         let original = view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap());
         let bars = view.update(cx, |this, _| {
             let bounds = this.bounds.borrow();
