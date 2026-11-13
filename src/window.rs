@@ -2521,7 +2521,7 @@ impl AppWindow {
         let here = || self.model.focused_pane().and_then(|p| self.model.address_of(&p))
             .filter(|a| a.split_once('/').map(|(m, _)| m) == on)
             .and_then(|a| self.cwds.get(&a).cloned());
-        let folder = folder.or_else(here).unwrap_or_else(|| if on.is_some() { String::new() } else { home() });
+        let folder = new_space_folder(folder, here, on.is_some(), home);
         let (space, ctx, pane) = (self.model.fresh_id_on("sp", on), self.model.fresh_id_on("tb", on), self.model.fresh_id_on("p", on));
         let size = self.initial_size(&Tab::new(&ctx, "", &pane, "").root, &pane, window);
         let (addr, folder) = self.spawn(Self::agent_argv(argv.clone(), task, on).or(argv), folder, follow, &space, &ctx, on, size, window)?;
@@ -4998,6 +4998,13 @@ fn new_space_machine(args: &Value, person: bool, model: &Model) -> Option<String
         .filter(|m| !m.is_empty()).map(str::to_owned)
 }
 
+/// The folder a new space starts in: the one given, else the focused terminal's.
+/// Without either (or when the given one is empty) it is the home of its machine:
+/// this computer's, or on another machine the empty folder its core reads as home.
+fn new_space_folder(given: Option<String>, focused: impl FnOnce() -> Option<String>, other_machine: bool, home: impl FnOnce() -> String) -> String {
+    given.or_else(focused).unwrap_or_else(|| if other_machine { String::new() } else { home() })
+}
+
 fn home() -> String {
     mods::home().to_string_lossy().into_owned()
 }
@@ -5458,6 +5465,26 @@ mod tests {
         assert_eq!(super::new_space_machine(&json!({}), true, &model), None);
         model.active = Some("remote".into());
         assert_eq!(super::new_space_machine(&json!({}), true, &model).as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn a_new_spaces_empty_folder_is_the_home_of_its_machine() {
+        let home = || "/home/me".to_string();
+        let new = |given: Option<&str>, focused: Option<&str>, other_machine: bool| {
+            super::new_space_folder(given.map(str::to_owned), || focused.map(str::to_owned), other_machine, home)
+        };
+        // This computer: an empty folder is its home, like an omitted one with no focused terminal.
+        assert_eq!(new(Some(""), None, false), "/home/me");
+        assert_eq!(new(Some(""), Some("/work"), false), "/home/me");
+        assert_eq!(new(None, None, false), "/home/me");
+        // Another machine: an empty folder stays empty, which its core reads as its home.
+        assert_eq!(new(Some(""), None, true), "");
+        assert_eq!(new(Some(""), Some("/work"), true), "");
+        assert_eq!(new(None, None, true), "");
+        // A given folder, else the focused terminal's, is kept as it is.
+        assert_eq!(new(Some("/code"), Some("/work"), false), "/code");
+        assert_eq!(new(None, Some("/work"), false), "/work");
+        assert_eq!(new(Some("/code"), None, true), "/code");
     }
 
     #[gpui::test]
