@@ -1,8 +1,8 @@
 //! A program's own report of its terminal's folder: OSC 7 (`file://host/path`),
 //! OSC 9;9 and OSC 1337 CurrentDir (a bare path). Shells send it at every prompt;
 //! Pi's Teleport sends it when a session starts and after every move. It is the
-//! only way to know where a program is when its process folder says nothing,
-//! such as Pi on Windows, whose terminal's foreground is the PowerShell it runs in.
+//! only way to know where a program is when its process folder differs from the
+//! session folder, such as after Pi moves to another worktree.
 
 /// Where a program said its terminal is, and the machine it named, if any.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,9 +44,15 @@ pub fn parse(raw: &str) -> Option<Report> {
             let path = path.split(['?', '#']).next().unwrap_or_default();
             // Teleport encodes a UNC path under the reporting machine's host,
             // not the share server, so an SSH report remains distinguishable.
-            let unc = path.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("/%5c%5c"));
+            let unc = path
+                .get(..7)
+                .is_some_and(|p| p.eq_ignore_ascii_case("/%5c%5c"));
             let path = decode(path)?;
-            let path = if unc { path.strip_prefix('/').unwrap_or(&path).to_owned() } else { path };
+            let path = if unc {
+                path.strip_prefix('/').unwrap_or(&path).to_owned()
+            } else {
+                path
+            };
             (Some(decode(host)?).filter(|h| !h.is_empty()), path)
         }
         None => (None, raw.to_owned()),
@@ -192,7 +198,12 @@ mod tests {
     #[test]
     fn reads_reporter_pid_without_confusing_uri_fragments() {
         assert_eq!(parse("file://box/src?herdr-pid=42").unwrap().pid, Some(42));
-        assert_eq!(parse("file://box/src?other=2&herdr-pid=42#fragment").unwrap().pid, Some(42));
+        assert_eq!(
+            parse("file://box/src?other=2&herdr-pid=42#fragment")
+                .unwrap()
+                .pid,
+            Some(42)
+        );
         assert_eq!(parse("file://box/src#herdr-pid=42").unwrap().pid, None);
         assert_eq!(parse("file://box/src?herdr-pid=bad").unwrap().pid, None);
         assert_eq!(parse("file://box/src?herdr-pid=0").unwrap().pid, None);
@@ -201,12 +212,30 @@ mod tests {
     fn reads_unc_report_with_reporting_host() {
         let raw = "file://ZinLaptop/%5C%5Cserver%5Cshare%5C%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%231%25";
         let parsed = parse(raw).unwrap();
-        assert_eq!(parsed, report(Some("ZinLaptop"), r"\\server\share\проект #1%").unwrap());
-        assert_eq!(on_machine(parsed.host.as_deref(), Some("ZinLaptop")), Some(true));
-        assert_eq!(on_machine(parsed.host.as_deref(), Some("other")), Some(false));
-        assert_eq!(parse("file://ZinLaptop/%5C%5Cserver%5Cshare"), report(Some("ZinLaptop"), r"\\server\share"));
-        assert_eq!(parse("file://ZinLaptop/%5c%5cserver%5cshare"), report(Some("ZinLaptop"), r"\\server\share"));
-        assert_eq!(parse("file://server/share/x"), report(Some("server"), "/share/x"));
+        assert_eq!(
+            parsed,
+            report(Some("ZinLaptop"), r"\\server\share\проект #1%").unwrap()
+        );
+        assert_eq!(
+            on_machine(parsed.host.as_deref(), Some("ZinLaptop")),
+            Some(true)
+        );
+        assert_eq!(
+            on_machine(parsed.host.as_deref(), Some("other")),
+            Some(false)
+        );
+        assert_eq!(
+            parse("file://ZinLaptop/%5C%5Cserver%5Cshare"),
+            report(Some("ZinLaptop"), r"\\server\share")
+        );
+        assert_eq!(
+            parse("file://ZinLaptop/%5c%5cserver%5cshare"),
+            report(Some("ZinLaptop"), r"\\server\share")
+        );
+        assert_eq!(
+            parse("file://server/share/x"),
+            report(Some("server"), "/share/x")
+        );
     }
 
     #[test]
