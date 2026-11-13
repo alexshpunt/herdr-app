@@ -5762,6 +5762,10 @@ mod tests {
         use serde_json::json;
         let home = crate::mods::app_dir();
         crate::mods::write_workspace().unwrap();
+        if first_run {
+            // The shipped welcome starts background I/O, which the test executor rejects.
+            std::fs::write(crate::mods::frame_dir().join("welcome/main.js"), "").unwrap();
+        }
         let folder = home.join("mods").join(mod_name);
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("mod.json"), r#"{ "place": "none" }"#).unwrap();
