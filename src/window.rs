@@ -3111,7 +3111,7 @@ impl AppWindow {
         match (link["kind"].as_str(), machine) {
             (Some("url"), _) => links::open(&links::Target::Url(link["url"].as_str().unwrap_or_default().to_owned())),
             (Some("file" | "folder"), None) => links::open(&links::Target::File(path.clone().into(), links::Place::default())),
-            (_, Some(machine)) => toast(self, format!("No tab opens files on {machine}"), window, cx),
+            (_, Some(machine)) => toast(self, format!("No app opens files on {machine}"), window, cx),
             _ => {}
         }
     }
@@ -3581,11 +3581,11 @@ impl AppWindow {
                 };
                 let origin = source.clone().filter(|s| self.model.status(s).is_some());
                 let system = a.get("system").and_then(Value::as_bool) == Some(true);
-                // Only a tab can open a path on another machine: say so now, so the caller can.
+                // Only an app or a tab can open a path on another machine: say so now, so the caller can.
                 if let links::Target::Remote(path) = &link
-                    && (system || !mods::takes_links())
+                    && (system || !(mods::takes_links() || self.apps_open_remote_paths()))
                 {
-                    return self.fail(format!("no Herdr tab opens {path} on its machine"));
+                    return self.fail(format!("no Herdr app or tab opens {path} on its machine"));
                 }
                 self.route_link(link, source, Self::owned(a, "space"), origin, Self::owned(a, "cwd"), "command", system, window, cx);
             }

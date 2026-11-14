@@ -113,6 +113,14 @@ impl AppWindow {
         Ok(json!({ "pane": pane, "app": app, "reused": reused }))
     }
 
+    /// Some registered app opens files or folders on other machines (its `links`).
+    pub(super) fn apps_open_remote_paths(&self) -> bool {
+        self.registered_apps()
+            .iter()
+            .flat_map(|a| &a.reg.links)
+            .any(|l| (l.file || l.folder) && l.local != Some(true))
+    }
+
     /// Every app the installed mods register (mod.json `"app"`), in order.
     pub(super) fn registered_apps(&self) -> Vec<App> {
         apps::sorted(
