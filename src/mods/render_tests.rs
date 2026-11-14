@@ -517,6 +517,72 @@ fn windows_tab_buttons_use_matching_vector_icons(cx: &mut TestAppContext) {
     }
 }
 
+fn node_mut<'a>(node: &'a mut Value, id: &str) -> Option<&'a mut Value> {
+    if node["id"] == id {
+        return Some(node);
+    }
+    node.get_mut("children")?.as_array_mut()?.iter_mut().find_map(|child| node_mut(child, id))
+}
+
+#[gpui::test]
+fn the_open_side_panel_takes_the_toggle_and_window_buttons_from_the_tabs(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    for state in ["closed", "open", "absent"] {
+        let mut values = fixture(true, props(), updates("current", "current"));
+        values.insert("window".into(), json!({"platform":"windows","titlebar":"none","buttons":true,"maximized":false}));
+        let layout = values.get_mut("layout").unwrap();
+        match state {
+            "open" => node_mut(layout, "side-panel").unwrap()["hidden"] = json!(false),
+            "absent" => node_mut(layout, "work-top").unwrap()["children"].as_array_mut().unwrap().retain(|c| c["id"] != "side-panel"),
+            _ => assert_eq!(node_mut(layout, "side-panel").unwrap()["hidden"], true, "the shipped panel starts closed"),
+        }
+        let tree = describe_with_values(cx, &staged, "mods/tabs", values, None).unwrap();
+        assert_eq!(tree.contains("side-panel-toggle"), state == "closed", "{state}: {tree}");
+        assert_eq!(tree.contains("sidebar-right.svg"), state == "closed", "{state}: {tree}");
+        assert_eq!(tree.contains("workflow-toggle"), state == "absent", "{state}: {tree}");
+        assert_eq!(tree.contains("win-min.svg"), state != "open", "{state}: {tree}");
+        assert_eq!(tree.contains("win-close.svg"), state != "open", "{state}: {tree}");
+    }
+}
+
+#[gpui::test]
+fn the_side_panel_header_mirrors_the_sidebar_toggle_beside_the_window_buttons(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    for buttons in [true, false] {
+        let mut values = fixture(true, json!({"panel":"right"}), updates("current", "current"));
+        values.insert("window".into(), json!({"platform":"windows","titlebar":"none","buttons":buttons,"maximized":true}));
+        let tree = describe_with_values(cx, &staged, "mods/workspace-chrome", values, None).unwrap();
+        let toggle = tree.find("side-panel-toggle").unwrap_or_else(|| panic!("{tree}"));
+        assert!(tree.contains("mods/workspace-chrome/sidebar-right.svg"), "{tree}");
+        assert!(!tree.contains("Herdr"), "the panel header has no title: {tree}");
+        for icon in ["win-min.svg", "win-restore.svg", "win-close.svg"] {
+            assert_eq!(tree.find(icon).is_some_and(|at| at > toggle), buttons, "{icon}, buttons={buttons}: {tree}");
+        }
+    }
+}
+
+#[gpui::test]
+fn workflow_is_an_untitled_section_in_the_side_panel_and_a_closable_dock_elsewhere(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let section = describe(cx, &staged, "frame/workflow", true, Value::Null, updates("current", "current"), None).unwrap();
+    assert!(!section.contains("wf-close") && !section.contains("Workflow"), "no title or close button in the side panel: {section}");
+    assert!(!section.contains("workflow-content") && !section.contains(".size_full"), "the side panel scrolls the section: {section}");
+    assert!(section.contains("wf-machine"), "{section}");
+    // Without a dock's props, the section starts on the selected space's machine.
+    let mut values = fixture(true, Value::Null, updates("current", "current"));
+    for space in values.get_mut("spaces").unwrap().as_array_mut().unwrap() {
+        space["active"] = json!(space["id"] == "s2");
+    }
+    let remote = describe_with_values(cx, &staged, "frame/workflow", values, None).unwrap();
+    let machine: Vec<&str> = remote.lines().skip_while(|l| !l.contains("wf-machine")).take(5).collect();
+    assert!(machine.iter().any(|l| l.trim() == "text \"remote\""), "{remote}");
+    let dock = describe(cx, &staged, "frame/workflow", true, props(), updates("current", "current"), None).unwrap();
+    assert!(dock.contains("wf-close") && dock.contains("Workflow") && dock.contains("workflow-content"), "{dock}");
+}
+
 #[gpui::test]
 fn font_pickers_contain_scroll_on_the_wrapper(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
