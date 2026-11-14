@@ -305,7 +305,8 @@ A layout is a tree of nodes. Four types:
   `{ "terminal": "t7" }`, `{ "tab": "active" }` (the shown tab's
   terminals as it arranges them), or `{ "agent": "focused" }` (one agent's
   terminal, full size: the one chosen with `agent.focus` / `agent.next`, else
-  the focused pane's agent, else the first agent).
+  the focused pane's agent, else the first agent), or `{ "side_panel": true }`
+  (the side panel's sections, below).
 - `row` / `column`: children side by side / stacked.
 - `stack`: shows one child (`"active": "<child id>"`), with an optional
   `"header"` (a mod that draws tabs, or `"tabs"` for a plain built-in strip).
@@ -501,6 +502,20 @@ The default window:
           "pane": { "gap": 6, "radius": 6, "border": { "width": 1, "color": "border" },
                     "focus": { "width": 1, "color": "accent" } } } } ] } ] }
 ```
+
+The shipped main layout also has a right side panel: the `side-panel` column
+beside `work`, from the window's top edge down to the status bar, hidden until
+toggled (`layout.toggle {id: "side-panel"}`; the click is kept). Its
+`side-panel-head` block (`workspace-chrome` with `props.panel: "right"`)
+draws the mirrored toggle and, where the layout draws them, the window buttons;
+the tab bar hides both while the panel is open. Its `{ "side_panel": true }`
+block stacks the sections mods register in `mod.json`:
+`"side_panel": { "title": "Workflow", "order": 0 }`. Each section is one copy
+of the mod, as tall as its content, under its `title` (the folder name when
+missing), in `order` then title order; the panel scrolls them together.
+A section gets `props()` = null, so a mod that also opens elsewhere tells them
+apart by `props()?.overlay`. Keep sections free of their own titles, close
+buttons and full-height scroll areas. Workflow is the shipped section.
 
 Sidebar on the right: swap the two children of `root`. No sidebar: set
 `"hidden": true` on `sidebar` (the user can toggle it: `ctrl-shift-b`).
@@ -713,8 +728,9 @@ The main ones:
   changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
   `workflow.models {machine?}` reads the live Pi model pickers for one machine (default: the selected space's;
   empty string: this computer) and the extension installation status. A missing catalog is an explicit error,
-  not evidence that no models exist. `workflow.open` toggles a dock beside the active-tab workspace, below the unchanged app header.
-  Its toolbar button opens the same panel. Primary, fallback and thinking selections save automatically.
+  not evidence that no models exist. Its settings are the Workflow section of the right side panel; `workflow.open`
+  toggles that panel, or a Workflow dock beside the active-tab workspace in layouts without one.
+  Primary, fallback and thinking selections save automatically.
   The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
   an agent that produced a successful assistant response never switches models automatically.
   The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
@@ -913,6 +929,9 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
   Without this opt-in, navigation and clicks stay unchanged.
 - `"frameless": true` in `mod.json` drops the layout's pane header over the
   mod's panes, so the mod fills them (the `vscode` mod's editor).
+- `"side_panel": { "title": "Builds", "order": 10 }` in `mod.json` adds the mod
+  as a section of every `{ "side_panel": true }` block (see Layouts): widgets,
+  metrics and settings that sit beside the work.
 
 - The first time Herdr sees a folder, it docks one copy per `mod.json` into
   the shown layout (`"none"`: only where a layout or another mod puts it).

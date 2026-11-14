@@ -1,1 +1,1 @@
-{ "place": "none", "title": "Workflow" }
+{ "place": "none", "title": "Workflow", "side_panel": { "title": "Workflow", "order": 0 } }

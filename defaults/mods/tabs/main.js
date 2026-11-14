@@ -78,6 +78,7 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
+    const side = find(root, "side-panel"), sideOpen = Boolean(side && !side.hidden);
     const enabled = shared("workspace.panels") ?? ["files", "changes"];
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
@@ -97,8 +98,11 @@ export default class Tabs extends View {
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 636 })))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
-      .child(button("workflow-toggle", svg("mods/workspace-chrome/layers.svg").size(14), () => run("workflow.open")).tooltip("Workflow"))
-      .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
+      // The side panel's header takes its toggle and the window buttons while it is open.
+      .when(!sideOpen, el => el.child(side
+        ? button("side-panel-toggle", svg("mods/workspace-chrome/sidebar-right.svg").size(15), () => run("layout.toggle", { id: "side-panel" })).tooltip("Side panel")
+        : button("workflow-toggle", svg("mods/workspace-chrome/layers.svg").size(14), () => run("workflow.open")).tooltip("Workflow")))
+      .when(w?.buttons && !sideOpen, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));
   }

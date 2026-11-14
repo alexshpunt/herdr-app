@@ -28,6 +28,9 @@ pub enum Content {
     },
     /// An agent's terminal, full size (`"focused"`: the selected agent).
     Agent { agent: String },
+    /// The sections mods register with `"side_panel"` in mod.json, stacked
+    /// in one scrolling column (`{ "side_panel": true }`).
+    SidePanel { side_panel: bool },
 }
 
 /// Which side of its node a floating block sits on. Left/right make it

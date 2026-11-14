@@ -346,6 +346,30 @@ pub struct Hint {
     /// Its pane has no frame header: the mod fills the whole pane.
     #[serde(default)]
     pub frameless: bool,
+    /// A section of the side panel (`{ "side_panel": true }` blocks).
+    #[serde(default)]
+    pub side_panel: Option<Section>,
+}
+
+impl Hint {
+    /// Where its first copy goes: a side panel section shows in the panel
+    /// unless it also names a place.
+    pub fn first_place(&self) -> &str {
+        match (&self.place, &self.side_panel) {
+            (Some(place), _) => place,
+            (None, Some(_)) => "none",
+            (None, None) => "right",
+        }
+    }
+}
+
+/// How a mod shows in the side panel: under `title`, sorted by `order`.
+#[derive(Deserialize, Default, Clone, Debug, PartialEq)]
+pub struct Section {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub order: i32,
 }
 
 #[derive(Clone)]

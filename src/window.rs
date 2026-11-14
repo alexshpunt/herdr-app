@@ -9,6 +9,7 @@ mod floats;
 mod movable;
 mod pane_drag;
 mod pane_size;
+mod side_panel;
 mod titlebar;
 
 use crate::links;
@@ -52,8 +53,13 @@ fn traffic_light_divider_inset(n: &Node, axis: Axis, index: usize, macos: bool, 
         return 0.0;
     }
     // Keep the toolbar continuous above the rail; the divider starts with the content.
+    // A column's header is its top block, inside any nested rows and columns
+    // (the work column sits in a row beside the right side panel).
     shown.iter().skip(index).take(2).filter_map(|column| {
-        let header = column.children().iter().find(|child| !child.hidden)?;
+        let mut header = column.children().iter().find(|child| !child.hidden)?;
+        while header.content().is_none() {
+            header = header.children().iter().find(|child| !child.hidden)?;
+        }
         match header.size {
             Some(Span::Px { px }) if header.window_drag => Some(px),
             _ => None,
@@ -371,6 +377,8 @@ pub struct AppWindow {
     pane_grip_hover: Option<String>,
     /// Each pane's top row the grip sits centered in: its top header, else a strip.
     pane_grip_rows: RefCell<HashMap<String, f32>>,
+    /// Each side panel block's scroll position.
+    side_scroll: RefCell<HashMap<String, ScrollHandle>>,
     /// A window (`kind: "window"` overlay) being pressed or dragged.
     win_drag: Option<movable::WinDrag>,
     float_anims: HashMap<String, floats::FloatAnim>,
@@ -496,6 +504,7 @@ impl AppWindow {
             pane_drag: None,
             pane_grip_hover: None,
             pane_grip_rows: RefCell::default(),
+            side_scroll: RefCell::default(),
             win_drag: None,
             float_anims: HashMap::new(),
             float_reveal: HashMap::new(),
@@ -1189,6 +1198,7 @@ impl AppWindow {
         let visit = |n: &Node, terms: &mut Vec<(String, String)>, mods: &mut Vec<(String, Instance)>| match n.content() {
             Some(Content::Terminal { terminal }) => terms.push((n.id.clone(), terminal.clone())),
             Some(Content::Mod { name, props }) => mods.push((n.id.clone(), Instance { name: name.clone(), props: props.clone() })),
+            Some(Content::SidePanel { .. }) => mods.extend(self.side_slots(&n.id)),
             _ => {}
         };
         let stacks = |root: &Node, mods: &mut Vec<(String, Instance)>| {
@@ -1264,6 +1274,9 @@ impl AppWindow {
         for n in self.chrome.walk() {
             if let Some(Content::Mod { name, props }) = n.content() {
                 out.insert(n.id.clone(), inst(name, props));
+            }
+            if let Some(Content::SidePanel { .. }) = n.content() {
+                out.extend(self.side_slots(&n.id));
             }
             if let Kind::Stack { header: Some(h), .. } = &n.kind
                 && let HeaderContent::Mod { name, props } = &h.content
@@ -1490,7 +1503,8 @@ impl AppWindow {
         for (slot, inst) in want {
             if !self.copies.contains_key(&slot) {
                 let copy = self.load(inst, window, cx);
-                if slot.starts_with("float:")
+                // Floats and side panel sections are as tall as their content.
+                if (slot.starts_with("float:") || self.is_section(&slot))
                     && let Some(root) = &copy.root
                 {
                     root.update(cx, |r, cx| r.set_fit_content(true, cx));
@@ -3161,14 +3175,19 @@ impl AppWindow {
                 self.reply = Some(catalog);
                 return;
             }
+            // Workflow is a side panel section; layouts without a side panel dock it.
             "workflow.open" => {
-                if self.overlays.iter().any(|o| o.id == "workflow") { self.close_overlay("workflow", window, cx); }
-                else {
-                    let machine = self.model.active_space().and_then(|s| s.machine.as_deref());
-                    let spec = json!({"mod":"frame-workflow","kind":"dock","width":300,"height":1,"frame":"none","props":{"machine":machine}});
-                    self.open_overlay("workflow".into(), spec, window, cx);
+                if let Some(n) = self.chrome.find_mut(side_panel::PANEL) {
+                    n.hidden = !n.hidden;
+                } else {
+                    if self.overlays.iter().any(|o| o.id == "workflow") { self.close_overlay("workflow", window, cx); }
+                    else {
+                        let machine = self.model.active_space().and_then(|s| s.machine.as_deref());
+                        let spec = json!({"mod":"frame-workflow","kind":"dock","width":300,"height":1,"frame":"none","props":{"machine":machine}});
+                        self.open_overlay("workflow".into(), spec, window, cx);
+                    }
+                    return;
                 }
-                return;
             }
             "agent.list" => { self.answer(self.agent_list(a)); return; }
             "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove" => {
@@ -4558,13 +4577,13 @@ impl AppWindow {
         }
         // A mod seen for the first time goes where it asked (unless the layout already shows it).
         for f in fresh {
-            if shipped_layouts().contains(&self.layout_name.as_str()) && f.hint.place.as_deref().unwrap_or("right") != "none" {
+            if shipped_layouts().contains(&self.layout_name.as_str()) && f.hint.first_place() != "none" {
                 continue;
             }
             self.seen.insert(f.id.clone());
             write_atomic(&file("seen.json"), &serde_json::to_string(&self.seen).unwrap_or_default());
             let shown = self.chrome.walk().iter().any(|n| matches!(n.content(), Some(Content::Mod { name, .. }) if *name == f.id));
-            let place = f.hint.place.as_deref().unwrap_or("right");
+            let place = f.hint.first_place();
             if !shown && place != "none" && !shipped_layouts().contains(&self.layout_name.as_str()) {
                 let mut block = Node::block(self.model.fresh_id("b"), Content::Mod { name: f.id.clone(), props: Value::Null });
                 block.size = Some(Span::Px { px: f.hint.size.unwrap_or(320.0) });
@@ -4731,6 +4750,7 @@ impl AppWindow {
                 None => div().into_any_element(),
             },
             Content::Mod { .. } => self.render_slot(&n.id, cx),
+            Content::SidePanel { .. } => self.render_side_panel(n, cx),
             Content::Agent { .. } => match self.shown_agent() {
                 Some(addr) => match self.agent_view(&n.id, &addr) {
                     Some(t) => div().size_full().child(shown_terminal(&t.view, cx)).into_any_element(),
@@ -4768,6 +4788,8 @@ impl AppWindow {
 
     fn render_slot(&self, slot: &str, cx: &mut Context<Self>) -> AnyElement {
         let in_overlay = slot.starts_with("overlay:") || self.overlays.iter().any(|o| o.layout.as_ref().is_some_and(|l| l.find(slot).is_some()));
+        // Side panel sections are as tall as their content; the panel scrolls them.
+        let section = self.is_section(slot);
         // A mod that is a pane in a tab: a click makes it the focused pane, and the
         // keyboard is its own (an editor, a board), like a terminal's.
         let in_pane = self.model.tab_of(slot).is_some();
@@ -4799,7 +4821,7 @@ impl AppWindow {
                 // Not cached here: ShellRoot caches the mod's view itself and draws its
                 // spinners over it, waking only itself (GPUI rebuilds all under a cached
                 // view that changed, so a spinner step would rebuild the mod).
-                .map(|d| if in_overlay { d.h_auto().min_h_0().flex().flex_col().child(root.clone()) } else { d.child(root.clone()) })
+                .map(|d| if in_overlay || section { d.h_auto().min_h_0().flex().flex_col().child(root.clone()) } else { d.child(root.clone()) })
                 .into_any_element(),
             Some(Copy { error, inst, .. }) => div()
                 .id(SharedString::from(format!("err-{slot}")))
@@ -6326,6 +6348,108 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.debug_bounds("dock-workflow").is_none());
         assert_eq!(cx.debug_bounds("herdr-workspace").unwrap().size.width, viewport.width - crate::settings::z(100.0));
+    }
+
+    #[test]
+    fn the_side_panel_reaches_the_top_and_stacks_registered_sections() {
+        in_own_process("side_panel_layout");
+    }
+
+    #[gpui::test]
+    fn side_panel_layout(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("side_panel_layout") {
+            return;
+        }
+        cx.update(gpui_base::init);
+        let section = |name: &str, manifest: &str, height: u32| {
+            let folder = crate::mods::app_dir().join("mods").join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("mod.json"), manifest).unwrap();
+            std::fs::write(folder.join("main.js"), format!(
+                "import {{ View, div }} from 'gpui-kit'; export default class S extends View {{ render() {{ return div().w_full().h({height}).child('{name}'); }} }}"
+            )).unwrap();
+        };
+        section("sec-late", r#"{ "side_panel": { "title": "Builds", "order": 1 } }"#, 120);
+        section("sec-early", r#"{ "side_panel": { "title": "Alpha" } }"#, 80);
+        section("plain", r#"{ "place": "none" }"#, 50);
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "row", "titlebar": "none", "divider": {"width": 1, "color": "border"}, "children": [
+                {"id":"sidebar", "type":"block", "size":{"px":100}, "content":{"mod":"probe"}},
+                {"id":"work-area", "type":"column", "resizable": false, "children":[
+                    {"id":"work-top", "type":"row", "divider": {"width": 1, "color": "border"}, "children":[
+                        {"id":"work", "type":"column", "resizable": false, "children":[
+                            {"id":"toolbar", "type":"block", "size":{"px":42}, "content":{"mod":"probe"}},
+                            {"id":"main", "type":"block", "content":{"tab":"active"}}
+                        ]},
+                        {"id":"side-panel", "type":"column", "hidden": true, "size":{"px":300}, "resizable": false, "children":[
+                            {"id":"side-panel-head", "type":"block", "size":{"px":42}, "content":{"mod":"probe"}},
+                            {"id":"side-panel-body", "type":"block", "content":{"side_panel": true}}
+                        ]}
+                    ]},
+                    {"id":"status", "type":"block", "size":{"px":28}, "content":{"mod":"probe"}}
+                ]}
+            ]
+        }));
+        assert!(view.update(cx, |this, _| this.layout_file_ok), "the fixture layout must load without a default fallback");
+        let sections = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, _| this.side_sections());
+        let expected: Vec<(String, String)> = [("sec-early", "Alpha"), ("frame-workflow", "Workflow"), ("sec-late", "Builds")]
+            .iter().map(|(name, title)| (name.to_string(), title.to_string())).collect();
+        assert_eq!(sections(cx), expected,
+            "registered sections in order and title order; Workflow is a shipped section");
+        assert!(view.update(cx, |this, _| !this.chrome.walk().iter().any(|n| matches!(n.content(), Some(crate::layout::Content::Mod { name, .. }) if name.starts_with("sec-")))),
+            "a section is not also docked into the layout");
+        // The shipped Workflow section loads the live catalog; a stand-in keeps the test on its executor.
+        std::fs::write(crate::mods::frame_dir().join("workflow/main.js"),
+            "import { View, div } from 'gpui-kit'; export default class S extends View { render() { return div().w_full().h(60).child('workflow'); } }").unwrap();
+        view.update_in(cx, |this, window, cx| this.sync_folders(window, cx));
+        cx.run_until_parked();
+        let viewport = cx.update(|window, _| window.viewport_size());
+        let bounds = |cx: &mut gpui::VisualTestContext, id: &str| view.update(cx, |this, _| this.bounds.borrow().get(id).copied());
+        let closed_toolbar = bounds(cx, "toolbar").unwrap();
+        assert_eq!(closed_toolbar.right(), viewport.width, "a closed panel takes no width");
+        assert!(cx.debug_bounds("side-section-sec-early").is_none());
+
+        view.update_in(cx, |this, window, cx| this.dispatch("layout.toggle", &json!({"id": "side-panel"}), true, window, cx));
+        cx.run_until_parked();
+        let (panel, toolbar, status) = (bounds(cx, "side-panel").unwrap(), bounds(cx, "toolbar").unwrap(), bounds(cx, "status").unwrap());
+        let one = crate::settings::z(1.0);
+        assert_eq!(panel.top(), px(0.0), "the panel reaches the window's top edge");
+        assert_eq!(panel.right(), viewport.width);
+        assert_eq!(panel.size.width, crate::settings::z(300.0));
+        assert_eq!(panel.bottom(), status.top(), "the panel ends at the status bar");
+        assert_eq!(toolbar.right() + one, panel.left(), "the toolbar ends at the panel's divider");
+        assert_eq!(status.right(), viewport.width, "the status bar keeps the full width below the panel");
+        assert_eq!(status.left(), closed_toolbar.left());
+        // Debug selectors are looked up by static name.
+        let shown: Vec<_> = ["side-section-sec-early", "side-section-frame-workflow", "side-section-sec-late"].into_iter()
+            .map(|name| cx.debug_bounds(name).unwrap_or_else(|| panic!("{name} is shown")))
+            .collect();
+        assert!(shown[0].bottom() <= shown[1].top() && shown[1].bottom() <= shown[2].top(), "sections stack in order: {shown:?}");
+        let heading = crate::settings::z(31.0);
+        assert_eq!(shown[0].size.height, heading + crate::settings::z(80.0), "a section is its heading plus its content's height");
+        assert_eq!(shown[2].size.height, heading + crate::settings::z(120.0));
+        assert!(shown.iter().all(|s| s.left() >= panel.left() && s.right() <= panel.right()));
+        assert!(cx.debug_bounds("side-section-plain").is_none(), "only registered mods are sections");
+        assert!(view.update(cx, |this, _| this.copies.contains_key("side-panel-body/sec-late")));
+
+        // workflow.open toggles the panel where the layout has one, without a dock.
+        view.update_in(cx, |this, window, cx| this.dispatch("workflow.open", &json!({}), true, window, cx));
+        cx.run_until_parked();
+        assert!(view.update(cx, |this, _| this.chrome.find("side-panel").unwrap().hidden && !this.overlays.iter().any(|o| o.id == "workflow")));
+        assert_eq!(bounds(cx, "toolbar").unwrap().right(), viewport.width);
+        assert!(view.update(cx, |this, _| this.copies.contains_key("side-panel-body/sec-late")), "closed sections keep their state");
+        view.update_in(cx, |this, window, cx| this.dispatch("workflow.open", &json!({}), true, window, cx));
+        cx.run_until_parked();
+        assert!(view.update(cx, |this, _| !this.chrome.find("side-panel").unwrap().hidden));
+
+        // Open or closed is a layout click: it survives reloading the layout.
+        view.update_in(cx, |this, window, cx| {
+            this.save();
+            this.load_layout("test");
+            this.sync(window, cx);
+            assert!(!this.chrome.find("side-panel").unwrap().hidden);
+        });
     }
 
     #[test]

@@ -23,6 +23,11 @@ function toggleSidebar() {
   run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 76 : 44 });
 }
 
+// The right side panel's toggle; while the panel is open, its header holds it and the window buttons.
+function toggleSidePanel() {
+  run("layout.toggle", { id: "side-panel" });
+}
+
 export default class WorkspaceChrome extends View {
   button(id, label, action) {
     const t = theme();
@@ -32,6 +37,17 @@ export default class WorkspaceChrome extends View {
   render() {
     const t = theme();
     const collapsed = narrow();
+    if (props()?.panel === "right") {
+      const w = window(), win = w?.platform === "windows";
+      const icon = name => svg(`mods/tabs/${name}.svg`).size(16);
+      return h_flex().size_full().bg(t.chrome).pl(10).pr(10).gap(3).items_center()
+        .child(this.button("side-panel-toggle", svg("mods/workspace-chrome/sidebar-right.svg").size(15), toggleSidePanel).tooltip("Side panel"))
+        .child(div().flex_1())
+        .when(Boolean(w?.buttons), el => el
+          .child(this.button("minimize", win ? icon("win-min") : "−", () => run("window.minimize")))
+          .child(this.button("maximize", win ? icon(w.maximized ? "win-restore" : "win-max") : "□", () => run("window.maximize")))
+          .child(this.button("close-window", win ? icon("win-close") : svg("mods/pane/close.svg").size(13), () => run("window.close"))));
+    }
     if (props()?.footer) {
       const row = (id, icon, label, dim, action) => h_flex().id(id).h(28).px(8).gap(9).items_center().rounded(8)
         .when(collapsed, el => el.relative().w(32).px(0).justify_center().tooltip(label))
