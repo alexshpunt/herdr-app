@@ -349,6 +349,9 @@ pub struct Hint {
     /// A section of the side panel (`{ "side_panel": true }` blocks).
     #[serde(default)]
     pub side_panel: Option<Section>,
+    /// The apps it registers (`crate::apps`): one object or a list.
+    #[serde(default)]
+    pub app: Value,
 }
 
 impl Hint {
@@ -378,6 +381,8 @@ pub struct Found {
     pub dir: PathBuf,
     pub hint: Hint,
     pub stamp: SystemTime,
+    /// The apps its mod.json registers (`hint.app`), parsed once per scan.
+    pub apps: Vec<crate::apps::App>,
 }
 
 /// Every mod folder that has a main.js.
@@ -399,7 +404,7 @@ fn scan_dir(root: &Path, prefix: &str) -> Vec<Found> {
                 return None;
             }
             let dir = e.path();
-            let hint = std::fs::read_to_string(dir.join("mod.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            let hint: Hint = std::fs::read_to_string(dir.join("mod.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let stamp = std::fs::read_dir(&dir)
                 .into_iter()
                 .flatten()
@@ -407,7 +412,8 @@ fn scan_dir(root: &Path, prefix: &str) -> Vec<Found> {
                 .filter_map(|f| f.metadata().ok()?.modified().ok())
                 .max()
                 .unwrap_or(SystemTime::UNIX_EPOCH);
-            Some(Found { id, dir, hint, stamp })
+            let apps = crate::apps::parse(&id, &hint.app);
+            Some(Found { id, dir, hint, stamp, apps })
         })
         .collect()
 }
@@ -425,6 +431,8 @@ pub enum Request {
     /// A link resolved off the UI thread (a file on another machine), to open
     /// as `link.open` does.
     OpenLink { link: Value, system: bool },
+    /// A project folder looked at for the apps' rules (`crate::apps`).
+    AppProbe { machine: Option<String>, folder: String, probe: crate::apps::Probe },
 }
 
 static REQUESTS: OnceLock<async_channel::Sender<Request>> = OnceLock::new();
@@ -580,7 +588,10 @@ thread_local! {
     /// Where key commands for each loaded copy go: (copy, mod, sender).
     static COMMANDS: RefCell<Vec<(u64, String, async_channel::Sender<String>)>> = const { RefCell::new(Vec::new()) };
     /// The copies that wait for links (`nextLink()`), oldest first: (copy, sender).
+    /// A pane's app (`props().app`) never joins: only its own links reach it.
     static LINKS: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
+    /// Every loaded copy's own link queue, which its `nextLink()` reads: (copy, sender).
+    static LINK_QUEUES: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
     /// The copies on screen: only they get commands (a hidden copy kept alive must
     /// not act on the person's keys).
     static SHOWN_COPIES: RefCell<std::collections::HashSet<u64>> = RefCell::new(std::collections::HashSet::new());
@@ -597,6 +608,8 @@ pub struct Snapshot {
     pub agents: Value,
     /// Every pane: { pane, terminal, tab, title, cwd, branch, status, app, focused, zoomed }.
     pub panes: Value,
+    /// { apps: [registration], available: { pane: [[mod, app]] } } (`apps()`).
+    pub apps: Value,
     pub terminals: Value,
     pub focused: Value,
     /// Floating blocks by id: { edge, align, vertical }.
@@ -608,7 +621,7 @@ pub struct Snapshot {
 impl Default for Snapshot {
     /// Lists start empty, never null, so mods can map over them right away.
     fn default() -> Self {
-        Snapshot { layout: Value::Null, spaces: json!([]), machines: json!([]), agents: json!([]), panes: json!([]), terminals: json!([]), focused: Value::Null, floats: json!({}), window: Value::Null }
+        Snapshot { layout: Value::Null, spaces: json!([]), machines: json!([]), agents: json!([]), panes: json!([]), apps: json!({ "apps": [], "available": {} }), terminals: json!([]), focused: Value::Null, floats: json!({}), window: Value::Null }
     }
 }
 
@@ -640,6 +653,28 @@ pub fn publish_agents(v: Value) -> bool {
 pub fn publish_panes(v: Value) -> bool {
     publish("panes", |s| (std::mem::replace(&mut s.panes, v.clone()), v))
 }
+pub fn publish_apps(v: Value) -> bool {
+    publish("apps", |s| (std::mem::replace(&mut s.apps, v.clone()), v))
+}
+
+/// `apps(pane?)`: every registered app, each with whether it is available
+/// for that pane (default: the focused one).
+fn apps_for(s: &Snapshot, pane: Option<&str>) -> Value {
+    let pane = pane.or_else(|| s.focused["pane"].as_str());
+    let available = pane.and_then(|p| s.apps["available"].get(p)).and_then(Value::as_array);
+    let list = s.apps["apps"].as_array().map(Vec::as_slice).unwrap_or_default();
+    Value::Array(
+        list.iter()
+            .map(|a| {
+                let key = json!([a["mod"], a["app"]]);
+                let mut a = a.clone();
+                a["available"] = json!(available.is_some_and(|ids| ids.contains(&key)));
+                a
+            })
+            .collect(),
+    )
+}
+
 pub fn publish_terminals(v: Value) -> bool {
     publish("terminals", |s| (std::mem::replace(&mut s.terminals, v.clone()), v))
 }
@@ -728,6 +763,15 @@ pub fn send_link(link: Value) -> bool {
     LINKS.with_borrow_mut(|links| {
         links.retain(|(_, tx)| !tx.is_closed());
         links.last().is_some_and(|(_, tx)| tx.try_send(link).is_ok())
+    })
+}
+
+/// Queues a link for one copy (a pane's app opened again): its `nextLink()`
+/// returns it, now or once it asks. Returns whether that copy is loaded.
+pub fn send_link_to(copy: u64, link: Value) -> bool {
+    LINK_QUEUES.with_borrow_mut(|queues| {
+        queues.retain(|(_, tx)| !tx.is_closed());
+        queues.iter().any(|(id, tx)| *id == copy && tx.try_send(link.clone()).is_ok())
     })
 }
 
@@ -886,6 +930,11 @@ pub fn run_here(command: &str, args: &[String]) -> Option<String> {
     run_blocking(command, args, None, EXEC_LIMIT).ok().map(|(_, out, _)| out)
 }
 
+/// Runs a program in a folder on this computer: what it printed when it succeeded.
+pub fn run_in(folder: &str, command: &str, args: &[String]) -> Option<String> {
+    run_blocking(command, args, Some(folder.to_owned()), EXEC_LIMIT).ok().filter(|(code, _, _)| *code == 0).map(|(_, out, _)| out)
+}
+
 /// The agents a machine can start (`knownAgents()`), asked at most once a minute.
 fn known_agents(on: Option<String>, list: Vec<Value>) -> Value {
     type InstalledCache = std::collections::HashMap<Option<String>, (std::time::Instant, Vec<String>, Vec<String>)>;
@@ -962,6 +1011,11 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         commands.retain(|(_, _, tx)| !tx.is_closed());
         commands.push((copy, inst.name.clone(), cmd_tx));
     });
+    LINK_QUEUES.with_borrow_mut(|queues| {
+        queues.retain(|(_, tx)| !tx.is_closed());
+        queues.push((copy, link_tx.clone()));
+    });
+    let pane_app = inst.props.get("app").is_some_and(Value::is_string);
     HostModule::new("herdr")
         .declarations(DECLARATIONS)
         .async_function("exec", |a| {
@@ -1103,6 +1157,21 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .function("machines", reader(reads.clone(), "machines", |s| &s.machines))
         .function("agents", reader(reads.clone(), "agents", |s| &s.agents))
         .function("panes", reader(reads.clone(), "panes", |s| &s.panes))
+        .function("apps", {
+            let reads = reads.clone();
+            move |a| {
+                let pane = match a.get(0) {
+                    Some(HostValue::Str(p)) => Some(p.clone()),
+                    _ => None,
+                };
+                REVISIONS.with_borrow(|r| {
+                    let mut reads = reads.borrow_mut();
+                    reads.record("apps", r);
+                    reads.record("focused", r);
+                });
+                Ok(SNAPSHOT.with(|s| to_host(&apps_for(&s.borrow(), pane.as_deref()))))
+            }
+        })
         .function("setAgentOrder", |a| {
             AGENT_ORDER.with(|s| *s.borrow_mut() = strings(a.get(0)));
             Ok(HostValue::Null)
@@ -1175,10 +1244,11 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             Ok(async move { rx.recv().await.map(HostValue::Str).map_err(|_| HostError::new("herdr-app is shutting down")) })
         })
         // The first call makes this copy take links: they queue for it from then on.
+        // A pane's app gets only the links opened in it (`send_link_to`).
         .async_function("nextLink", move |_| {
             LINKS.with_borrow_mut(|links| {
                 links.retain(|(_, tx)| !tx.is_closed());
-                if !links.iter().any(|(c, _)| *c == copy) {
+                if !pane_app && !links.iter().any(|(c, _)| *c == copy) {
                     links.push((copy, link_tx.clone()));
                 }
             });

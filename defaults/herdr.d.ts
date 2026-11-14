@@ -213,10 +213,24 @@ export interface AgentInfo {
 /** Terminals whose program reports a status (agents), in space, tab, pane order. Live. */
 export function agents(): AgentInfo[];
 
+/** An app a pane holds (`pane.app.open`). Its copy gets `props().pane`,
+ *  `props().app` (this id) and `props().registration`; later opens of it
+ *  arrive from its `nextLink()`. */
+export interface PaneAppInfo {
+  id: string;
+  mod: string;
+  /** The mod.json `app` registration it was opened as, if one was named. */
+  app: string | null;
+  /** The title it was opened with, else the mod's name. */
+  title: string;
+  /** What it was last opened with. */
+  props: Record<string, unknown> | null;
+}
+
 export interface PaneInfo {
   pane: string;
   /** null for a mod pane (`pane.split {mod}`): then `mod` names it, and only
-   *  pane, mod, props, tab, title, focused and zoomed are set. */
+   *  pane, mod, props, tab, title, focused, zoomed, apps and shown_app are set. */
   terminal: string | null;
   mod?: string;
   /** A mod pane's props as given (`tab.new {mod, props}`). */
@@ -236,6 +250,10 @@ export interface PaneInfo {
   zoomed: boolean;
   /** The app's top-center grip can rearrange this pane. False when zoomed or alone. */
   movable: boolean;
+  /** The apps open in this pane, in the order they opened. */
+  apps: PaneAppInfo[];
+  /** The app the pane shows instead of its terminal or mod, or null. */
+  shown_app: string | null;
 }
 
 /** Every pane in every tab. A pane header mod finds its own with
@@ -451,15 +469,47 @@ export interface Link {
 }
 
 /**
- * Waits for the next link to open. From its first call, links go to this mod instead of the
- * system: queued for it while it is busy, to the newest such copy if there are several. Show it
- * in a tab, or hand back one no tab shows: `run("link.open", { target: link.url ?? link.path, system: true })`.
+ * Waits for the next link to open. From its first call, links no registered app takes (mod.json
+ * `app` `links`) go to this mod instead of the system: queued for it while it is busy, to the
+ * newest such copy if there are several. Show it in a tab, or hand back one no tab shows:
+ * `run("link.open", { target: link.url ?? link.path, system: true })`.
  *   cx.spawn(async (cx) => { for (;;) { const link = await nextLink(); ... } });
+ * A pane's app (`props().app` set) gets only its own: the props of each later `pane.app.open`
+ * of it, such as `{ link, project }` for a link Herdr routed to it.
  */
-export function nextLink(): Promise<Link>;
+export function nextLink<T = Link>(): Promise<T>;
+
+/** What an app in a pane is opened with (`pane.app.open {props}`), plus `project`. */
+export interface AppProps {
+  /** The link it opens, when Herdr routed one to it (mod.json `app` `links`). */
+  link?: Link;
+  /** The pane's project: its terminal's Git work tree, else its folder, else its space's folder. */
+  project?: { folder: string; machine: string | null };
+  [key: string]: unknown;
+}
+
+/** An app a mod registers in its mod.json (`"app"`: one object or a list). */
+export interface AppInfo {
+  mod: string;
+  /** Its registration id: `pane.app.open {mod, app}`. */
+  app: string;
+  label: string;
+  /** Its icon, from the home folder (`mods/<mod>/<icon>`), or null. */
+  icon: string | null;
+  order: number;
+  /** Its `when` rules hold for the pane (`has`, `remote`, `label`, `local`). */
+  available: boolean;
+}
+
+/** Every registered app, in order, with whether it is available for a pane (default: the
+ *  focused one). A tab bar shows the available ones as buttons that run
+ *  `pane.app.open {mod, app}`. Live: `has` and `remote` rules are checked off the UI thread. */
+export function apps(pane?: string): AppInfo[];
 
 /** The props this copy of the mod was given in the layout (or overlay).
- *  A tab's mod pane also gets `pane`: its own pane id.
+ *  A tab's mod pane also gets `pane`: its own pane id. An app in a pane (`pane.app.open`)
+ *  gets its props as opened (`AppProps`: `project`, and `link` for a routed link), plus `pane`
+ *  (the pane it is in), `app` (its own id) and `registration` (its mod.json `app` id, or null).
  *  A layout's terminal_menu mod gets {tab: "pane", target: {pane: string, terminal: string}, overlay: string}.
  *  Target names the clicked pane/terminal, not necessarily the focused one; pass it to actions.
  *  Close the popup with closeOverlay(props().overlay). */

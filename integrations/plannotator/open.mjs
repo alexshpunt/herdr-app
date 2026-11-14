@@ -11,7 +11,9 @@ const execute = promisify(execFile);
 const wsl = process.platform === 'linux' && /microsoft/i.test(release());
 const exists = async file => access(file).then(() => true, () => false);
 
-export function findOriginSpace(snapshot, terminal) {
+// The pane of the requesting terminal in `herdr-app ls`, by its `herdr.space`
+// label (terminal ids repeat across machines): {space, pane}, else undefined.
+export function findOriginPane(snapshot, terminal) {
     const spaceId = terminal.labels?.['herdr.space'];
     if (!spaceId || !terminal.address) return undefined;
     const matches = [];
@@ -19,11 +21,24 @@ export function findOriginSpace(snapshot, terminal) {
         if (space.id !== spaceId && !space.id.endsWith(`/${spaceId}`)) continue;
         for (const tab of space.tabs ?? []) {
             for (const item of tab.terminals ?? []) {
-                if ((item.terminal === terminal.address || item.terminal?.endsWith(`/${terminal.address}`)) && typeof item.pane === 'string') matches.push(space.id);
+                if ((item.terminal === terminal.address || item.terminal?.endsWith(`/${terminal.address}`)) && typeof item.pane === 'string') matches.push({ space: space.id, pane: item.pane });
             }
         }
     }
     return matches.length === 1 ? matches[0] : undefined;
+}
+
+// Whether app `app` still shows review `review` (a later review may reuse it).
+export function showsReview(snapshot, app, review) {
+    for (const space of snapshot.spaces ?? []) {
+        for (const tab of space.tabs ?? []) {
+            for (const item of tab.terminals ?? []) {
+                const found = (item.apps ?? []).find(a => a.id === app);
+                if (found) return found.props?.review === review;
+            }
+        }
+    }
+    return false;
 }
 
 export async function runJson(command, args) {
@@ -63,8 +78,10 @@ export async function openExternal(url) {
     }
 }
 
-// `tabName`: the tab bar button that asked for this review ("Annotate diff"), else "Plannotator".
-export async function openReview({ url, id, tabName }, isClosed = () => false) {
+// The review opens as an app in the requesting agent's pane: `app`, the
+// plannotator-browser registration of the tab bar button that asked for it
+// (`review`, `last`; `tabName` its title), else its own "Plannotator" app.
+export async function openReview({ url, id, tabName, app: registration }, isClosed = () => false) {
     if (isClosed()) return { kind: 'closed' };
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Expected an HTTP(S) URL without credentials');
@@ -82,12 +99,15 @@ export async function openReview({ url, id, tabName }, isClosed = () => false) {
             runJson(process.env.HC_BIN || 'hc', ['get', terminalId, '--json']),
             runJson(app, ['ls']),
         ]);
-        const origin = findOriginSpace(snapshot, terminal);
+        const origin = findOriginPane(snapshot, terminal);
         if (!origin) throw new Error('The requesting terminal has no unambiguous pane in this Herdr App');
         if (isClosed()) return { kind: 'closed' };
-        const result = await runJson(app, ['do', 'tab.new', JSON.stringify({ space: origin, name: tabName ?? 'Plannotator', mod: 'plannotator-browser', props: { url, session, origin: terminalId, review: id } })]);
-        if (typeof result.pane !== 'string') throw new Error('Herdr did not return the new browser pane');
-        return { kind: 'embedded', app, pane: result.pane };
+        const result = await runJson(app, ['do', 'pane.app.open', JSON.stringify({
+            pane: origin.pane, mod: 'plannotator-browser', ...(registration ? { app: registration } : {}),
+            title: tabName ?? 'Plannotator', props: { url, session, origin: terminalId, review: id },
+        })]);
+        if (typeof result.app !== 'string') throw new Error('Herdr did not return the browser app');
+        return { kind: 'embedded', app, pane: result.pane, appId: result.app, review: id };
     } catch (error) {
         if (isClosed()) return { kind: 'closed' };
         // A missing fork/mod/app must never strand the review without a browser.
@@ -97,8 +117,11 @@ export async function openReview({ url, id, tabName }, isClosed = () => false) {
     }
 }
 
+// A finished review closes its app, unless a later review reuses it.
 export async function closeReview(receipt) {
-    if (receipt.kind === 'embedded') await runJson(receipt.app, ['do', 'pane.close', JSON.stringify({ pane: receipt.pane })]);
+    if (receipt.kind !== 'embedded' || !receipt.appId) return;
+    if (!showsReview(await runJson(receipt.app, ['ls']), receipt.appId, receipt.review)) return;
+    await runJson(receipt.app, ['do', 'pane.app.close', JSON.stringify({ app: receipt.appId })]);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

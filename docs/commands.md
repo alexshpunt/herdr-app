@@ -121,6 +121,43 @@ Close a pane and end its terminal.
 |---|---|
 | `pane` | no |
 
+## `pane.app.open`
+
+Open a mod as an app inside a pane (default: the focused one; terminal: the pane showing it) and show it there instead of the pane's terminal, which keeps running; focuses the pane. app: which of the mod's mod.json `app` registrations it is. The app of the same mod and registration the pane already holds is reused: its running copy gets props from nextLink(). Returns pane, app (its id) and reused.
+
+| Argument | Required |
+|---|---|
+| `mod` | yes |
+| `app` | no |
+| `props` | no |
+| `title` | no |
+| `pane` | no |
+| `terminal` | no |
+
+## `pane.app.show`
+
+Show an app in its pane and focus that pane (selecting its space and tab).
+
+| Argument | Required |
+|---|---|
+| `app` | yes |
+
+## `pane.app.hide`
+
+Show a pane's own terminal again (default: the focused pane); its apps stay open.
+
+| Argument | Required |
+|---|---|
+| `pane` | no |
+
+## `pane.app.close`
+
+Close an app: its pane shows its own terminal again if the app was shown.
+
+| Argument | Required |
+|---|---|
+| `app` | yes |
+
 ## `terminal.open`
 
 Start a terminal: as a new tab (place "tab", default), or "right"/"down" of the focused pane.

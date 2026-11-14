@@ -47,6 +47,11 @@ pub const COMMANDS: &[Command] = &[
     cmd("tab.move", &[req("id"), req("index")], "Move a tab to a position in its space (1 = first)."),
     cmd("pane.split", &[req("direction"), opt("pane"), opt("argv"), opt("folder"), opt("mod"), opt("props")], "Split a pane (default: the focused one) \"right\" or \"down\" with a new terminal in folder (default: the pane's terminal's folder; empty string: the pane's machine's home), or with a mod (`mod`, its `props`) beside it."),
     cmd("pane.close", &[opt("pane")], "Close a pane and end its terminal."),
+    cmd("pane.app.open", &[req("mod"), opt("app"), opt("props"), opt("title"), opt("pane"), opt("terminal")],
+        "Open a mod as an app inside a pane (default: the focused one; terminal: the pane showing it) and show it there instead of the pane's terminal, which keeps running; focuses the pane. app: which of the mod's mod.json `app` registrations it is. The app of the same mod and registration the pane already holds is reused: its running copy gets props from nextLink(). Returns pane, app (its id) and reused."),
+    cmd("pane.app.show", &[req("app")], "Show an app in its pane and focus that pane (selecting its space and tab)."),
+    cmd("pane.app.hide", &[opt("pane")], "Show a pane's own terminal again (default: the focused pane); its apps stay open."),
+    cmd("pane.app.close", &[req("app")], "Close an app: its pane shows its own terminal again if the app was shown."),
     cmd("terminal.open", &[opt("argv"), opt("folder"), opt("place"), opt("name")], "Start a terminal: as a new tab (place \"tab\", default), or \"right\"/\"down\" of the focused pane."),
     cmd("terminal.keep", &[req("terminal"), opt("place")], "Give a running terminal without a pane (a sub-agent) a pane: a new tab, or \"right\"/\"down\"."),
     cmd("terminal.park", &[req("terminal")], "Take a terminal's pane away and disable core keep; it keeps running (a sub-agent shows under its parent again)."),
@@ -168,7 +173,7 @@ pub fn validate_args(c: &Command, args: &Value) -> Result<(), String> {
             for (key, value) in args {
                 if matches!(
                     key.as_str(),
-                    "id" | "pane" | "space" | "terminal" | "target"
+                    "id" | "pane" | "space" | "terminal" | "target" | "app"
                 ) && !value.is_string()
                     && !value.is_null()
                 {

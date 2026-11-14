@@ -1,23 +1,27 @@
 import { View, div } from "gpui-kit";
 import { v_flex } from "gpui-base";
 import { NativeAppState, NativeApp } from "herdr-browser";
-import { props, theme, focused, nextCommand, panes, shared, setShared } from "herdr";
+import { props, theme, focused, nextCommand, readTextFile, appHome } from "herdr";
 
-// The person's Fork (git client) in this tab, on props.uri (a folder URI such
-// as vscode-remote://wsl+Ubuntu/root/app) or props.folder (a local path).
-// Each tab has a Fork process of its own with only this repository; closing
-// the tab closes it. shared("fork.tabs") maps each open project URI to its tab.
+// The person's Fork (git client), embedded, on one repository: as an app in
+// a pane (`pane.app.open`, the Diff button) the pane's project, as a tab's mod
+// pane props.uri (a folder URI such as vscode-remote://wsl+Ubuntu/root/app)
+// or props.folder (a local path). Each has a Fork process of its own with only
+// this repository; closing the pane or app closes it.
 export default class ForkApp extends View {
   init(_props, cx) {
-    this.target = props()?.uri || props()?.folder || focused()?.cwd || "";
-    this.app = NativeAppState("fork", this.target);
-    this.register();
+    this.app = null;
+    this.error = null;
     cx.spawn(async (cx) => {
-      // The new tab can join panes() only after this init.
-      this.register();
+      try {
+        this.app = NativeAppState("fork", await this.target());
+      } catch (error) {
+        this.error = String(error?.message ?? error);
+      }
+      cx.notify();
       for (;;) {
         const command = await nextCommand();
-        if (command === "focus") this.app.focus();
+        if (command === "focus") this.app?.focus();
         cx.notify();
       }
     });
@@ -26,37 +30,43 @@ export default class ForkApp extends View {
       let last = "";
       for (;;) {
         await cx.sleep(500);
-        const now = `${this.app.status()}|${this.app.error()}`;
+        const now = `${this.app?.status()}|${this.app?.error()}|${this.error}`;
         if (now !== last) { last = now; cx.notify(); }
       }
     });
   }
 
-  // This tab is the one Fork tab no other open project has claimed.
-  register() {
-    if (!this.target) return;
-    const tabs = shared("fork.tabs") || {};
-    const open = new Set(panes().filter((p) => p.mod === "fork").map((p) => p.tab));
-    if (open.has(tabs[this.target])) return;
-    const claimed = new Set(Object.entries(tabs).filter(([uri]) => uri !== this.target).map(([, tab]) => tab));
-    const mine = [...open].filter((tab) => !claimed.has(tab));
-    if (mine.length === 1) setShared("fork.tabs", { ...tabs, [this.target]: mine[0] });
+  // A folder Fork on this computer opens: a local one, a WSL machine's
+  // (`editorAuthority` `wsl+<distro>` in machines.json), or a URI as given.
+  async target() {
+    const p = props() ?? {};
+    const project = typeof p.app === "string" ? p.project : null;
+    if (!project) return p.uri || p.folder || focused()?.cwd || "";
+    if (project.machine == null) return project.folder;
+    let machines = [];
+    try { machines = JSON.parse(await readTextFile(`${appHome()}/machines.json`) ?? "[]"); } catch { /* No routes: below. */ }
+    const authority = machines.find((m) => m.name === project.machine)?.editorAuthority ?? "";
+    if (!authority.startsWith("wsl+")) throw new Error(`Fork opens folders on this computer and its WSL, not on ${project.machine}.`);
+    const mount = /^\/mnt\/([a-z])(?:\/(.*))?$/.exec(project.folder);
+    if (mount) return `${mount[1].toUpperCase()}:\\${(mount[2] ?? "").replaceAll("/", "\\")}`;
+    return `vscode-remote://${authority}${project.folder.split("/").map(encodeURIComponent).join("/")}`;
   }
 
   render() {
     const t = theme();
-    const error = this.app.error();
+    const error = this.error || this.app?.error();
+    const status = this.app?.status() ?? "Opening…";
     // The window covers this pane once it is shown; until then, or after it
     // closes, the pane says why it is empty.
     const message = v_flex().absolute().size_full().items_center().justify_center().gap(10)
       .text_size(13).text_color(error ? t.blocked : t.muted)
-      .child(div().child(error || this.app.status()))
-      .when(Boolean(error) || this.app.status() === "Closed.", el => el.child(
+      .child(div().child(error || status))
+      .when(Boolean(this.app) && (Boolean(error) || status === "Closed."), el => el.child(
         div().id("reopen").px(10).py(5).rounded(5).bg(t.hover).text_color(t.foreground).cursor_pointer()
           .on_click((_event, cx) => { this.app.reopen(); cx.notify(); })
           .child("Open again")));
     return div().relative().size_full().bg(t.surface)
       .child(message)
-      .child(NativeApp(this.app).size_full());
+      .when(Boolean(this.app), el => el.child(NativeApp(this.app).size_full()));
   }
 }

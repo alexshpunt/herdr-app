@@ -159,7 +159,7 @@ jobs:
           }
       - name: Check browser targets
         if: matrix.platform == 'linux-x86_64'
-        run: ~/.bun/bin/bun test tests/linear_target.test.mjs tests/github_target.test.mjs
+        run: ~/.bun/bin/bun test tests/linear_target.test.mjs tests/github_target.test.mjs tests/vscode_uri.test.mjs
       - name: Install Node for Pi integration checks
         if: runner.os == 'Linux' || runner.os == 'Windows'
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
