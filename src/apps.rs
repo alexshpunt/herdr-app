@@ -336,10 +336,8 @@ mod tests {
 
     #[test]
     fn mods_register_one_app_or_several_in_order() {
-        let ids: Vec<(&str, &str)> = shipped()
-            .iter()
-            .map(|a| (a.name.as_str(), a.id()))
-            .collect();
+        let all = shipped();
+        let ids: Vec<(&str, &str)> = all.iter().map(|a| (a.name.as_str(), a.id())).collect();
         assert_eq!(
             ids,
             [

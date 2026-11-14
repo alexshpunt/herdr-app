@@ -106,12 +106,18 @@ impl Model {
         for space in &self.spaces {
             for tab in &space.tabs {
                 for pane in tab.root.panes() {
-                    let Some(Content::Mod { name, props }) = pane.content() else { continue };
-                    if name != "plannotator-browser" || !props.get("review").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
-                        continue;
+                    // A review pane, or a review app in a pane.
+                    let own = match pane.content() {
+                        Some(Content::Mod { name, props }) => Some((name.as_str(), props)),
+                        _ => None,
+                    };
+                    for (name, props) in own.into_iter().chain(pane.apps.iter().map(|a| (a.name.as_str(), &a.props))) {
+                        if name != "plannotator-browser" || !props.get("review").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
+                            continue;
+                        }
+                        let Some(address) = origin_address(space, props) else { continue };
+                        origins.insert((space.id.clone(), address));
                     }
-                    let Some(address) = origin_address(space, props) else { continue };
-                    origins.insert((space.id.clone(), address));
                 }
             }
         }
