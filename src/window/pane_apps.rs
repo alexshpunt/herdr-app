@@ -126,7 +126,7 @@ impl AppWindow {
         apps::sorted(
             self.folders
                 .values()
-                .flat_map(|f| apps::parse(&f.id, &f.hint.app))
+                .flat_map(|f| f.apps.iter().cloned())
                 .collect(),
         )
     }

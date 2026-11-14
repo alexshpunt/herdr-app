@@ -91,17 +91,36 @@ pub fn parse(name: &str, v: &Value) -> Vec<App> {
         one => vec![one.clone()],
     };
     list.into_iter()
-        .filter_map(|r| match serde_json::from_value::<Registration>(r) {
-            Ok(reg) => Some(App {
-                name: name.to_owned(),
-                reg,
-            }),
-            Err(e) => {
-                tracing::warn!("mods/{name}/mod.json: an app registration is malformed: {e}");
-                None
+        .filter_map(|r| {
+            match serde_json::from_value::<Registration>(r)
+                .map_err(|e| e.to_string())
+                .and_then(|reg| check_patterns(&reg).map(|()| reg))
+            {
+                Ok(reg) => Some(App {
+                    name: name.to_owned(),
+                    reg,
+                }),
+                Err(e) => {
+                    tracing::warn!("mods/{name}/mod.json: an app registration is malformed: {e}");
+                    None
+                }
             }
         })
         .collect()
+}
+
+/// Every `remote` and `url` pattern compiles, so a typo is reported once
+/// instead of never matching.
+fn check_patterns(reg: &Registration) -> Result<(), String> {
+    let remotes = reg.when.iter().filter_map(|r| match r {
+        Rule::Remote { remote } => Some(remote),
+        _ => None,
+    });
+    let urls = reg.links.iter().filter_map(|l| l.url.as_ref());
+    for pattern in remotes.chain(urls) {
+        fancy_regex::Regex::new(pattern).map_err(|e| format!("{pattern:?}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Every app the mods register, in order.
@@ -330,7 +349,8 @@ mod tests {
                 { "id": "review", "label": "Annotate diff", "order": 10, "when": [{ "label": "herdr.plannotator" }] },
                 { "id": "last", "label": "Annotate reply", "order": 11, "when": [{ "label": "herdr.plannotator" }] }
             ],
-            "broken": { "id": 3 }
+            "broken": { "id": 3 },
+            "typo": { "label": "Typo", "links": [{ "url": "^https://(" }] }
         }))
     }
 

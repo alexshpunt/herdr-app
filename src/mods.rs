@@ -381,6 +381,8 @@ pub struct Found {
     pub dir: PathBuf,
     pub hint: Hint,
     pub stamp: SystemTime,
+    /// The apps its mod.json registers (`hint.app`), parsed once per scan.
+    pub apps: Vec<crate::apps::App>,
 }
 
 /// Every mod folder that has a main.js.
@@ -410,7 +412,8 @@ fn scan_dir(root: &Path, prefix: &str) -> Vec<Found> {
                 .filter_map(|f| f.metadata().ok()?.modified().ok())
                 .max()
                 .unwrap_or(SystemTime::UNIX_EPOCH);
-            Some(Found { id, dir, hint, stamp })
+            let apps = crate::apps::parse(&id, &hint.app);
+            Some(Found { id, dir, hint, stamp, apps })
         })
         .collect()
 }

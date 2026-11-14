@@ -7,10 +7,11 @@ import { appTarget } from "./uri.js";
 // The person's own VS Code, embedded. As an app in a pane (`pane.app.open`,
 // the Files button, a file or folder link) it opens the pane's project, or the
 // folder of the link it was opened for, on the file that link names; files
-// linked later open in the same window. As a tab's mod pane it opens
-// props.uri (a folder URI such as vscode-remote://wsl+Ubuntu/root/app) or
-// props.folder (a local path), with props.goto (a file URI, `:line:column`
-// after it) on that file. Closing the pane or app closes that VS Code window.
+// linked later open in the same window, a folder linked later replaces it.
+// As a tab's mod pane it opens props.uri (a folder URI such as
+// vscode-remote://wsl+Ubuntu/root/app) or props.folder (a local path), with
+// props.goto (a file URI, `:line:column` after it) on that file. Closing the
+// pane or app closes that VS Code window.
 export default class VsCode extends View {
   init(_props, cx) {
     this.app = null;
@@ -28,7 +29,7 @@ export default class VsCode extends View {
         cx.notify();
       }
     });
-    // A pane's app is opened again with each file link Herdr routes to it.
+    // A pane's app is opened again with each link Herdr routes to it.
     if (typeof props()?.app === "string") {
       cx.spawn(async (cx) => {
         for (;;) {
@@ -57,6 +58,7 @@ export default class VsCode extends View {
     const p = props() ?? {};
     if (typeof p.app === "string") {
       const { folder, goto } = appTarget(p, await this.machines());
+      this.folder = folder;
       this.app = NativeAppState("vscode", folder);
       if (goto) this.goto(goto);
       return;
@@ -65,11 +67,20 @@ export default class VsCode extends View {
     this.openGoto();
   }
 
-  /** A file a later link names, in this window. @param {any} opened */
+  // A link Herdr routes to this app later: a file opens in this window, a
+  // folder in a window of its own, which replaces this one (the old state's
+  // window closes once it is dropped).
+  /** @param {any} opened */
   async reveal(opened) {
-    if (opened?.link?.kind !== "file" || !this.app) return;
+    const kind = opened?.link?.kind;
+    if ((kind !== "file" && kind !== "folder") || !this.app) return;
     try {
-      const { goto } = appTarget({ ...props(), ...opened }, await this.machines());
+      const { folder, goto } = appTarget({ ...props(), ...opened }, await this.machines());
+      if (kind === "folder" && folder !== this.folder) {
+        this.folder = folder;
+        this.error = null;
+        this.app = NativeAppState("vscode", folder);
+      }
       if (goto) this.goto(goto);
     } catch (error) {
       console.error(`Cannot open ${opened.link.path}: ${error}`);

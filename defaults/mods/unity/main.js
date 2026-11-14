@@ -1,7 +1,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex } from "gpui-base";
 import { NativeAppState, NativeApp } from "herdr-browser";
-import { props, theme, focused, nextCommand } from "herdr";
+import { props, theme, focused, nextCommand, nextLink } from "herdr";
 
 // The Unity Editor, embedded, on a Unity project in the editor version the
 // project names: as an app in a pane (`pane.app.open`, the Unity button, a
@@ -13,10 +13,18 @@ export default class UnityEditor extends View {
   init(_props, cx) {
     this.app = null;
     this.error = null;
-    try {
-      this.app = NativeAppState("unity", this.target());
-    } catch (error) {
-      this.error = String(error?.message ?? error);
+    this.open(props() ?? {});
+    // A pane's app gets each later Unity project's folder link Herdr routes
+    // to it: that project replaces this one (the old state's editor closes
+    // once it is dropped).
+    if (typeof props()?.app === "string") {
+      cx.spawn(async (cx) => {
+        for (;;) {
+          const opened = await nextLink();
+          if (opened?.link?.kind === "folder") this.open({ ...props(), ...opened });
+          cx.notify();
+        }
+      });
     }
     cx.spawn(async (cx) => {
       for (;;) {
@@ -36,10 +44,23 @@ export default class UnityEditor extends View {
     });
   }
 
+  /** Opens the editor on the project props `p` name, unless it has it open. @param {any} p */
+  open(p) {
+    try {
+      const target = this.target(p);
+      if (this.app && target === this.project) return;
+      this.project = target;
+      this.error = null;
+      this.app = NativeAppState("unity", target);
+    } catch (error) {
+      this.error = String(error?.message ?? error);
+    }
+  }
+
   // A project on this computer: a Windows folder, or a WSL machine's
   // `/mnt/<drive>/…` folder as that drive's.
-  target() {
-    const p = props() ?? {};
+  /** @param {any} p its props, or those of a later `pane.app.open` */
+  target(p) {
     if (typeof p.app !== "string") return p.folder || p.uri || focused()?.cwd || "";
     const where = p.link?.kind === "folder" ? { folder: p.link.path, machine: p.link.machine ?? null } : p.project;
     if (!where?.folder) throw new Error("No Unity project to open.");

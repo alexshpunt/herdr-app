@@ -60,8 +60,9 @@ window opens with it; later, VS Code opens it in the window that has its
 folder. The bundled `vscode` mod registers the Files app (mod.json `app`):
 in a pane it opens the pane's project, or the folder of the file or folder
 link it was opened for, on that file; files linked later open in the same
-window. VS Code has one window per folder: a second pane on the same folder
-takes that window over. As a tab's mod pane it opens `props.uri` or
+window, and a folder linked later replaces it with that folder's window.
+VS Code has one window per folder: a second pane on the same folder takes
+that window over. As a tab's mod pane it opens `props.uri` or
 `props.folder` and `props.goto` as its window first starts (not again after
 a restart).
 `NativeAppState("fork", target)` shows Fork, the git client, on a local
@@ -71,7 +72,8 @@ with only that repository. The bundled `fork` mod registers the Diff app.
 at `target` (a local folder or `file://` URI), in the version its
 `ProjectSettings/ProjectVersion.txt` names, from Unity Hub's editor folders.
 An editor that already has the project open is adopted; its menu bar stays.
-The bundled `unity` mod registers the Unity app.
+The bundled `unity` mod registers the Unity app; a Unity project's folder
+link that reaches an open Unity app opens that project in it instead.
 
 The shipped `plannotator-browser` mod takes `{ url, origin? }` props and opens a
 review with Back, Reload and Open externally controls. `herdr-app --browser-api`
