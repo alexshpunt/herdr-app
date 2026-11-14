@@ -1,1 +1,4 @@
-{ "place": "none", "title": "Unity", "focusable": true, "frameless": true }
+{ "place": "none", "title": "Unity", "focusable": true, "frameless": true,
+  "app": { "id": "unity", "label": "Unity", "icon": "unity.svg", "order": 20,
+           "when": [{ "local": true }, { "has": "ProjectSettings/ProjectVersion.txt" }],
+           "links": [{ "folder": true, "local": true, "has": "ProjectSettings/ProjectVersion.txt" }] } }

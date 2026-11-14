@@ -1366,6 +1366,7 @@ impl AppWindow {
         let mut props = if app.props.is_object() { app.props.clone() } else { json!({}) };
         props["pane"] = json!(pane.id);
         props["app"] = json!(app.id);
+        props["registration"] = json!(app.app);
         (app.id.clone(), Instance { name: app.name.clone(), props })
     }
 

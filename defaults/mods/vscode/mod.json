@@ -1,1 +1,3 @@
-{ "place": "none", "title": "VS Code", "focusable": true, "frameless": true }
+{ "place": "none", "title": "VS Code", "focusable": true, "frameless": true,
+  "app": { "id": "files", "label": "Files", "icon": "code.svg", "order": 30,
+           "links": [{ "file": true }, { "folder": true }] } }

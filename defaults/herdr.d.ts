@@ -213,8 +213,9 @@ export interface AgentInfo {
 /** Terminals whose program reports a status (agents), in space, tab, pane order. Live. */
 export function agents(): AgentInfo[];
 
-/** An app a pane holds (`pane.app.open`). Its copy gets `props().pane` and
- *  `props().app` (this id); later opens of it arrive from its `nextLink()`. */
+/** An app a pane holds (`pane.app.open`). Its copy gets `props().pane`,
+ *  `props().app` (this id) and `props().registration`; later opens of it
+ *  arrive from its `nextLink()`. */
 export interface PaneAppInfo {
   id: string;
   mod: string;
@@ -506,7 +507,9 @@ export interface AppInfo {
 export function apps(pane?: string): AppInfo[];
 
 /** The props this copy of the mod was given in the layout (or overlay).
- *  A tab's mod pane also gets `pane`: its own pane id.
+ *  A tab's mod pane also gets `pane`: its own pane id. An app in a pane (`pane.app.open`)
+ *  gets its props as opened (`AppProps`: `project`, and `link` for a routed link), plus `pane`
+ *  (the pane it is in), `app` (its own id) and `registration` (its mod.json `app` id, or null).
  *  A layout's terminal_menu mod gets {tab: "pane", target: {pane: string, terminal: string}, overlay: string}.
  *  Target names the clicked pane/terminal, not necessarily the focused one; pass it to actions.
  *  Close the popup with closeOverlay(props().overlay). */

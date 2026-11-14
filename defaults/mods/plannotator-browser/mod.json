@@ -1,1 +1,5 @@
-{ "place": "none", "title": "Plannotator", "focusable": true }
+{ "place": "none", "title": "Plannotator", "focusable": true,
+  "app": [
+    { "id": "review", "label": "Annotate diff", "icon": "annotate-diff.svg", "order": 10, "when": [{ "label": "herdr.plannotator" }] },
+    { "id": "last", "label": "Annotate reply", "icon": "annotate-reply.svg", "order": 11, "when": [{ "label": "herdr.plannotator" }] }
+  ] }
