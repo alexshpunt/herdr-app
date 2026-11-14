@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar } from "gpui-base";
-import { workflow, machines, theme, props, closeOverlay } from "herdr";
+import { workflow, machines, spaces, theme, props, closeOverlay } from "herdr";
 import { modelChoices, currentModelLabel } from "./models.js";
 
 const icon = name => `mods/workspace-chrome/${name}.svg`;
@@ -11,9 +11,13 @@ export default class Workflow extends View {
   init(_props, cx) {
     this.config = null;
     this.catalog = null;
-    this.machine = props()?.machine ?? "";
+    // The dock is told the selected space's machine; a side panel section follows
+    // the selected space until the person picks a machine.
+    this.machine = (this.docked() ? props()?.machine : this.spaceMachine()) ?? "";
+    this.machineChosen = this.docked();
     this.loading = true;
     this.saving = false;
+    this.saves = 0;
     this.error = null;
     this.picking = null;
     this.machinePicker = false;
@@ -21,7 +25,8 @@ export default class Workflow extends View {
     this.at = 0;
     this.generation = 0;
     this.handle = cx.focus_handle();
-    this.handle.focus();
+    // A side panel section leaves the keyboard where it is; the dock takes it.
+    if (this.docked()) this.handle.focus();
     this.input = InputState.new({ placeholder: "Search models" });
     this.input.on("change", (_e, cx) => { this.query = this.input.value(); this.at = 0; cx.notify(); });
     this.input.on("submit", (_e, cx) => {
@@ -29,7 +34,8 @@ export default class Workflow extends View {
       if (choice) this.choose(choice, cx);
     });
     this.refresh(cx);
-    cx.timer.every(4000, (cx) => { if (!this.loading && !this.saving) this.loadCatalog(cx); });
+    // The side panel keeps this copy alive: pick up profile changes made elsewhere (workflow.set) too.
+    cx.timer.every(4000, (cx) => { if (!this.loading && !this.saving) { this.loadConfig(cx); this.loadCatalog(cx); } });
   }
 
   refresh(cx) {
@@ -45,7 +51,22 @@ export default class Workflow extends View {
     });
   }
 
+  loadConfig(cx) {
+    const saves = this.saves;
+    cx.spawn(async cx => {
+      try {
+        const config = await workflow("get");
+        // A save that started meanwhile wins: its reply sets the profiles.
+        if (!this.saving && saves === this.saves) { this.config = config; cx.notify(); }
+      } catch (error) { this.error = String(error); cx.notify(); }
+    });
+  }
+
+  spaceMachine() { return spaces().find(space => space.active)?.machine ?? ""; }
+
   loadCatalog(cx) {
+    // The section starts before the spaces load and follows later switches.
+    if (!this.machineChosen && this.spaceMachine() !== this.machine) { this.machine = this.spaceMachine(); this.catalog = null; }
     const generation = ++this.generation;
     const machine = this.machine;
     cx.spawn(async cx => {
@@ -59,7 +80,10 @@ export default class Workflow extends View {
     });
   }
 
-  close() { closeOverlay(props().overlay); }
+  // Opened as a dock where the layout has no side panel; otherwise a side panel section.
+  docked() { return Boolean(props()?.overlay); }
+
+  close() { if (this.docked()) closeOverlay(props().overlay); }
 
   choices() {
     return this.picking?.field === "thinking"
@@ -74,6 +98,7 @@ export default class Workflow extends View {
     if (!profile) return;
     const args = { profile: profile.id, model: profile.model, [picker.field]: choice.id };
     this.saving = true;
+    this.saves += 1;
     this.picking = null;
     this.error = null;
     this.handle.focus();
@@ -159,7 +184,7 @@ export default class Workflow extends View {
             .text_color(machine.state && machine.state !== "connected" ? t.dim : t.foreground)
             .cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => {
               if (this.saving) return;
-              this.machine = machine.name; this.catalog = null; this.machinePicker = false; this.loadCatalog(cx); cx.notify();
+              this.machine = machine.name; this.machineChosen = true; this.catalog = null; this.machinePicker = false; this.loadCatalog(cx); cx.notify();
             }).child(div().min_w(0).truncate().child(machine.label + (machine.state && machine.state !== "connected" ? ` · ${machine.state}` : ""))))))
         .child(Scrollbar.vertical("wf-machine-list").mode("always").absolute().inset_0())));
   }
@@ -168,8 +193,19 @@ export default class Workflow extends View {
     const t = theme();
     const choices = this.choices();
     const installationError = this.catalog?.installation?.error;
-    return v_flex().id("workflow-settings").track_focus(this.handle).size_full().min_w(0).min_h(0).bg(t.chrome)
-      .border_l(1).border_color(t.border).text_color(t.foreground).text_size(12)
+    const docked = this.docked();
+    const body = v_flex().w_full().min_w(0).px(docked ? 12 : 16).pt(docked ? 6 : 2).pb(docked ? 12 : 4).gap(18)
+      .child(this.machineField(t))
+      .when(Boolean(this.error), el => el.child(div().text_size(11).line_height("16px").text_color(t.foreground).child(this.error)))
+      .when(Boolean(this.catalog?.error), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(this.catalog.error)))
+      .when(Boolean(installationError), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(`Extension installation failed: ${installationError}`)))
+      .when(this.loading, el => el.child(div().text_size(11).text_color(t.dim).child("Loading profiles…")))
+      .children((this.config?.profiles ?? []).map(profile => v_flex().w_full().min_w(0).gap(6)
+        .child(div().pb(2).text_size(12).font_semibold().child(profile.name))
+        .child(this.field(t, profile, "model", "Primary"))
+        .child(this.field(t, profile, "fallbackModel", "Fallback"))
+        .child(this.field(t, profile, "thinking", "Thinking"))));
+    const root = v_flex().id("workflow-settings").track_focus(this.handle).w_full().min_w(0).text_color(t.foreground).text_size(12)
       .on_key_down((event, cx) => {
         if (event.key === "escape") {
           if (this.picking || this.machinePicker) { this.picking = null; this.machinePicker = false; this.handle.focus(); cx.notify(); }
@@ -183,7 +219,10 @@ export default class Workflow extends View {
           if (choice) this.choose(choice, cx);
           cx.stop_propagation();
         }
-      })
+      });
+    // In the side panel the section is as tall as its fields; the panel scrolls and titles it.
+    if (!docked) return root.child(body);
+    return root.size_full().min_h(0).bg(t.chrome).border_l(1).border_color(t.border)
       .child(h_flex().h(32).px(12).gap(7).items_center().flex_none()
         .child(svg(icon("layers")).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().text_size(12).font_semibold().child("Workflow"))
@@ -192,18 +231,7 @@ export default class Workflow extends View {
           .cursor_pointer().hover(s => s.bg(t.hover)).tooltip("Close · Esc").on_click(() => this.close())
           .child(svg(icon("x")).size(12))))
       .child(div().flex_1().min_h(0).relative()
-        .child(div().id("workflow-content").absolute().inset_0().overflow_y_scroll()
-          .child(v_flex().w_full().min_w(0).px(12).pt(6).pb(12).gap(18)
-            .child(this.machineField(t))
-            .when(Boolean(this.error), el => el.child(div().text_size(11).line_height("16px").text_color(t.foreground).child(this.error)))
-            .when(Boolean(this.catalog?.error), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(this.catalog.error)))
-            .when(Boolean(installationError), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(`Extension installation failed: ${installationError}`)))
-            .when(this.loading, el => el.child(div().text_size(11).text_color(t.dim).child("Loading profiles…")))
-            .children((this.config?.profiles ?? []).map(profile => v_flex().w_full().min_w(0).gap(6)
-              .child(div().pb(2).text_size(12).font_semibold().child(profile.name))
-              .child(this.field(t, profile, "model", "Primary"))
-              .child(this.field(t, profile, "fallbackModel", "Fallback"))
-              .child(this.field(t, profile, "thinking", "Thinking"))))))
+        .child(div().id("workflow-content").absolute().inset_0().overflow_y_scroll().child(body))
         .child(Scrollbar.vertical("workflow-content").mode("always").absolute().inset_0()));
   }
 }

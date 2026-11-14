@@ -100,7 +100,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("workflow.get", &[], "Read the persisted Features and Bugs workflow profiles, including their primary model, startup-only fallback model, and thinking level."),
     cmd("workflow.set", &[req("profile"), req("model"), opt("fallbackModel"), opt("thinking")], "Update one workflow profile atomically. Models use provider/model ids; omit fallbackModel to keep it, or pass null to disable it. Existing agents keep their model."),
     cmd("workflow.models", &[opt("machine")], "Read live Pi model pickers for one configured machine (default: the selected space's; empty string: this computer). Reports missing or stale catalogs instead of fabricating model availability, plus extension installation status."),
-    cmd("workflow.open", &[], "Toggle the right-side workflow settings dock."),
+    cmd("workflow.open", &[], "Toggle the right side panel with the Workflow settings section. Layouts without a side panel toggle a Workflow dock instead."),
     cmd("app.help", &[], "Toggle the keys dialog."),
     cmd("app.welcome", &[], "Show the welcome again."),
     cmd("app.whats_new", &[], "Show what this release brought (it opens once by itself after an update)."),
