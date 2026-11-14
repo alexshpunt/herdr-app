@@ -2,7 +2,7 @@
 //! `herdr-app do` all run these; key checks, `herdr-app commands` and the docs come
 //! from this list. Mods' own commands are `<mod>.<command>`.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub struct Arg {
     pub name: &'static str,
@@ -16,11 +16,17 @@ pub struct Command {
 }
 
 const fn req(name: &'static str) -> Arg {
-    Arg { name, required: true }
+    Arg {
+        name,
+        required: true,
+    }
 }
 
 const fn opt(name: &'static str) -> Arg {
-    Arg { name, required: false }
+    Arg {
+        name,
+        required: false,
+    }
 }
 
 const fn cmd(name: &'static str, args: &'static [Arg], about: &'static str) -> Command {
@@ -85,6 +91,16 @@ pub const COMMANDS: &[Command] = &[
     cmd("mod.open", &[req("name")], "Toggle a mod as the overlay its mod.json describes; calling again closes it."),
     cmd("overlay.close", &[opt("id")], "Close an overlay by its id or mod name (default: the top dialog or popup, else the front window); an error if none is open."),
     // The app.
+    // User-owned Pi agents and workflow choices.
+    cmd("agent.list", &[opt("space"), opt("machine")], "List Pi agents in the running app, optionally in an exact space or on one machine (empty string: this computer). Returns stable terminal, space and tab ids, current PID and Pi session, and startup state."),
+    cmd("agent.inspect", &[req("terminal"), opt("lines"), opt("screen")], "Inspect an exact terminal address: current agent identity and status, plus its screen and up to 400 lines of history (default 80). Set screen false for metadata only, without waiting for terminal output."),
+    cmd("agent.send", &[req("terminal"), req("pid"), req("session"), req("message")], "Send a message to the inspected Pi agent. Rejects changed identities, agents still starting, and blocked user questions; never forces input."),
+    cmd("agent.stop", &[req("terminal"), req("pid"), req("session")], "Interrupt the inspected Pi agent with its stop key. Does not kill it or escalate; returns the observed outcome."),
+    cmd("agent.remove", &[req("terminal"), req("pid"), req("session")], "End the inspected Pi agent and remove its dedicated single-pane tab. Rejects changed identities and tabs with sibling panes."),
+    cmd("workflow.get", &[], "Read the persisted Features and Bugs workflow profiles, including their primary model, startup-only fallback model, and thinking level."),
+    cmd("workflow.set", &[req("profile"), req("model"), opt("fallbackModel"), opt("thinking")], "Update one workflow profile atomically. Models use provider/model ids; omit fallbackModel to keep it, or pass null to disable it. Existing agents keep their model."),
+    cmd("workflow.models", &[opt("machine")], "Read live Pi model pickers for one configured machine (default: the selected space's; empty string: this computer). Reports missing or stale catalogs instead of fabricating model availability, plus extension installation status."),
+    cmd("workflow.open", &[], "Toggle the right-side workflow settings dock."),
     cmd("app.help", &[], "Toggle the keys dialog."),
     cmd("app.welcome", &[], "Show the welcome again."),
     cmd("app.whats_new", &[], "Show what this release brought (it opens once by itself after an update)."),
@@ -115,7 +131,10 @@ pub fn find(name: &str) -> Option<&'static Command> {
 /// A key's `name:value` shorthand: the value fills the first argument (a
 /// number fills `index` when there is one).
 pub fn shorthand(c: &Command, value: &str) -> Value {
-    let index = value.parse::<u64>().ok().filter(|_| c.args.iter().any(|a| a.name == "index"));
+    let index = value
+        .parse::<u64>()
+        .ok()
+        .filter(|_| c.args.iter().any(|a| a.name == "index"));
     match (index, c.args.first()) {
         (Some(i), _) => json!({ "index": i }),
         (None, Some(a)) => json!({ a.name: value }),
@@ -126,32 +145,59 @@ pub fn shorthand(c: &Command, value: &str) -> Value {
 /// Reject misspelled arguments before a command can use its current-target default.
 /// Null is the argument-free form used by keys and mods.
 pub fn validate_args(c: &Command, args: &Value) -> Result<(), String> {
-    let valid = if c.args.is_empty() { "none".into() } else { c.args.iter().map(|a| a.name).collect::<Vec<_>>().join(", ") };
+    let valid = if c.args.is_empty() {
+        "none".into()
+    } else {
+        c.args.iter().map(|a| a.name).collect::<Vec<_>>().join(", ")
+    };
     match args {
         Value::Null => Ok(()),
         Value::Object(args) => {
-            let unknown: Vec<_> = args.keys().filter(|key| !c.args.iter().any(|a| a.name == key.as_str())).map(String::as_str).collect();
+            let unknown: Vec<_> = args
+                .keys()
+                .filter(|key| !c.args.iter().any(|a| a.name == key.as_str()))
+                .map(String::as_str)
+                .collect();
             if !unknown.is_empty() {
-                return Err(format!("{}: unknown argument(s): {}; valid arguments: {valid}", c.name, unknown.join(", ")));
+                return Err(format!(
+                    "{}: unknown argument(s): {}; valid arguments: {valid}",
+                    c.name,
+                    unknown.join(", ")
+                ));
             }
             for (key, value) in args {
-                if matches!(key.as_str(), "id" | "pane" | "space" | "terminal" | "target") && !value.is_string() && !value.is_null() {
-                    return Err(format!("{}: argument {key} must be a string (or null to omit it)", c.name));
+                if matches!(
+                    key.as_str(),
+                    "id" | "pane" | "space" | "terminal" | "target"
+                ) && !value.is_string()
+                    && !value.is_null()
+                {
+                    return Err(format!(
+                        "{}: argument {key} must be a string (or null to omit it)",
+                        c.name
+                    ));
                 }
             }
             Ok(())
         }
-        _ => Err(format!("{}: arguments must be an object; valid arguments: {valid}", c.name)),
+        _ => Err(format!(
+            "{}: arguments must be an object; valid arguments: {valid}",
+            c.name
+        )),
     }
 }
 
 /// The first required argument that's missing (an empty string counts as missing).
 pub fn missing(c: &Command, args: &Value) -> Option<&'static str> {
-    c.args.iter().filter(|a| a.required).map(|a| a.name).find(|k| match args.get(k) {
-        None | Some(Value::Null) => true,
-        Some(Value::String(s)) => s.trim().is_empty(),
-        _ => false,
-    })
+    c.args
+        .iter()
+        .filter(|a| a.required)
+        .map(|a| a.name)
+        .find(|k| match args.get(k) {
+            None | Some(Value::Null) => true,
+            Some(Value::String(s)) => s.trim().is_empty(),
+            _ => false,
+        })
 }
 
 /// The list as data, for `herdr-app commands` and mods.
@@ -160,7 +206,11 @@ pub fn listing() -> Value {
         COMMANDS
             .iter()
             .map(|c| {
-                let args: Vec<Value> = c.args.iter().map(|a| json!({ "name": a.name, "required": a.required })).collect();
+                let args: Vec<Value> = c
+                    .args
+                    .iter()
+                    .map(|a| json!({ "name": a.name, "required": a.required }))
+                    .collect();
                 json!({ "name": c.name, "args": args, "about": c.about })
             })
             .collect(),
@@ -175,8 +225,15 @@ mod tests {
     #[test]
     fn the_guide_names_every_command() {
         let guide = include_str!("../defaults/AGENTS.md");
-        let missing: Vec<&str> = COMMANDS.iter().map(|c| c.name).filter(|n| !guide.contains(&format!("`{n}"))).collect();
-        assert!(missing.is_empty(), "defaults/AGENTS.md (## Commands) doesn't name: {missing:?}");
+        let missing: Vec<&str> = COMMANDS
+            .iter()
+            .map(|c| c.name)
+            .filter(|n| !guide.contains(&format!("`{n}")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "defaults/AGENTS.md (## Commands) doesn't name: {missing:?}"
+        );
     }
 
     #[test]
@@ -189,18 +246,32 @@ mod tests {
             assert!(validate_args(c, &Value::Null).is_ok());
             assert!(validate_args(c, &json!({})).is_ok());
             assert!(validate_args(c, &json!(["target"])).is_err());
-            let args: serde_json::Map<String, Value> = c.args.iter().map(|a| (a.name.into(), json!("target"))).collect();
+            let args: serde_json::Map<String, Value> = c
+                .args
+                .iter()
+                .map(|a| (a.name.into(), json!("target")))
+                .collect();
             assert!(validate_args(c, &Value::Object(args)).is_ok());
         }
         let close = find("space.close").unwrap();
-        assert_eq!(validate_args(close, &json!({"space": "X", "confirmed": true})),
-            Err("space.close: unknown argument(s): space; valid arguments: id, confirmed".into()));
+        assert_eq!(
+            validate_args(close, &json!({"space": "X", "confirmed": true})),
+            Err("space.close: unknown argument(s): space; valid arguments: id, confirmed".into())
+        );
         assert!(validate_args(close, &json!({"id": "X", "confirmed": true})).is_ok());
     }
 
     #[test]
     fn malformed_targets_cannot_fall_back_to_the_current_work() {
-        for (name, arg) in [("tab.close", "id"), ("pane.close", "pane"), ("space.close", "id"), ("tab.new", "space"), ("terminal.show", "terminal"), ("pane.swap", "pane"), ("pane.swap", "target")] {
+        for (name, arg) in [
+            ("tab.close", "id"),
+            ("pane.close", "pane"),
+            ("space.close", "id"),
+            ("tab.new", "space"),
+            ("terminal.show", "terminal"),
+            ("pane.swap", "pane"),
+            ("pane.swap", "target"),
+        ] {
             let c = find(name).unwrap();
             for value in [json!(123), json!(false), json!([]), json!({"id": "target"})] {
                 let error = validate_args(c, &json!({arg: value})).unwrap_err();
@@ -219,10 +290,19 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), COMMANDS.len());
-        assert_eq!(shorthand(find("tab.select").unwrap(), "3"), json!({ "index": 3 }));
-        assert_eq!(shorthand(find("pane.split").unwrap(), "right"), json!({ "direction": "right" }));
+        assert_eq!(
+            shorthand(find("tab.select").unwrap(), "3"),
+            json!({ "index": 3 })
+        );
+        assert_eq!(
+            shorthand(find("pane.split").unwrap(), "right"),
+            json!({ "direction": "right" })
+        );
         let move_ = find("space.move").unwrap();
-        assert_eq!(missing(move_, &json!({ "id": " ", "index": 1 })), Some("id"));
+        assert_eq!(
+            missing(move_, &json!({ "id": " ", "index": 1 })),
+            Some("id")
+        );
         assert_eq!(missing(move_, &json!({ "id": "sp1", "index": 1 })), None);
         // Names are optional: none is Herdr's automatic one.
         assert_eq!(missing(find("space.new").unwrap(), &json!({})), None);

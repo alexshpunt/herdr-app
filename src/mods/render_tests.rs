@@ -150,6 +150,24 @@ fn module(values: BTreeMap<String, Value>, calls: Rc<RefCell<Calls>>) -> HostMod
         module = module.function(name, |_| Ok(HostValue::Null));
     }
     module = module.async_function("feedbackPickImages", |_| Ok(async { Ok(HostValue::Array(vec![])) }));
+    module = module.async_function("workflow", |a| {
+        let action = a.string(0)?.to_owned();
+        let args = a.get(1).map(from_host).unwrap_or(Value::Null);
+        let mut config = crate::workflow::Config::default();
+        let result = match action.as_str() {
+            "get" => serde_json::to_value(config).unwrap(),
+            "set" => {
+                if let Some(profile) = config.profiles.iter_mut().find(|p| args["profile"] == p.id) {
+                    if let Some(model) = args["model"].as_str() { profile.model = model.to_owned(); }
+                    if let Some(fallback) = args.get("fallbackModel") { profile.fallback_model = fallback.as_str().map(str::to_owned); }
+                }
+                serde_json::to_value(config).unwrap()
+            }
+            "models" => json!({"machine":args["machine"],"models":[{"id":"provider/model-a","name":"Model A"},{"id":"provider/model-b","name":"Model B"}],"installation":{"state":"ready"}}),
+            _ => panic!("unexpected workflow action {action}"),
+        };
+        Ok(std::future::ready(Ok(to_host(&result))))
+    });
     module = module.async_function("knownAgents", |_| Ok(async { Ok(HostValue::Array(vec![])) }));
     module = module.async_function("pickFolder", |_| Ok(async { Ok(HostValue::Null) }));
     for name in ["nextCommand", "nextLink", "watchFolder"] {

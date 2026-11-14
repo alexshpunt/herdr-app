@@ -957,6 +957,21 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             Ok(crate::mod_files::write_text(a.string(0)?.to_owned(), a.string(1)?.to_owned(), expected))
         })
         .async_function("hc", |a| Ok(exec_future("hc".into(), strings(a.get(0)), None, None, EXEC_LIMIT)))
+        .async_function("workflow", |a| {
+            let action = a.string(0)?;
+            if !matches!(action, "get" | "set" | "models") { return Err(HostError::new("workflow action is get, set, or models")); }
+            let allow_catalog_error = action == "models";
+            let cmd = json!({"do":format!("workflow.{action}"),"args":a.get(1).map(from_host).unwrap_or(Value::Null)});
+            let (tx, rx) = std::sync::mpsc::channel();
+            request(Request::Control { cmd, reply: tx });
+            let (result_tx, result_rx) = async_channel::bounded(1);
+            std::thread::spawn(move || { let _ = result_tx.send_blocking(rx.recv_timeout(Duration::from_secs(30))); });
+            Ok(async move {
+                let result = result_rx.recv().await.map_err(|e| HostError::new(e.to_string()))?.map_err(|e| HostError::new(e.to_string()))?;
+                if !allow_catalog_error && let Some(error) = result.get("error").and_then(Value::as_str) { return Err(HostError::new(error)); }
+                Ok(to_host(&result))
+            })
+        })
         .function("home", |_| Ok(home().to_string_lossy().into_owned().into()))
         .function("appHome", |_| Ok(app_dir().to_string_lossy().into_owned().into()))
         .function("fonts", |_| Ok(to_host(&json!(*FONTS.lock().unwrap()))))

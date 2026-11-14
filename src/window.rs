@@ -293,6 +293,8 @@ enum OverlayKind {
     Dialog,
     Popup,
     Toast,
+    /// Full-height panel beside the layout, without modal keyboard handling.
+    Dock,
     /// Stays until closed, moves where it's dropped, comes to the front when
     /// pressed (`movable.rs`). Never holds the keyboard on its own.
     Window,
@@ -303,6 +305,11 @@ impl OverlayKind {
     fn modal_keys(self) -> bool {
         matches!(self, OverlayKind::Dialog | OverlayKind::Popup)
     }
+}
+
+// Up to 1: a share of the window; larger values use logical pixels.
+fn overlay_span(value: f32, full: Pixels) -> Pixels {
+    if value <= 1.0 { full * value } else { settings::z(value) }
 }
 
 struct Overlay {
@@ -406,6 +413,7 @@ pub struct AppWindow {
     watched: Watched,
     /// Core's terminal records by address.
     live: HashMap<String, Value>,
+    app_mailbox: crate::app_mailbox::State,
     listed_once: bool,
     /// Live folders by address (from the shell process).
     cwds: HashMap<String, String>,
@@ -468,6 +476,7 @@ pub struct AppWindow {
 
 impl AppWindow {
     pub fn new(core: Arc<Core>, requests: async_channel::Receiver<Request>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::pi_install::start(core.clone(), None);
         let runtime = ShellRuntime::new_with_components(cx, crate::browser::components()).map_err(|e| tracing::error!("script runtime failed, mods are off: {e:#}")).ok();
         let file_events = crate::files::watch(&mods::app_dir(), #[cfg(test)] cx.background_executor().clone());
         if let (Some(runtime), Some(events)) = (&runtime, &file_events) {
@@ -514,6 +523,7 @@ impl AppWindow {
             looked: HashMap::new(),
             watched: Watched::default(),
             live: HashMap::new(),
+            app_mailbox: crate::app_mailbox::State::default(),
             listed_once: false,
             cwds: HashMap::new(),
             reported: HashMap::new(),
@@ -711,6 +721,7 @@ impl AppWindow {
                     if changed { this.sync(window, cx); }
                     this.fit_hidden_tabs(window, cx);
                     this.flush_documents(refresh, window, cx);
+                    this.poll_app_mailboxes(window, cx);
                 }).is_err() { break; }
                 cx.background_executor().timer(Duration::from_millis(500)).await;
             }
@@ -814,7 +825,9 @@ impl AppWindow {
 
     fn reconnected(&mut self, core: Arc<Core>, cx: &mut Context<Self>) {
         tracing::info!("reconnected to the core");
+        crate::pi_install::start(core.clone(), None);
         self.core_generation += 1;
+        self.app_mailbox.reconnected();
         for report in self.reported.values_mut().filter(|r| r.report.pid.is_some()) {
             report.verification.disconnected();
             report.last_check = None;
@@ -2008,6 +2021,9 @@ impl AppWindow {
                     "needs_login" => format!("{name} needs login; run hc machine login {name}"),
                     _ => format!("{name} is {state}"),
                 }));
+                if state == "connected" && self.documents.get(name).is_none_or(|slot| !slot.connected) {
+                    crate::pi_install::start(self.core.clone(), Some(name.to_owned()));
+                }
                 self.documents.entry(name.to_owned()).or_default().connection(state == "connected", machine["since_ms"].as_u64(), reason);
             }
             if self.model.spaces.iter().any(|s| s.machine.as_deref().is_some_and(|m| !states.contains_key(m))) {
@@ -2531,7 +2547,7 @@ impl AppWindow {
     fn spawn(&mut self, argv: Option<Vec<String>>, cwd: String, follow: bool, space: &str, ctx: &str, on: Option<&str>, size: Option<(u16, u16)>, window: &Window) -> Result<(String, String), String> {
         let argv = argv.unwrap_or_default();
         self.require_document(on)?;
-        let labels = json!({ "herdr.space": crate::mirror::local(space, on), "herdr.tab": crate::mirror::local(ctx, on), "herdr.seen": "0" });
+        let labels = json!({ "herdr.space": crate::mirror::local(space, on), "herdr.tab": crate::mirror::local(ctx, on), "herdr.seen": "0", "herdr.app": crate::app_mailbox::new_route().to_string() });
         let (addr, cwd) = run_following_folder(cwd, follow, on, |cwd| match self.core.run(argv.clone(), cwd.clone(), labels.clone(), on, size, crate::terminal::initial_display(window)) {
             // An agent on a machine without `sh` (Windows): in its PowerShell instead.
             Err(e) if on.is_some() && argv.first().map(String::as_str) == Some("sh") && format!("{e:#}").contains("not found") => {
@@ -2555,12 +2571,15 @@ impl AppWindow {
         vec!["powershell.exe".into(), "-NoLogo".into(), "-NoExit".into(), "-Command".into(), crate::programs::powershell_line(cmd)]
     }
 
-    /// An agent with its first message, in a shell that stays when the agent exits
-    /// (on another machine: that machine's shell).
+    /// A verified Pi runs directly: core keep=true recovers program loss, not ordinary exits.
+    /// Other agents retain the machine's existing shell-wrapper behavior.
     fn agent_argv(argv: Option<Vec<String>>, task: Option<&str>, on: Option<&str>) -> Option<Vec<String>> {
         let task = task.map(str::trim).filter(|t| !t.is_empty());
         argv.filter(|a| !a.is_empty()).map(|mut cmd| {
             cmd.extend(task.map(str::to_owned));
+            // The installer resolved this machine's actual Node/Pi entrypoint.
+            // Core keep=true already recovers a shell after program loss.
+            if crate::pi_install::is_direct_pi(&cmd) { return cmd; }
             if on.is_some() {
                 return crate::remote_shell::launch(cmd);
             }
@@ -2898,6 +2917,14 @@ impl AppWindow {
     /// Runs a command for the person (keys, clicks, menus, mods): a missing
     /// name is asked for.
     fn run(&mut self, name: &str, args: Value, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(name, "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove") {
+            self.agent_request(name.into(), args, None, window, cx);
+            return;
+        }
+        if let Some((name, args, machine)) = self.pi_launch(name, &args, true) {
+            self.launch_pi_request(name, args, machine, true, None, window, cx);
+            return;
+        }
         // A click or key has nobody to read the reply: show why it failed.
         if let Some(error) = self.run_as(name, args, true, window, cx).get("error").and_then(Value::as_str) {
             self.command_error(name, error, window, cx);
@@ -3120,6 +3147,34 @@ impl AppWindow {
             .then(|| (self.model.active.clone(), self.model.spaces.iter().map(|p| (p.id.clone(), p.active.clone())).collect::<Vec<_>>()));
         let active_ctx = self.model.active_tab().map(|c| c.id.clone());
         match name {
+            "workflow.get" => { self.answer(crate::workflow::get()); return; }
+            "workflow.set" => { self.answer(crate::workflow::set(a)); self.refresh_mods(cx); return; }
+            "workflow.models" => {
+                if a.get("machine").is_some_and(|m| !m.is_string() && !m.is_null()) { return self.fail("machine must be a string"); }
+                let machine = match Self::arg(a, "machine") {
+                    Some("") => None,
+                    Some(machine) => Some(machine),
+                    None => self.model.active_space().and_then(|s| s.machine.as_deref()),
+                };
+                let mut catalog = crate::workflow::catalog(self.live.values(), machine);
+                catalog["installation"] = crate::pi_install::status(machine);
+                self.reply = Some(catalog);
+                return;
+            }
+            "workflow.open" => {
+                if self.overlays.iter().any(|o| o.id == "workflow") { self.close_overlay("workflow", window, cx); }
+                else {
+                    let machine = self.model.active_space().and_then(|s| s.machine.as_deref());
+                    let spec = json!({"mod":"frame-workflow","kind":"dock","width":300,"height":1,"frame":"none","props":{"machine":machine}});
+                    self.open_overlay("workflow".into(), spec, window, cx);
+                }
+                return;
+            }
+            "agent.list" => { self.answer(self.agent_list(a)); return; }
+            "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove" => {
+                self.agent_request(name.into(), a.clone(), None, window, cx);
+                return;
+            }
             // ---- spaces
             "space.new" => {
                 let name = Self::arg(a, "name").unwrap_or_default();
@@ -3849,6 +3904,7 @@ impl AppWindow {
     fn open_overlay(&mut self, id: String, spec: Value, window: &mut Window, cx: &mut Context<Self>) {
         let kind = match spec.get("kind").and_then(Value::as_str) {
             Some("popup") => OverlayKind::Popup,
+            Some("dock") => OverlayKind::Dock,
             Some("toast") => OverlayKind::Toast,
             Some("window") => OverlayKind::Window,
             _ => OverlayKind::Dialog,
@@ -4049,6 +4105,215 @@ impl AppWindow {
         self.reload_config(window, cx);
     }
 
+    /// Core label events carry requests back from remote Pi processes. All
+    /// document I/O and reply waits stay off the window thread.
+    fn poll_app_mailboxes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.app_mailbox.retain(&self.live);
+        let work: Vec<_> = self.live.iter().filter_map(|(address, record)| {
+            crate::agents::placement(&self.model, address)?;
+            self.app_mailbox.plan(address, record).map(|work| (address.clone(), work))
+        }).collect();
+        for (address, work) in work {
+            let core = self.core.clone();
+            let generation = self.core_generation;
+            match work {
+                crate::app_mailbox::Work::Route(route) => {
+                    cx.spawn_in(window, async move |this, cx| {
+                        let target = address.clone();
+                        let result = cx.background_executor().spawn(async move {
+                            crate::app_mailbox::publish(&core, &target, &route)
+                        }).await;
+                        if let Err(error) = result { tracing::warn!("cannot publish App route for {address}: {error:#}"); }
+                        let _ = this.update(cx, |this, _| {
+                            if generation == this.core_generation { this.app_mailbox.routed(&address); }
+                        });
+                    }).detach();
+                }
+                crate::app_mailbox::Work::Request(route) => {
+                    cx.spawn_in(window, async move |this, cx| {
+                        let source = address.clone();
+                        let expected = route.clone();
+                        let reader = core.clone();
+                        let claims = cx.background_executor().spawn(async move {
+                            crate::app_mailbox::claim(&reader, &source, &expected)
+                        }).await;
+                        let claims = match claims {
+                            Ok(claims) => claims,
+                            Err(error) => { tracing::warn!("App mailbox {address}: {error:#}"); return; }
+                        };
+                        for claim in claims {
+                            let (reply, receive) = std::sync::mpsc::channel();
+                            let wire = claim.wire.clone();
+                            let dispatched = this.update_in(cx, |this, window, cx| {
+                                if generation != this.core_generation || this.agent_placement(&address).is_none() {
+                                    let _ = reply.send(json!({"error":"The caller placement or core connection changed. Inspect Herdr before retrying."}));
+                                    return;
+                                }
+                                if crate::app_mailbox::targets_caller(&wire, &address) {
+                                    let _ = reply.send(json!({"error":"Do not manage the calling Pi through its own Herdr agent tool."}));
+                                    return;
+                                }
+                                this.handle(Request::Control { cmd: wire, reply }, window, cx);
+                            }).is_ok();
+                            if !dispatched { return; }
+                            let writer = core.clone();
+                            let source = address.clone();
+                            let expected = route.clone();
+                            let executor = cx.background_executor().clone();
+                            cx.background_executor().spawn(async move {
+                                // A blocking recv would occupy the same worker
+                                // pool needed by the command being awaited.
+                                let deadline = Instant::now() + crate::app_mailbox::REPLY_TIMEOUT;
+                                let result = loop {
+                                    match receive.try_recv() {
+                                        Ok(result) => break result,
+                                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break json!({"error":"App completion is unknown; inspect Herdr before retrying.","outcome":"unknown"}),
+                                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                                    }
+                                    if Instant::now() >= deadline {
+                                        break json!({"error":"App accepted the request, but completion is unknown. Inspect Herdr before repeating a mutation.","outcome":"unknown"});
+                                    }
+                                    executor.timer(Duration::from_millis(50)).await;
+                                };
+                                if let Err(error) = crate::app_mailbox::finish(&writer, &source, &expected, claim, result) {
+                                    tracing::warn!("App mailbox completion for {source}: {error:#}");
+                                }
+                            }).detach();
+                        }
+                    }).detach();
+                }
+            }
+        }
+    }
+    fn agent_placement(&self, address: &str) -> Option<Value> {
+        crate::agents::placement(&self.model, address)
+    }
+
+    fn agent_list(&self, args: &Value) -> Result<Value, String> {
+        let space = Self::arg(args, "space");
+        if space.is_some_and(|id| self.model.space(id).is_none()) { return Err("No such space; use its exact id from herdr-app ls".into()); }
+        if args.get("machine").is_some_and(|m| !m.is_string() && !m.is_null()) { return Err("machine must be a string".into()); }
+        let machine = Self::arg(args, "machine");
+        let mut agents: Vec<Value> = self.live.iter().filter(|(address, record)| {
+            crate::agents::is_pi(record) && machine.is_none_or(|m| address.split_once('/').map(|(m, _)| m).unwrap_or("") == m)
+        }).filter_map(|(address, record)| {
+            let placement = self.agent_placement(address);
+            if space.is_some_and(|id| placement.as_ref().is_none_or(|p| p["space"] != id)) { return None; }
+            Some(crate::agents::summary(address, record, placement.as_ref()))
+        }).collect();
+        agents.sort_by(|a, b| a["terminal"].as_str().cmp(&b["terminal"].as_str()));
+        Ok(json!({"agents":agents}))
+    }
+
+    fn agent_request(&mut self, name: String, args: Value, reply: Option<std::sync::mpsc::Sender<Value>>, window: &mut Window, cx: &mut Context<Self>) {
+        let command = crate::commands::find(&name).expect("registered agent command");
+        let validation = crate::commands::validate_args(command, &args).and_then(|()| {
+            crate::commands::missing(command, &args).map_or(Ok(()), |arg| Err(format!("{name} needs {arg}")))
+        });
+        let address = Self::arg(&args, "terminal").unwrap_or_default().to_owned();
+        let placement = self.agent_placement(&address);
+        let removing = name == "agent.remove";
+        let validation = validation.and_then(|()| {
+            if removing { crate::agents::require_dedicated(placement.as_ref())?; }
+            if name != "agent.inspect" { self.require_document(address.split_once('/').map(|(m, _)| m)) }
+            else { Ok(()) }
+        });
+        if let Err(error) = validation {
+            if let Some(reply) = reply { let _ = reply.send(json!({"error":error})); }
+            else { self.command_error(&name, &error, window, cx); }
+            return;
+        }
+        let core = self.core.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let worker_name = name.clone();
+            let expected = placement.clone();
+            let result = cx.background_executor().spawn(async move { crate::agents::request(&core, &worker_name, &args, expected.as_ref()) }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let result = result.and_then(|value| {
+                    if removing {
+                        let current = this.agent_placement(&address);
+                        let expected_tab_exists = placement.as_ref().and_then(|p| p["tab"].as_str()).is_some_and(|id| this.model.tab(id).is_some());
+                        if let Some(tab) = crate::agents::removal_tab(current.as_ref(), placement.as_ref(), expected_tab_exists)? { this.model.remove_tab(&tab); }
+                        this.sync(window, cx);
+                        this.flush_documents(false, window, cx);
+                    }
+                    Ok(value)
+                });
+                let response = result.unwrap_or_else(|error| json!({"error":error}));
+                if let Some(reply) = reply { let _ = reply.send(response); }
+                else if let Some(error) = response["error"].as_str() { this.command_error(&name, error, window, cx); }
+            });
+        }).detach();
+    }
+
+    /// Pin the target before waiting for installation, so a selection change
+    /// while Node starts cannot put the agent in another space or machine.
+    fn pi_launch(&self, name: &str, args: &Value, person: bool) -> Option<(String, Value, Option<String>)> {
+        if !matches!(name, "space.new" | "tab.new" | "pane.split" | "terminal.open") { return None; }
+        // Validate the original request before defaults can replace malformed
+        // targets or terminal.open can discard unknown keys while translating it.
+        crate::commands::validate_args(crate::commands::find(name)?, args).ok()?;
+        let argv = Self::argv(args)?;
+        let program = argv.first()?.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+        if !matches!(program.as_str(), "pi" | "pi.cmd" | "pi.exe") { return None; }
+        let mut args = args.clone();
+        if name == "terminal.open" {
+            let place = Self::arg(&args, "place").unwrap_or("tab");
+            let mut pinned = json!({"argv":argv,"folder":args["folder"]});
+            return match place {
+                "tab" => { pinned["name"] = args["name"].clone(); self.pi_launch("tab.new", &pinned, person) }
+                "right" | "down" => { pinned["direction"] = json!(place); self.pi_launch("pane.split", &pinned, person) }
+                _ => None,
+            };
+        }
+        let machine = if name == "space.new" {
+            let machine = new_space_machine(&args, person, &self.model);
+            // Null means selection fallback; an empty string pins this computer.
+            args["machine"] = json!(machine.as_deref().unwrap_or(""));
+            machine
+        } else if name == "pane.split" {
+            let pane = Self::owned(&args, "pane").or_else(|| self.model.focused_pane())?;
+            let space = self.model.space_of(&pane)?;
+            let machine = self.model.address_of(&pane).and_then(|a| a.split_once('/').map(|(m, _)| m.to_owned())).or_else(|| space.machine.clone());
+            args["pane"] = json!(pane);
+            machine
+        } else {
+            let space = Self::owned(&args, "space").or_else(|| self.model.active.clone());
+            if space.is_none() && person && args["space"].is_null() && Self::owned(&args, "mod").is_none() {
+                // Preserve the person's first-tab behavior without leaving a
+                // selection-dependent tab request pending during installation.
+                return self.pi_launch("space.new", &json!({
+                    "name":"", "tab":args["name"], "argv":argv, "folder":args["folder"],
+                    "task":args["task"], "focus":args["focus"], "machine":""
+                }), person);
+            }
+            let space = space?;
+            let machine = self.model.space(&space)?.machine.clone();
+            args["space"] = json!(space);
+            machine
+        };
+        Some((name.into(), args, machine))
+    }
+
+    fn launch_pi_request(&mut self, name: String, args: Value, machine: Option<String>, person: bool, reply: Option<std::sync::mpsc::Sender<Value>>, window: &mut Window, cx: &mut Context<Self>) {
+        let core = self.core.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx.background_executor().spawn(async move { crate::pi_install::launch(&core, machine.as_deref()) }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let response = match result {
+                    Ok(mut runtime) => {
+                        let mut args = args;
+                        if let Some(argv) = Self::argv(&args) { runtime.extend(argv.into_iter().skip(1)); }
+                        args["argv"] = json!(runtime);
+                        this.run_as(&name, args, person, window, cx)
+                    }
+                    Err(error) => json!({"error":format!("Cannot start Pi with the Herdr integration: {error}")}),
+                };
+                if let Some(reply) = reply { let _ = reply.send(response); }
+                else if let Some(error) = response["error"].as_str() { this.command_error(&name, error, window, cx); }
+            });
+        }).detach();
+    }
     fn handle(&mut self, req: Request, window: &mut Window, cx: &mut Context<Self>) {
         match req {
             Request::Run { name, args } => self.run(&name, args, window, cx),
@@ -4060,6 +4325,28 @@ impl AppWindow {
                 if let Some(path) = cmd.get("shot").and_then(Value::as_str) {
                     crate::control::shot(window, path.into(), reply);
                     return;
+                }
+                if let Some(name) = cmd["do"].as_str() {
+                    let args = cmd.get("args").cloned().unwrap_or(Value::Null);
+                    if matches!(name, "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove") {
+                        self.agent_request(name.into(), args, Some(reply), window, cx);
+                        return;
+                    }
+                    if let Some((name, args, machine)) = self.pi_launch(name, &args, false) {
+                        self.launch_pi_request(name, args, machine, false, Some(reply), window, cx);
+                        return;
+                    }
+                    if matches!(name, "workflow.get" | "workflow.set") {
+                        let command = crate::commands::find(name).expect("registered workflow command");
+                        let name = name.to_owned();
+                        cx.background_executor().spawn(async move {
+                            let result = crate::commands::validate_args(command, &args).and_then(|()| {
+                                if name == "workflow.get" { crate::workflow::get() } else { crate::workflow::set(&args) }
+                            });
+                            let _ = reply.send(result.unwrap_or_else(|error| json!({"error":error})));
+                        }).detach();
+                        return;
+                    }
                 }
                 let _ = reply.send(self.control(cmd, window, cx));
             }
@@ -4458,21 +4745,24 @@ impl AppWindow {
                     .child("no agents yet. start claude, codex or pi in a terminal")
                     .into_any_element(),
             },
-            Content::Context { .. } => match self.model.active_tab() {
-                Some(c) => self.render_node(c.shown(), focused, self.pane_frame(), cx),
-                None if self.documents.get("").is_some_and(|s| s.layout() == "loading") => div().size_full().into_any_element(),
-                None => {
-                    let key = crate::keys::listing().into_iter().find(|(_, _, a)| a == "space.new").map(|(_, k, _)| format!(" ({k})"));
-                    div()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(c("dim"))
-                        .child(format!("No space open. Make one{}.", key.unwrap_or_default()))
-                        .into_any_element()
-                }
-            },
+            Content::Context { .. } => {
+                let body = match self.model.active_tab() {
+                    Some(c) => self.render_node(c.shown(), focused, self.pane_frame(), cx),
+                    None if self.documents.get("").is_some_and(|s| s.layout() == "loading") => div().size_full().into_any_element(),
+                    None => {
+                        let key = crate::keys::listing().into_iter().find(|(_, _, a)| a == "space.new").map(|(_, k, _)| format!(" ({k})"));
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(c("dim"))
+                            .child(format!("No space open. Make one{}.", key.unwrap_or_default()))
+                            .into_any_element()
+                    }
+                };
+                if self.dock_host() == Some(n.id.as_str()) { self.render_workspace(body, cx) } else { body }
+            }
         }
     }
 
@@ -4636,6 +4926,40 @@ impl AppWindow {
         }
     }
 
+    fn dock_host(&self) -> Option<&str> {
+        self.chrome.visible_blocks().into_iter()
+            .find(|node| matches!(node.content(), Some(Content::Context { .. })))
+            .map(|node| node.id.as_str())
+    }
+
+    fn render_workspace(&self, body: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        div().size_full().flex()
+            .child(div().id("herdr-workspace").debug_selector(|| "herdr-workspace".into())
+                .flex_1().min_w_0().h_full().flex().child(body))
+            .children(self.render_docks(cx)).into_any_element()
+    }
+
+    fn render_docks(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.overlays.iter().filter(|o| o.kind == OverlayKind::Dock).map(|o| {
+            let id = format!("dock-{}", o.id);
+            let selector = id.clone();
+            let content = match &o.layout {
+                Some(layout) => self.render_node(layout, &HashSet::new(), None, cx),
+                None => self.render_slot(&o.slot, cx),
+            };
+            div().id(SharedString::from(id)).debug_selector(move || selector.into())
+                .track_focus(&o.focus)
+                .when(o.size.width <= 1.0, |d| d.w(relative(o.size.width)))
+                .when(o.size.width > 1.0, |d| d.w(settings::z(o.size.width)))
+                .max_w_full()
+                .h_full().min_h_0().flex_none().flex()
+                .when(!o.bare, |d| d.bg(c("popover")).border_l_1().border_color(c("border")))
+                .overflow_hidden().occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(content).child(crate::browser::cover()).into_any_element()
+        }).collect()
+    }
+
     fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut out = Vec::new();
         let mut toast_y = 16.0;
@@ -4648,10 +4972,11 @@ impl AppWindow {
         // (a window pressed last is last: on top).
         let order = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window).chain(self.overlays.iter().filter(|o| o.kind != OverlayKind::Window));
         for o in order {
+            if o.kind == OverlayKind::Dock {
+                continue;
+            }
             let id = o.id.clone();
-            // Up to 1: a share of the window (terminals in overlays want room, not px).
-            let span = |v: f32, full: Pixels| if v <= 1.0 { full * v } else { settings::z(v) };
-            let (w, h) = (span(o.size.width, viewport.width), span(o.size.height, viewport.height));
+            let (w, h) = (overlay_span(o.size.width, viewport.width), overlay_span(o.size.height, viewport.height));
             let sized = |v: f32| v > 0.0 || o.kind != OverlayKind::Window;
             let content = match &o.layout {
                 Some(l) => self.render_node(l, &HashSet::new(), None, cx),
@@ -4675,6 +5000,7 @@ impl AppWindow {
                 .child(crate::browser::cover());
             match o.kind {
                 OverlayKind::Window => out.push(self.render_window(o, body, viewport, cx)),
+                OverlayKind::Dock => {}
                 OverlayKind::Dialog => out.push(
                     div()
                         .absolute()
@@ -5304,6 +5630,7 @@ impl Render for AppWindow {
         }
         let focused = self.focused_path(window, cx);
         let tree = self.render_node(&self.chrome, &focused, None, cx);
+        let tree = if self.dock_host().is_none() { self.render_workspace(tree, cx) } else { tree };
         let tree = self.window_frame(tree, window, cx);
         let overlays = self.render_overlays(window.viewport_size(), cx);
         let tracker = self.float_tracker(cx);
@@ -5536,6 +5863,18 @@ mod tests {
         assert!(error.to_string().contains("second"));
     }
 
+    #[test]
+    fn native_pi_launch_keeps_its_task_as_one_exact_argument_without_a_shell() {
+        let runtime = serde_json::json!({"launch":["/herdr-window-test/node", "/herdr-window-test/pi.js"]});
+        crate::pi_install::remember_runtime(&runtime);
+        let argv = vec!["/herdr-window-test/node".to_owned(), "/herdr-window-test/pi.js".to_owned(), "--model".to_owned(), "fixture/success".to_owned()];
+        let task = "{\"name\":\"task $with `quotes`\"}\nsecond line";
+        let mut expected = argv.clone();
+        expected.push(task.to_owned());
+        for machine in [None, Some("remote")] {
+            assert_eq!(super::AppWindow::agent_argv(Some(argv.clone()), Some(task), machine), Some(expected.clone()));
+        }
+    }
     #[test]
     fn new_spaces_follow_the_persons_active_machine_but_keep_explicit_targets() {
         use serde_json::json;
@@ -5851,6 +6190,142 @@ mod tests {
         let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::new(crate::hc::offline(), requests, window, cx));
         assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
         (view, cx)
+    }
+
+    #[test]
+    fn invalid_pi_launch_arguments_cannot_be_retargeted_or_discarded() {
+        in_own_process("pi_launch_validation");
+    }
+
+    #[gpui::test]
+    fn pi_launch_validation(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("pi_launch_validation") { return; }
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "block", "titlebar": "none", "content": {"tab": "active"}
+        }));
+        view.update(cx, |this, _| {
+            this.model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"));
+            this.model.space_mut("remote").unwrap().machine = Some("second".into());
+            for person in [true, false] {
+                for (name, args) in [
+                    ("space.new", json!({"argv":["pi"], "machien":"second"})),
+                    ("tab.new", json!({"argv":["pi"], "space":123})),
+                    ("pane.split", json!({"argv":["pi"], "pane":123})),
+                    ("terminal.open", json!({"argv":["pi"], "sapce":"remote"})),
+                ] {
+                    assert!(this.pi_launch(name, &args, person).is_none(), "{name}: {args}");
+                }
+                let (name, pinned, machine) = this.pi_launch("tab.new", &json!({"argv":["pi"]}), person).unwrap();
+                assert_eq!(name, "tab.new");
+                assert_eq!(pinned["space"], "remote");
+                assert_eq!(machine.as_deref(), Some("second"));
+                let (name, pinned, machine) = this.pi_launch("terminal.open", &json!({"argv":["pi"], "place":"right"}), person).unwrap();
+                assert_eq!(name, "pane.split");
+                assert_eq!(pinned["pane"], "pane");
+                assert_eq!(machine.as_deref(), Some("second"));
+            }
+        });
+    }
+
+    #[test]
+    fn pi_launch_keeps_empty_app_and_selected_targets_stable() {
+        in_own_process("pi_launch_targets");
+    }
+
+    #[gpui::test]
+    fn pi_launch_targets(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("pi_launch_targets") { return; }
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "block", "titlebar": "none", "content": {"tab": "active"}
+        }));
+        view.update(cx, |this, _| {
+            assert!(this.model.active_space().is_none());
+            let args = json!({"argv":["pi"], "name":"first", "folder":"/repo", "task":"task", "focus":false});
+            let (name, pinned, machine) = this.pi_launch("tab.new", &args, true).unwrap();
+            assert_eq!(name, "space.new");
+            assert_eq!(pinned["tab"], args["name"]);
+            for field in ["argv", "folder", "task", "focus"] { assert_eq!(pinned[field], args[field]); }
+            assert_eq!(machine, None);
+            let mut null_space = args.clone();
+            null_space["space"] = json!(null);
+            assert_eq!(this.pi_launch("tab.new", &null_space, true).unwrap().0, "space.new");
+            assert!(this.pi_launch("tab.new", &args, false).is_none());
+            for person in [true, false] {
+                assert!(this.pi_launch("pane.split", &json!({"argv":["pi"], "direction":"right"}), person).is_none());
+                assert!(this.pi_launch("tab.new", &json!({"argv":["pi"], "space":"missing"}), person).is_none());
+                assert!(this.pi_launch("pane.split", &json!({"argv":["pi"], "pane":"missing", "direction":"right"}), person).is_none());
+            }
+            this.model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"));
+            this.model.space_mut("remote").unwrap().machine = Some("second".into());
+            assert_eq!(super::new_space_machine(&pinned, true, &this.model), None);
+            let tab = this.pi_launch("tab.new", &args, true).unwrap();
+            let split = this.pi_launch("terminal.open", &json!({"argv":["pi"], "place":"right"}), true).unwrap();
+            this.model.add_space("local", "", "", crate::model::Tab::new("local-tab", "", "local-pane", "t2"));
+            assert_eq!(this.model.active.as_deref(), Some("local"));
+            assert_eq!(tab.1["space"], "remote");
+            assert_eq!(tab.2.as_deref(), Some("second"));
+            assert_eq!(split.1["pane"], "pane");
+            assert_eq!(split.2.as_deref(), Some("second"));
+        });
+    }
+    #[test]
+    fn a_workflow_dock_reserves_width_and_restores_the_layout() {
+        in_own_process("workflow_dock_layout");
+    }
+
+    #[gpui::test]
+    fn workflow_dock_layout(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("workflow_dock_layout") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "probe", "", json!({
+            "id": "root", "type": "row", "titlebar": "none", "children": [
+                {"id":"sidebar", "type":"block", "size":{"px":100}, "content":{"mod":"probe"}},
+                {"id":"work", "type":"column", "children":[
+                    {"id":"toolbar", "type":"block", "size":{"px":42}, "content":{"mod":"probe"}},
+                    {"id":"main", "type":"block", "content":{"tab":"active"}},
+                    {"id":"status", "type":"block", "size":{"px":28}, "content":{"mod":"probe"}}
+                ]}
+            ]
+        }));
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let viewport = cx.update(|window, _| window.viewport_size());
+        assert!(view.update(cx, |this, _| this.layout_file_ok), "the fixture layout must load without a default fallback");
+        let original = view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap());
+        let bars = view.update(cx, |this, _| {
+            let bounds = this.bounds.borrow();
+            (bounds["toolbar"], bounds["status"])
+        });
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.open_overlay("workflow".into(), json!({
+                "mod": "probe", "kind": "dock", "width": 300, "height": 1, "frame": "none"
+            }), window, cx);
+        }));
+        cx.run_until_parked();
+        let dock = cx.debug_bounds("dock-workflow").expect("the Workflow dock is part of the layout");
+        let after = view.update(cx, |this, _| {
+            let bounds = this.bounds.borrow();
+            (bounds["toolbar"], bounds["status"])
+        });
+        assert_eq!(dock.top(), bars.0.bottom());
+        assert_eq!(dock.bottom(), bars.1.top());
+        assert_eq!(after, bars, "the toolbar and status keep their geometry");
+        let main = cx.debug_bounds("herdr-workspace").expect("the workspace stays beside the dock");
+        assert_eq!(dock.size.width, crate::settings::z(300.0));
+        assert_eq!(dock.right(), viewport.width);
+        assert_eq!(main.right(), dock.left());
+        assert_eq!(main.left(), crate::settings::z(100.0));
+        assert_eq!(main.size.height, dock.size.height);
+        assert_eq!(view.update(cx, |this, _| serde_json::to_value(&this.chrome).unwrap()), original);
+        assert!(!view.update(cx, |this, _| this.overlays.last().unwrap().kind.modal_keys()));
+        cx.update(|window, cx| view.update(cx, |this, cx| this.close_overlay("workflow", window, cx)));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("dock-workflow").is_none());
+        assert_eq!(cx.debug_bounds("herdr-workspace").unwrap().size.width, viewport.width - crate::settings::z(100.0));
     }
 
     #[test]

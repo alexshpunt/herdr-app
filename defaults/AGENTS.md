@@ -700,6 +700,25 @@ The main ones:
   Terminals display Kitty graphics, including Unicode placeholder images used by
   programs such as yazi; partial images and scrolling follow the placeholder cells.
 - Agents: `agent.next`, `agent.prev`, `agent.focus {terminal}`.
+  `agent.list {space?, machine?}` lists Pi agents with stable terminal, space and tab ids,
+  current PID/session and startup state. Use exact ids, not display names.
+  `agent.inspect {terminal, lines?, screen?}` reads status, identity and screen (0–400 history lines, default 80).
+  Set `screen: false` for metadata only, without waiting for terminal output.
+  `agent.send {terminal, pid, session, message}` sends to the inspected Pi, rejecting startup,
+  changed identities and blocked user questions. Never force a response to a user's question.
+  `agent.stop {terminal, pid, session}` interrupts with the stop key, without killing or escalating.
+  `agent.remove {terminal, pid, session}` ends that agent and removes its dedicated single-pane tab;
+  tabs with sibling panes are rejected. Inspect again after an unknown outcome before retrying.
+- Workflow: `workflow.get` reads the persisted profile table; `workflow.set {profile, model, fallbackModel?, thinking?}`
+  changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
+  `workflow.models {machine?}` reads the live Pi model pickers for one machine (default: the selected space's;
+  empty string: this computer) and the extension installation status. A missing catalog is an explicit error,
+  not evidence that no models exist. `workflow.open` toggles a dock beside the active-tab workspace, below the unchanged app header.
+  Its toolbar button opens the same panel. Primary, fallback and thinking selections save automatically.
+  The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
+  an agent that produced a successful assistant response never switches models automatically.
+  The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
+  Start or reload Pi there to publish its model picker; existing Pi processes need a reload after updates.
 - Layout: `layout.switch {name?}`, `layout.toggle {id}`, `layout.show {id}`, `layout.hide {id}`,
   `layout.resize {id, px | weight}`, `layout.select {stack, child}`, `layout.set {layout}`
   (personal tree edits; on shipped layouts only click/look fields change),
@@ -1075,9 +1094,13 @@ All of it is in `herdr.d.ts`. In short:
   Terminal copy/paste and implicit right-click routing follow the focused block.
 - Floating: `placement()` (null unless this copy floats).
 - Act: `run(command, args)`.
-- Overlays: `openOverlay({ mod, props, kind: "dialog" | "popup" | "window", width, height, at, frame })`
+- Workflow: `await workflow("get")`, `await workflow("set", {profile, model, fallbackModel?, thinking?})`,
+  `await workflow("models", {machine?})`. The models reply keeps its explicit catalog error and installation status;
+  do not invent picker choices when a Pi has not published them.
+- Overlays: `openOverlay({ mod, props, kind: "dialog" | "popup" | "window" | "dock", width, height, at, frame })`
   returns an id; the mod gets `props().overlay` and closes itself with
-  `closeOverlay(id)`; Esc closes the top dialog or popup. `frame: "none"`
+  `closeOverlay(id)`; Esc closes the top dialog or popup. A dock reserves width beside the first active-tab workspace, keeping its header and status outside.
+  Layouts without an active-tab block dock beside the root. A dock does not hold the keyboard or change the saved layout. `frame: "none"`
   drops Herdr's border, corners and shadow so the mod draws its own.
   `notify({ title, body, level, icon, timeout })` posts a notification, drawn
   by the layout-chosen mod (default: `toast`).

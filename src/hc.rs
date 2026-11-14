@@ -178,7 +178,7 @@ struct Routes {
 /// The supported core API generation; a generation change requires a matching app update.
 pub const GENERATION: u64 = 1;
 /// What the app calls on the core: a core without one of them can't run it.
-pub const USES: &[&str] = &["terminal.run", "terminal.list", "terminal.kill", "terminal.label", "terminal.attach", "terminal.keep", "doc.get", "doc.set", "events.subscribe"];
+pub const USES: &[&str] = &["terminal.run", "terminal.list", "terminal.get", "terminal.read", "terminal.send", "terminal.interrupt", "terminal.kill", "terminal.label", "terminal.attach", "terminal.keep", "machine.exec", "doc.get", "doc.set", "events.subscribe"];
 
 #[derive(Debug)]
 pub struct RpcError(pub Value);
