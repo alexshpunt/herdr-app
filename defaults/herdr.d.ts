@@ -213,10 +213,23 @@ export interface AgentInfo {
 /** Terminals whose program reports a status (agents), in space, tab, pane order. Live. */
 export function agents(): AgentInfo[];
 
+/** An app a pane holds (`pane.app.open`). Its copy gets `props().pane` and
+ *  `props().app` (this id); later opens of it arrive from its `nextLink()`. */
+export interface PaneAppInfo {
+  id: string;
+  mod: string;
+  /** The mod.json `app` registration it was opened as, if one was named. */
+  app: string | null;
+  /** The title it was opened with, else the mod's name. */
+  title: string;
+  /** What it was last opened with. */
+  props: Record<string, unknown> | null;
+}
+
 export interface PaneInfo {
   pane: string;
   /** null for a mod pane (`pane.split {mod}`): then `mod` names it, and only
-   *  pane, mod, props, tab, title, focused and zoomed are set. */
+   *  pane, mod, props, tab, title, focused, zoomed, apps and shown_app are set. */
   terminal: string | null;
   mod?: string;
   /** A mod pane's props as given (`tab.new {mod, props}`). */
@@ -236,6 +249,10 @@ export interface PaneInfo {
   zoomed: boolean;
   /** The app's top-center grip can rearrange this pane. False when zoomed or alone. */
   movable: boolean;
+  /** The apps open in this pane, in the order they opened. */
+  apps: PaneAppInfo[];
+  /** The app the pane shows instead of its terminal or mod, or null. */
+  shown_app: string | null;
 }
 
 /** Every pane in every tab. A pane header mod finds its own with

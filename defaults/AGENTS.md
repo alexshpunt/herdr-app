@@ -209,6 +209,13 @@ the highlighted line shows where it will land.
   with the same address; its original command is never run again. Splits
   and mod panes stay. An exited or killed terminal is closed, not restarted.
   Focus, zoom, recent spaces, settled tabs and seen attention stay on this screen.
+- A pane can also hold **apps**: mods opened inside it with `pane.app.open`
+  (an editor, a git client, a browser for the agent working there). The pane
+  draws its shown app instead of its terminal, which keeps running; another
+  pane focused leaves it shown; `pane.app.hide` shows the terminal again. A
+  pane's apps are saved with it and go wherever it goes: split, swap, move,
+  zoom; closing the pane closes them. A native window an app embeds hides
+  while the app isn't drawn. `panes()` lists them (`apps`, `shown_app`).
 - Every terminal is a core terminal. Herdr labels the ones it starts with
   `herdr.space=<id>` and `herdr.tab=<id>`. **A terminal with those
   labels shows up there**, even one you start yourself:
@@ -670,6 +677,13 @@ The main ones:
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
   `pane.swap {pane?, direction | target}`.
+  Apps in a pane: `pane.app.open {mod, app?, props?, title?, pane? | terminal?}`
+  opens a mod in the pane (default: the focused one) and shows it there,
+  focusing the pane; the pane's app of the same mod and `app` registration is
+  reused, and its running copy gets `props` from `nextLink()`. It returns
+  `{pane, app, reused}`. `pane.app.show {app}` shows an app and focuses its pane,
+  `pane.app.hide {pane?}` shows the pane's terminal again, and
+  `pane.app.close {app}` closes one.
   `pane.go` prefers the most recently focused pane along the nearest edge in that
   direction; unvisited panes fall back to overlap, then top/left layout order.
   `pane.go` also reaches visible mods whose `mod.json` says `"focusable": true`, and

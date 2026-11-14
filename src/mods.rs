@@ -580,7 +580,10 @@ thread_local! {
     /// Where key commands for each loaded copy go: (copy, mod, sender).
     static COMMANDS: RefCell<Vec<(u64, String, async_channel::Sender<String>)>> = const { RefCell::new(Vec::new()) };
     /// The copies that wait for links (`nextLink()`), oldest first: (copy, sender).
+    /// A pane's app (`props().app`) never joins: only its own links reach it.
     static LINKS: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
+    /// Every loaded copy's own link queue, which its `nextLink()` reads: (copy, sender).
+    static LINK_QUEUES: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
     /// The copies on screen: only they get commands (a hidden copy kept alive must
     /// not act on the person's keys).
     static SHOWN_COPIES: RefCell<std::collections::HashSet<u64>> = RefCell::new(std::collections::HashSet::new());
@@ -728,6 +731,15 @@ pub fn send_link(link: Value) -> bool {
     LINKS.with_borrow_mut(|links| {
         links.retain(|(_, tx)| !tx.is_closed());
         links.last().is_some_and(|(_, tx)| tx.try_send(link).is_ok())
+    })
+}
+
+/// Queues a link for one copy (a pane's app opened again): its `nextLink()`
+/// returns it, now or once it asks. Returns whether that copy is loaded.
+pub fn send_link_to(copy: u64, link: Value) -> bool {
+    LINK_QUEUES.with_borrow_mut(|queues| {
+        queues.retain(|(_, tx)| !tx.is_closed());
+        queues.iter().any(|(id, tx)| *id == copy && tx.try_send(link.clone()).is_ok())
     })
 }
 
@@ -962,6 +974,11 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         commands.retain(|(_, _, tx)| !tx.is_closed());
         commands.push((copy, inst.name.clone(), cmd_tx));
     });
+    LINK_QUEUES.with_borrow_mut(|queues| {
+        queues.retain(|(_, tx)| !tx.is_closed());
+        queues.push((copy, link_tx.clone()));
+    });
+    let pane_app = inst.props.get("app").is_some_and(Value::is_string);
     HostModule::new("herdr")
         .declarations(DECLARATIONS)
         .async_function("exec", |a| {
@@ -1175,10 +1192,11 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             Ok(async move { rx.recv().await.map(HostValue::Str).map_err(|_| HostError::new("herdr-app is shutting down")) })
         })
         // The first call makes this copy take links: they queue for it from then on.
+        // A pane's app gets only the links opened in it (`send_link_to`).
         .async_function("nextLink", move |_| {
             LINKS.with_borrow_mut(|links| {
                 links.retain(|(_, tx)| !tx.is_closed());
-                if !links.iter().any(|(c, _)| *c == copy) {
+                if !pane_app && !links.iter().any(|(c, _)| *c == copy) {
                     links.push((copy, link_tx.clone()));
                 }
             });

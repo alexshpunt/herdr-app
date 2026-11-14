@@ -73,6 +73,12 @@ fn map_node(node: &mut Node, map: &impl Fn(&str) -> String) {
         Kind::Stack { active: Some(active), .. } => *active = map(active),
         _ => {}
     }
+    for app in &mut node.apps {
+        app.id = map(&app.id);
+    }
+    if let Some(shown) = &mut node.shown_app {
+        *shown = map(shown);
+    }
     for float in &mut node.floating {
         float.id = map(&float.id);
         if let Content::Terminal { terminal } = &mut float.content {
@@ -250,6 +256,20 @@ mod tests {
         assert_eq!(doc, Document::capture(&m, Some("mac")));
         assert!(m.space("s").is_some());
         assert!(m.space("mac/s").is_some());
+    }
+    #[test]
+    fn a_panes_apps_are_shared_and_qualified_like_its_id() {
+        let mut m = model();
+        m.open_app("p", "vscode", Some("files"), serde_json::json!({"folder":"/work"}), None, "a1".into()).unwrap();
+        let doc = Document::capture(&m, None);
+        let text = serde_json::to_value(&doc).unwrap();
+        let pane = &text["spaces"][0]["tabs"][0]["root"]["children"][0];
+        assert_eq!(pane["apps"], serde_json::json!([{"id":"a1","mod":"vscode","app":"files","props":{"folder":"/work"}}]));
+        assert_eq!(pane["shown_app"], "a1");
+        doc.replace(&mut m, Some("mac"));
+        assert_eq!(m.app_pane("mac/a1").as_deref(), Some("mac/p"));
+        assert_eq!(m.tab("mac/t").unwrap().root.find("mac/p").unwrap().shown_app().unwrap().props["folder"], "/work");
+        assert_eq!(doc, Document::capture(&m, Some("mac")));
     }
     #[test]
     fn replacement_preserves_valid_view_and_falls_back_when_deleted() {
