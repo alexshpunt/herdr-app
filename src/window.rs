@@ -3091,9 +3091,12 @@ impl AppWindow {
         self.deliver_link(link, system, window, cx);
     }
 
-    /// A routed link: a mod waiting in `nextLink()` shows it in a tab;
-    /// without one, or with `system`, the system's program opens it.
-    fn deliver_link(&mut self, link: Value, system: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// A routed link: the first app registered for it opens it in the link's
+    /// pane, else a mod waiting in `nextLink()` shows it in a tab; without
+    /// either, or with `system`, the system's program opens it.
+    fn deliver_link(&mut self, mut link: Value, system: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // What the link's folder has, once `open_link_in_app` looked at it.
+        let probed = link.as_object_mut().and_then(|l| l.remove("probed"));
         let machine = link["machine"].as_str().map(str::to_owned);
         let path = link["path"].as_str().unwrap_or_default().to_owned();
         let toast = |this: &mut Self, title: String, window: &mut Window, cx: &mut Context<Self>| {
@@ -3103,9 +3106,7 @@ impl AppWindow {
         if link["kind"] == "missing" {
             return toast(self, format!("No such file or folder on {}", machine.as_deref().unwrap_or("this computer")), window, cx);
         }
-        // The app registered for it opens it in the link's pane; else a mod
-        // waiting in nextLink() shows it.
-        if !system && (self.open_link_in_app(&link, system, window, cx) || mods::send_link(link.clone())) {
+        if !system && (self.open_link_in_app(&link, probed, window, cx) || mods::send_link(link.clone())) {
             return;
         }
         match (link["kind"].as_str(), machine) {

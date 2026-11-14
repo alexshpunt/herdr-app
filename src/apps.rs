@@ -161,8 +161,20 @@ pub struct Place<'a> {
     pub probe: Option<&'a Probe>,
 }
 
+/// Whether `text` matches `pattern`. Each pattern compiles once per thread:
+/// `apps()` checks the `remote` rules of every pane on every publish.
 fn matches(pattern: &str, text: &str) -> bool {
-    fancy_regex::Regex::new(pattern).is_ok_and(|re| re.is_match(text).unwrap_or(false))
+    thread_local! {
+        static COMPILED: std::cell::RefCell<std::collections::HashMap<String, Option<fancy_regex::Regex>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    COMPILED.with_borrow_mut(|compiled| {
+        compiled
+            .entry(pattern.to_owned())
+            .or_insert_with(|| fancy_regex::Regex::new(pattern).ok())
+            .as_ref()
+            .is_some_and(|re| re.is_match(text).unwrap_or(false))
+    })
 }
 
 /// Whether a label counts: set, and when its JSON value names a `pid`, set by

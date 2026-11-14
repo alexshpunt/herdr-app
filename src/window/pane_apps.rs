@@ -264,12 +264,13 @@ impl AppWindow {
 
     /// Opens a link in the app the first registration that takes it names, in
     /// the pane of the terminal it came from, else the focused pane. A file or
-    /// folder that `has` rules ask about is looked at first, off the UI thread.
+    /// folder that `has` rules ask about is looked at first, off the UI thread:
+    /// the link comes back with `probed`, the files found there.
     /// False: no app takes it.
     pub(super) fn open_link_in_app(
         &mut self,
         link: &Value,
-        system: bool,
+        probed: Option<Value>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -281,8 +282,8 @@ impl AppWindow {
         let local = machine
             .as_deref()
             .is_none_or(|m| apps::local_machines().contains(m));
-        let probe: Option<Probe> = match link.get("probed") {
-            Some(p) => serde_json::from_value::<Vec<String>>(p.clone())
+        let probe: Option<Probe> = match probed {
+            Some(p) => serde_json::from_value::<Vec<String>>(p)
                 .ok()
                 .map(|found| Probe {
                     found: found.into_iter().collect(),
@@ -296,7 +297,10 @@ impl AppWindow {
                 let mut link = link.clone();
                 look_off_thread(move || {
                     link["probed"] = json!(probe(machine.as_deref(), &folder, &files).found);
-                    mods::request(Request::OpenLink { link, system });
+                    mods::request(Request::OpenLink {
+                        link,
+                        system: false,
+                    });
                 });
                 return true;
             }
@@ -313,12 +317,8 @@ impl AppWindow {
             .and_then(|t| self.model.pane_of(t))
             .or_else(|| self.model.focused_pane());
         let Some(pane) = pane else { return false };
-        let mut shown = link.clone();
-        if let Some(l) = shown.as_object_mut() {
-            l.remove("probed");
-        }
         let args =
-            json!({ "mod": app.name, "app": app.id(), "pane": pane, "props": { "link": shown } });
+            json!({ "mod": app.name, "app": app.id(), "pane": pane, "props": { "link": link } });
         let reply = self.run_as("pane.app.open", args, false, window, cx);
         if let Some(error) = reply.get("error").and_then(Value::as_str) {
             tracing::warn!("cannot open the link in {}: {error}", app.reg.label);
