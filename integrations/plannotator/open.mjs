@@ -5,6 +5,7 @@ import { homedir, release } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { resolveHc } from './hc.mjs';
 import { requestBrowser } from './ipc.mjs';
 
 const execute = promisify(execFile);
@@ -96,7 +97,7 @@ export async function openReview({ url, id, tabName, app: registration }, isClos
         const api = await runJson(app, ['--browser-api']);
         if (api.version !== 1 || api.module !== 'herdr-browser') throw new Error('The installed Herdr App has no native browser API');
         const [terminal, snapshot] = await Promise.all([
-            runJson(process.env.HC_BIN || 'hc', ['get', terminalId, '--json']),
+            runJson(resolveHc(), ['get', terminalId, '--json']),
             runJson(app, ['ls']),
         ]);
         const origin = findOriginPane(snapshot, terminal);

@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { release } from "node:os";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { importFresh } from "./fresh-import.mjs";
+import { resolveHc } from "./hc.mjs";
 import { createReviewRouter } from "./router.mjs";
 import { createRequestNamer } from "./requested.mjs";
 import type { startBrowserIpc } from "./ipc.mjs";
@@ -39,14 +39,14 @@ export default function herdrPlannotator(pi: ExtensionAPI): void {
     const terminal = process.env.HC_TERMINAL_ID;
     if (!terminal || !process.env.HC_TERMINAL_SOCKET) return;
     try {
-      // Nested Pi processes inherit HC_*: only the terminal's own Pi publishes.
-      const owner = await pi.exec("hc", ["get", terminal, "--json"], { timeout: 3000 });
-      if (owner.code !== 0 || JSON.parse(owner.stdout).foreground?.pid !== process.pid) return;
       // Herdr runs request.mjs without this shell's PATH: name hc by its path.
-      const hc = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-        .map(dir => path.join(dir, process.platform === "win32" ? "hc.exe" : "hc")).find(file => existsSync(file)) ?? "hc";
+      const hc = resolveHc();
+      const owner = await pi.exec(hc, ["get", terminal, "--json"], { timeout: 3000 });
+      if (owner.code !== 0) throw new Error(owner.stderr.trim() || `${hc} get failed`);
+      // Nested Pi processes inherit HC_*: only the terminal's own Pi publishes.
+      if (JSON.parse(owner.stdout).foreground?.pid !== process.pid) return;
       const label = { pid: process.pid, session, socket: server.socket, token: server.token, node: process.execPath, request: requestScript, hc };
-      const result = await pi.exec("hc", ["label", terminal, `herdr.plannotator=${JSON.stringify(label)}`], { timeout: 3000 });
+      const result = await pi.exec(hc, ["label", terminal, `herdr.plannotator=${JSON.stringify(label)}`], { timeout: 3000 });
       if (result.code !== 0) throw new Error(result.stderr.trim() || "hc label failed");
     } catch (error) {
       report(new Error(`Herdr cannot reach this session for annotations: ${error instanceof Error ? error.message : String(error)}`));
