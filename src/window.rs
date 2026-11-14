@@ -8,6 +8,7 @@ use crate::hc::Core;
 mod floats;
 mod movable;
 mod pane_drag;
+mod pane_apps;
 mod pane_size;
 mod side_panel;
 mod titlebar;
@@ -483,6 +484,15 @@ pub struct AppWindow {
     /// Remembers where the window is (`place.rs`); the write waiting to settle.
     _place: Option<Subscription>,
     place_write: Option<Task<()>>,
+    /// What each project folder has for the apps' `when` and `links` rules,
+    /// by (machine, folder): looked at off the UI thread, again after a while.
+    app_probes: HashMap<(Option<String>, String), AppProbe>,
+}
+
+/// A folder looked at for app rules (`apps::Probe`), or being looked at.
+struct AppProbe {
+    at: std::time::Instant,
+    probe: Option<crate::apps::Probe>,
 }
 
 impl AppWindow {
@@ -579,6 +589,7 @@ impl AppWindow {
             _focus_lost: None,
             _place: None,
             place_write: None,
+            app_probes: HashMap::new(),
         };
         w._focus_lost = Some(cx.on_focus_lost(window, |this, window, cx| this.restore_focus(window, cx)));
         w._place = Some(cx.observe_window_bounds(window, |this, window, cx| {
@@ -1798,6 +1809,7 @@ impl AppWindow {
 
     /// Tells mods what changed (they re-render only if something did).
     fn publish(&mut self, cx: &mut Context<Self>) {
+        let apps = self.apps_snapshot();
         let m = &self.model;
         let home = home();
         let spaces: Vec<Value> = m
@@ -1873,6 +1885,7 @@ impl AppWindow {
         changed |= mods::publish_spaces(Value::Array(spaces));
         changed |= mods::publish_agents(Value::Array(agents));
         changed |= mods::publish_panes(Value::Array(panes));
+        changed |= mods::publish_apps(apps);
         changed |= mods::publish_focused(focused.unwrap_or(Value::Null));
         changed |= mods::publish_floats(self.float_placements());
         changed |= mods::publish_layout(&self.chrome);
@@ -2748,41 +2761,6 @@ impl AppWindow {
         Ok(json!({ "pane": new }))
     }
 
-    /// `pane.app.open`: a mod as an app in a pane (default: the focused one),
-    /// shown there at once. The app of the same registration the pane already
-    /// holds is reused: its running copy gets the new props from `nextLink()`.
-    fn open_app(&mut self, a: &Value) -> Result<Value, String> {
-        let name = Self::owned(a, "mod").ok_or("pane.app.open needs mod")?;
-        if !self.folders.contains_key(&name) {
-            return Err(format!("no mod {name:?} in mods/"));
-        }
-        let pane = match (Self::owned(a, "pane"), Self::arg(a, "terminal")) {
-            (Some(pane), _) => pane,
-            (None, Some(terminal)) => self.model.pane_of(terminal).ok_or_else(|| format!("no pane shows terminal {terminal:?}"))?,
-            (None, None) => self.model.focused_pane().ok_or("no pane to open the app in")?,
-        };
-        if !self.model.tab_of(&pane).is_some_and(|t| t.root.find(&pane).is_some_and(Node::is_pane)) {
-            return Err(format!("no pane {pane:?}"));
-        }
-        let machine = self.machine_of_node(&pane);
-        self.require_document(machine.as_deref())?;
-        let fresh = self.model.fresh_id_on("a", machine.as_deref());
-        let props = a.get("props").cloned().unwrap_or(Value::Null);
-        let (app, reused) = self
-            .model
-            .open_app(&pane, &name, Self::arg(a, "app"), props.clone(), Self::owned(a, "title"), fresh)
-            .ok_or_else(|| format!("no pane {pane:?}"))?;
-        if reused
-            && !props.is_null()
-            && let Some(copy) = self.copies.get(&app).filter(|c| c.root.is_some())
-        {
-            mods::send_link_to(copy.id, props);
-        }
-        self.focused_block = None;
-        self.focused_pane = None;
-        Ok(json!({ "pane": pane, "app": app, "reused": reused }))
-    }
-
     /// Ask only whether a missing terminal is closed. Core owns restarting it.
     fn check_closed(&mut self, missing: Vec<(String, String)>, window: &mut Window, cx: &mut Context<Self>) {
         self.checking_closed = true;
@@ -3124,7 +3102,9 @@ impl AppWindow {
         if link["kind"] == "missing" {
             return toast(self, format!("No such file or folder on {}", machine.as_deref().unwrap_or("this computer")), window, cx);
         }
-        if !system && mods::send_link(link.clone()) {
+        // The app registered for it opens it in the link's pane; else a mod
+        // waiting in nextLink() shows it.
+        if !system && (self.open_link_in_app(&link, system, window, cx) || mods::send_link(link.clone())) {
             return;
         }
         match (link["kind"].as_str(), machine) {
@@ -4500,6 +4480,7 @@ impl AppWindow {
                 self.route_link(links::Target::Url(url), None, space, origin, None, "browser", false, window, cx);
             }
             Request::OpenLink { link, system } => self.deliver_link(link, system, window, cx),
+            Request::AppProbe { machine, folder, probe } => self.app_probed(machine, folder, probe, cx),
         }
     }
 

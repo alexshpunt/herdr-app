@@ -349,6 +349,9 @@ pub struct Hint {
     /// A section of the side panel (`{ "side_panel": true }` blocks).
     #[serde(default)]
     pub side_panel: Option<Section>,
+    /// The apps it registers (`crate::apps`): one object or a list.
+    #[serde(default)]
+    pub app: Value,
 }
 
 impl Hint {
@@ -425,6 +428,8 @@ pub enum Request {
     /// A link resolved off the UI thread (a file on another machine), to open
     /// as `link.open` does.
     OpenLink { link: Value, system: bool },
+    /// A project folder looked at for the apps' rules (`crate::apps`).
+    AppProbe { machine: Option<String>, folder: String, probe: crate::apps::Probe },
 }
 
 static REQUESTS: OnceLock<async_channel::Sender<Request>> = OnceLock::new();
@@ -600,6 +605,8 @@ pub struct Snapshot {
     pub agents: Value,
     /// Every pane: { pane, terminal, tab, title, cwd, branch, status, app, focused, zoomed }.
     pub panes: Value,
+    /// { apps: [registration], available: { pane: [[mod, app]] } } (`apps()`).
+    pub apps: Value,
     pub terminals: Value,
     pub focused: Value,
     /// Floating blocks by id: { edge, align, vertical }.
@@ -611,7 +618,7 @@ pub struct Snapshot {
 impl Default for Snapshot {
     /// Lists start empty, never null, so mods can map over them right away.
     fn default() -> Self {
-        Snapshot { layout: Value::Null, spaces: json!([]), machines: json!([]), agents: json!([]), panes: json!([]), terminals: json!([]), focused: Value::Null, floats: json!({}), window: Value::Null }
+        Snapshot { layout: Value::Null, spaces: json!([]), machines: json!([]), agents: json!([]), panes: json!([]), apps: json!({ "apps": [], "available": {} }), terminals: json!([]), focused: Value::Null, floats: json!({}), window: Value::Null }
     }
 }
 
@@ -643,6 +650,28 @@ pub fn publish_agents(v: Value) -> bool {
 pub fn publish_panes(v: Value) -> bool {
     publish("panes", |s| (std::mem::replace(&mut s.panes, v.clone()), v))
 }
+pub fn publish_apps(v: Value) -> bool {
+    publish("apps", |s| (std::mem::replace(&mut s.apps, v.clone()), v))
+}
+
+/// `apps(pane?)`: every registered app, each with whether it is available
+/// for that pane (default: the focused one).
+fn apps_for(s: &Snapshot, pane: Option<&str>) -> Value {
+    let pane = pane.or_else(|| s.focused["pane"].as_str());
+    let available = pane.and_then(|p| s.apps["available"].get(p)).and_then(Value::as_array);
+    let list = s.apps["apps"].as_array().map(Vec::as_slice).unwrap_or_default();
+    Value::Array(
+        list.iter()
+            .map(|a| {
+                let key = json!([a["mod"], a["app"]]);
+                let mut a = a.clone();
+                a["available"] = json!(available.is_some_and(|ids| ids.contains(&key)));
+                a
+            })
+            .collect(),
+    )
+}
+
 pub fn publish_terminals(v: Value) -> bool {
     publish("terminals", |s| (std::mem::replace(&mut s.terminals, v.clone()), v))
 }
@@ -898,6 +927,11 @@ pub fn run_here(command: &str, args: &[String]) -> Option<String> {
     run_blocking(command, args, None, EXEC_LIMIT).ok().map(|(_, out, _)| out)
 }
 
+/// Runs a program in a folder on this computer: what it printed when it succeeded.
+pub fn run_in(folder: &str, command: &str, args: &[String]) -> Option<String> {
+    run_blocking(command, args, Some(folder.to_owned()), EXEC_LIMIT).ok().filter(|(code, _, _)| *code == 0).map(|(_, out, _)| out)
+}
+
 /// The agents a machine can start (`knownAgents()`), asked at most once a minute.
 fn known_agents(on: Option<String>, list: Vec<Value>) -> Value {
     type InstalledCache = std::collections::HashMap<Option<String>, (std::time::Instant, Vec<String>, Vec<String>)>;
@@ -1120,6 +1154,21 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .function("machines", reader(reads.clone(), "machines", |s| &s.machines))
         .function("agents", reader(reads.clone(), "agents", |s| &s.agents))
         .function("panes", reader(reads.clone(), "panes", |s| &s.panes))
+        .function("apps", {
+            let reads = reads.clone();
+            move |a| {
+                let pane = match a.get(0) {
+                    Some(HostValue::Str(p)) => Some(p.clone()),
+                    _ => None,
+                };
+                REVISIONS.with_borrow(|r| {
+                    let mut reads = reads.borrow_mut();
+                    reads.record("apps", r);
+                    reads.record("focused", r);
+                });
+                Ok(SNAPSHOT.with(|s| to_host(&apps_for(&s.borrow(), pane.as_deref()))))
+            }
+        })
         .function("setAgentOrder", |a| {
             AGENT_ORDER.with(|s| *s.borrow_mut() = strings(a.get(0)));
             Ok(HostValue::Null)

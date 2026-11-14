@@ -3,6 +3,7 @@
 
 mod agents;
 mod app_mailbox;
+mod apps;
 mod workflow;
 mod pi_install;
 mod bench;
