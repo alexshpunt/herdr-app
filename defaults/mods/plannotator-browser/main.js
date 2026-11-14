@@ -58,11 +58,11 @@ export default class PlannotatorBrowser extends View {
       return;
     }
     const cut = address.indexOf("/");
-    const [machine, id] = cut < 0 ? [null, address] : [address.slice(0, cut), address.slice(cut + 1)];
+    const [machine, local] = cut < 0 ? [null, address] : [address.slice(0, cut), address.slice(cut + 1)];
     this.waiting = kind === "review" ? "Asking the agent to annotate its changes…" : "Asking the agent to annotate its last reply…";
     cx.spawn(async (cx) => {
       try {
-        const result = await exec(label.node, [label.request, id, kind, ...(label.hc ? [label.hc] : [])], { on: machine ?? undefined, timeout: 60000 });
+        const result = await exec(label.node, [label.request, local, kind, ...(label.hc ? [label.hc] : [])], { on: machine ?? undefined, timeout: 60000 });
         if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`);
       } catch (error) {
         this.waiting = String(error?.message ?? error);

@@ -7,6 +7,29 @@ use crate::apps::{self, App, Place, Probe};
 /// How long a folder's probe answers `has` and `remote` rules before it is looked at again.
 const PROBE_AGE: Duration = Duration::from_secs(15);
 
+/// Looks at a folder off the UI thread. GPUI tests can't have other threads:
+/// there it runs at once, and `probe` finds nothing.
+fn look_off_thread(look: impl FnOnce() + Send + 'static) {
+    #[cfg(not(test))]
+    std::thread::spawn(look);
+    #[cfg(test)]
+    look();
+}
+
+/// Looks at a folder here or on its machine.
+#[cfg(not(test))]
+fn probe(machine: Option<&str>, folder: &str, files: &[String]) -> Probe {
+    match machine {
+        Some(m) => apps::probe_on(m, folder, files),
+        None => apps::probe_here(folder, files),
+    }
+}
+
+#[cfg(test)]
+fn probe(_machine: Option<&str>, _folder: &str, _files: &[String]) -> Probe {
+    Probe::default()
+}
+
 impl AppWindow {
     /// `pane.app.open`: a mod as an app in a pane (default: the focused one),
     /// shown there at once. The app of the same registration the pane already
@@ -148,11 +171,8 @@ impl AppWindow {
             );
             let (machine, folder) = key.clone();
             let files = files.to_vec();
-            std::thread::spawn(move || {
-                let probe = match machine.as_deref() {
-                    Some(m) => apps::probe_on(m, &folder, &files),
-                    None => apps::probe_here(&folder, &files),
-                };
+            look_off_thread(move || {
+                let probe = probe(machine.as_deref(), &folder, &files);
                 mods::request(Request::AppProbe {
                     machine,
                     folder,
@@ -266,12 +286,8 @@ impl AppWindow {
                 };
                 let files = apps::probed_files(&all);
                 let mut link = link.clone();
-                std::thread::spawn(move || {
-                    let probe = match machine.as_deref() {
-                        Some(m) => apps::probe_on(m, &folder, &files),
-                        None => apps::probe_here(&folder, &files),
-                    };
-                    link["probed"] = json!(probe.found);
+                look_off_thread(move || {
+                    link["probed"] = json!(probe(machine.as_deref(), &folder, &files).found);
                     mods::request(Request::OpenLink { link, system });
                 });
                 return true;
