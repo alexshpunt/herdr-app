@@ -4543,13 +4543,14 @@ impl AppWindow {
             out.sort();
             out
         };
-        let terminal = |pane: &str, addr: &str| {
+        let terminal = |pane: &Node, addr: &str| {
             let rec = self.live.get(addr);
             json!({
-                "terminal": addr, "pane": pane, "status": m.status(addr),
+                "terminal": addr, "pane": pane.id, "status": m.status(addr),
                 "app": m.agents.get(addr).and_then(|a| a.app.clone()),
                 "name": rec.and_then(|r| r.get("name")).cloned(),
                 "sub_agents": children(addr),
+                "apps": pane_apps_json(pane), "shown_app": pane.shown_app,
             })
         };
         let spaces: Vec<Value> = m
@@ -4561,7 +4562,7 @@ impl AppWindow {
                     .tabs
                     .iter()
                     .map(|c| {
-                        let terms: Vec<Value> = c.root.terminals().iter().filter_map(|n| Some(terminal(&n.id, n.terminal()?))).collect();
+                        let terms: Vec<Value> = c.root.terminals().iter().filter_map(|n| Some(terminal(n, n.terminal()?))).collect();
                         json!({ "id": c.id, "name": Model::tab_name(p, c), "active": Some(&c.id) == active.as_ref(), "settled": c.settled.is_some(), "origin": model::tab_origin(p, c), "terminals": terms })
                     })
                     .collect();
