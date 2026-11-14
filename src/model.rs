@@ -524,6 +524,15 @@ impl Model {
         self.tabs().flat_map(|c| c.root.terminals()).find(|n| n.terminal() == Some(address)).map(|n| n.id.clone())
     }
 
+    /// An app opened on web page `page` (its `props.url`, as `apps::page` reads it).
+    pub fn app_on_page(&self, page: &str) -> Option<String> {
+        self.tabs()
+            .flat_map(|c| c.root.panes())
+            .flat_map(|n| &n.apps)
+            .find(|a| a.props["url"].as_str().and_then(crate::apps::page).as_deref() == Some(page))
+            .map(|a| a.id.clone())
+    }
+
     /// The pane holding app `app` (`pane.app.open`).
     pub fn app_pane(&self, app: &str) -> Option<String> {
         self.tabs().flat_map(|c| c.root.panes()).find(|n| n.apps.iter().any(|a| a.id == app)).map(|n| n.id.clone())
@@ -1242,6 +1251,15 @@ mod tests {
         assert_eq!(pane(&m, "x1").apps.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["a2"]);
         assert!(m.close_app("a1").is_none());
         assert!(m.open_app("nope", "vscode", None, Value::Null, None, "a4".into()).is_none());
+    }
+
+    #[test]
+    fn an_app_is_found_by_the_page_it_was_opened_on() {
+        let mut m = model_with_one();
+        m.open_app("x1", "plannotator-browser", None, json!({ "url": "http://localhost:19432/" }), None, "a1".into()).unwrap();
+        m.open_app("x1", "vscode", Some("files"), json!({ "folder": "/src" }), None, "a2".into()).unwrap();
+        assert_eq!(m.app_on_page("http://localhost:19432").as_deref(), Some("a1"));
+        assert_eq!(m.app_on_page("http://localhost:19500"), None);
     }
 
     #[test]

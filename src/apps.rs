@@ -240,6 +240,18 @@ pub fn opens(app: &App, link: &Value, local: bool, probe: Option<&Probe>) -> boo
     })
 }
 
+/// The page an HTTP(S) URL names, to compare: without its query and fragment,
+/// which name no other page, and without a trailing slash. None for other URLs.
+pub fn page(url: &str) -> Option<String> {
+    let mut url = url::Url::parse(url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.as_str().trim_end_matches('/').to_owned())
+}
+
 /// The folder a file or folder link's `has` is looked for in: a file's folder, or the folder.
 pub fn link_folder(link: &Value) -> Option<String> {
     let path = link["path"].as_str()?;
@@ -524,5 +536,19 @@ mod tests {
         let machines = r#"[{"name":"laptop-wsl","editorAuthority":"wsl+Ubuntu"},{"name":"vps","target":"mesh-vps"}]"#;
         assert_eq!(wsl_machines(machines), ["laptop-wsl".to_owned()].into());
         assert!(wsl_machines("not json").is_empty());
+    }
+
+    #[test]
+    fn a_page_is_its_url_without_query_fragment_or_trailing_slash() {
+        assert_eq!(
+            page("http://localhost:19432/").as_deref(),
+            Some("http://localhost:19432")
+        );
+        assert_eq!(
+            page("HTTP://LocalHost:19432/review/?x=1#c").as_deref(),
+            Some("http://localhost:19432/review")
+        );
+        assert_eq!(page("file:///C:/a.rs"), None);
+        assert_eq!(page("not a url"), None);
     }
 }

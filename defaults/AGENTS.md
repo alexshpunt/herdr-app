@@ -256,7 +256,9 @@ the highlighted line shows where it will land.
   `link.open {target, terminal?}` (what an agent's `herdr-app do link.open`
   sends), or a browser pane's link that asks for a new window. A file path
   counts when it exists on the terminal's machine (WSL and SSH ones are
-  checked there); `:42` / `:42:7` after it is a line and column. The first
+  checked there); `:42` / `:42:7` after it is a line and column. A web page
+  an open app was opened on (its `props.url`, such as a Plannotator review)
+  shows that app. Else the first
   app a mod registers for it (mod.json `app` `links`, see Mods) opens it in
   the pane of the terminal it came from, else the focused pane: the shipped
   `vscode` mod takes files and folders, `unity` Unity project folders on this

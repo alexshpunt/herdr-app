@@ -9,12 +9,12 @@ herdr-app do tab.new '{"name":"VS Code","mod":"vscode","props":{"uri":"vscode-re
 ```
 
 `props.uri` is a VS Code folder URI; `props.folder` a local folder. Without
-either, the tab opens the focused terminal's folder. The tab records itself in
-`shared("vscode.tabs")` by URI, so a launcher can select an open project's tab
-instead of opening another.
+either, the tab opens the focused terminal's folder. The mod also registers
+the Files app, which opens VS Code inside a pane (`pane.app.open`, see
+`defaults/AGENTS.md`).
 
-The `fork` mod does the same with Fork, the git client, and records its tabs
-in `shared("fork.tabs")`:
+The `fork` mod does the same with Fork, the git client, and registers the
+Diff app:
 
 ```sh
 herdr-app do tab.new '{"name":"Fork","mod":"fork","props":{"uri":"vscode-remote://wsl+Ubuntu/root/app"}}'

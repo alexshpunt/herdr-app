@@ -1,8 +1,8 @@
 import { View, div } from "gpui-kit";
 import { v_flex } from "gpui-base";
 import { NativeAppState, NativeApp } from "herdr-browser";
-import { props, theme, focused, nextCommand, nextLink, panes, shared, setShared, readTextFile, appHome } from "herdr";
-import { appTarget } from "./uri.js";
+import { props, theme, focused, nextCommand, nextLink, panes, shared, setShared, readTextFile, appHome, exec } from "herdr";
+import { appTarget, outsideFolder } from "./uri.js";
 
 // The person's own VS Code, embedded. As an app in a pane (`pane.app.open`,
 // the Files button, a file or folder link) it opens the pane's project, or the
@@ -54,10 +54,25 @@ export default class VsCode extends View {
     try { return JSON.parse(await readTextFile(`${appHome()}/machines.json`) ?? "[]"); } catch { return []; }
   }
 
+  // A file link outside the pane's project opens in its own Git work tree
+  // (else its folder, below): its project, as the pane's would be.
+  /** @param {any} p */
+  async withLinkProject(p) {
+    const folder = outsideFolder(p);
+    if (!folder) return p;
+    const machine = p.link.machine ?? null;
+    try {
+      const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd: folder, on: machine ?? undefined });
+      const root = top.code === 0 ? top.stdout.trim() : "";
+      if (root) return { ...p, project: { folder: machine == null ? root.replaceAll("/", "\\") : root, machine } };
+    } catch { /* The machine is away or Git is missing: the file's folder. */ }
+    return p;
+  }
+
   async start() {
     const p = props() ?? {};
     if (typeof p.app === "string") {
-      const { folder, goto } = appTarget(p, await this.machines());
+      const { folder, goto } = appTarget(await this.withLinkProject(p), await this.machines());
       this.folder = folder;
       this.app = NativeAppState("vscode", folder);
       if (goto) this.goto(goto);

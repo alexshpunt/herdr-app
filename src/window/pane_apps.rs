@@ -262,7 +262,9 @@ impl AppWindow {
         json!({ "apps": all.iter().map(|a| a.json(false)).collect::<Vec<_>>(), "available": available })
     }
 
-    /// Opens a link in the app the first registration that takes it names, in
+    /// Opens a link in an app. A web page an open app was opened on (its
+    /// `props.url`, such as a Plannotator review) shows that app. Else the app
+    /// the first registration that takes it names opens it, in
     /// the pane of the terminal it came from, else the focused pane. A file or
     /// folder that `has` rules ask about is looked at first, off the UI thread:
     /// the link comes back with `probed`, the files found there.
@@ -274,6 +276,14 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(app) = link["url"]
+            .as_str()
+            .and_then(apps::page)
+            .and_then(|page| self.model.app_on_page(&page))
+        {
+            let reply = self.run_as("pane.app.show", json!({ "app": app }), false, window, cx);
+            return reply.get("error").is_none();
+        }
         let all = self.registered_apps();
         if all.is_empty() {
             return false;

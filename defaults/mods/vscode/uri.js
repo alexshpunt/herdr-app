@@ -63,10 +63,22 @@ export function inside(path, folder) {
 }
 
 /**
+ * The folder of a file link outside the pane's project, whose own project
+ * (its Git work tree) the app opens instead; null for any other props.
+ * @param {{link?: any, project?: {folder: string, machine: string | null}}} props
+ */
+export function outsideFolder({ link, project }) {
+  if (link?.kind !== "file") return null;
+  const sameProject = project && (project.machine ?? null) === (link.machine ?? null) && inside(link.path, project.folder);
+  return sameProject ? null : parentFolder(link.path);
+}
+
+/**
  * What a VS Code app in a pane opens: the folder (its URI) and, for a file
  * link, the file to show (its URI with the line). A folder link is that
- * folder; a file link opens in the pane's project when it is in it, else in
- * its own folder; without a link, the pane's project.
+ * folder; a file link opens in the pane's project when it is in it (main.js
+ * passes a file's own Git work tree as its project), else in its own folder;
+ * without a link, the pane's project.
  * @param {{link?: any, project?: {folder: string, machine: string | null}}} props
  * @param {{name: string, target: string, editorAuthority?: string}[]} machines
  */
@@ -75,8 +87,7 @@ export function appTarget(props, machines) {
   if (link?.kind === "folder") return { folder: editorUri(link.path, link.machine ?? null, machines), goto: null };
   if (link?.kind === "file") {
     const machine = link.machine ?? null;
-    const sameProject = project && (project.machine ?? null) === machine && inside(link.path, project.folder);
-    const folder = sameProject ? project.folder : parentFolder(link.path);
+    const folder = outsideFolder(props) ?? project?.folder ?? "";
     return { folder: editorUri(folder, machine, machines), goto: editorUri(link.path, machine, machines) + place(link) };
   }
   if (!project?.folder) throw new Error("No project folder to open.");
