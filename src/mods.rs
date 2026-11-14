@@ -404,7 +404,7 @@ fn scan_dir(root: &Path, prefix: &str) -> Vec<Found> {
                 return None;
             }
             let dir = e.path();
-            let hint = std::fs::read_to_string(dir.join("mod.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            let hint: Hint = std::fs::read_to_string(dir.join("mod.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let stamp = std::fs::read_dir(&dir)
                 .into_iter()
                 .flatten()
