@@ -57,23 +57,32 @@ pane closes that window. `status()`, `error()`, `shown()`, `reopen()` and
 `focus()` follow and control it; `goto(fileUri)` opens a file URI (`:42:7`
 after it for a line and column): called before the window starts, the new
 window opens with it; later, VS Code opens it in the window that has its
-folder. The bundled `vscode` mod is one VS Code tab: it opens `props.goto` as
-its window first starts (not again after a restart) and
-`shared("vscode.goto")[its pane].uri` when asked later.
+folder. The bundled `vscode` mod registers the Files app (mod.json `app`):
+in a pane it opens the pane's project, or the folder of the file or folder
+link it was opened for, on that file; files linked later open in the same
+window. VS Code has one window per folder: a second pane on the same folder
+takes that window over. As a tab's mod pane it opens `props.uri` or
+`props.folder` and `props.goto` as its window first starts (not again after
+a restart).
 `NativeAppState("fork", target)` shows Fork, the git client, on a local
 folder, `file://` URI or WSL folder URI: a Fork process of the pane's own,
-with only that repository. The bundled `fork` mod is one Fork tab.
+with only that repository. The bundled `fork` mod registers the Diff app.
 `NativeAppState("unity", target)` shows the Unity Editor on the Unity project
 at `target` (a local folder or `file://` URI), in the version its
 `ProjectSettings/ProjectVersion.txt` names, from Unity Hub's editor folders.
 An editor that already has the project open is adopted; its menu bar stays.
-The bundled `unity` mod is one Unity tab.
+The bundled `unity` mod registers the Unity app.
 
 The shipped `plannotator-browser` mod takes `{ url, origin? }` props and opens a
 review with Back, Reload and Open externally controls. `herdr-app --browser-api`
 prints the machine-readable browser API version without opening a window.
+It registers the Annotate diff (`review`) and Annotate reply (`last`) apps,
+available in a pane whose terminal runs a Pi with the Herdr Plannotator
+integration: opened without a `url`, the app asks that Pi for the review.
 The Pi integration in `integrations/plannotator` uses the core terminal's space
-label to open a review in its own tab in the originating agent's space. An
+label to open a review as an app in the requesting agent's pane
+(`pane.app.open`): in the app of the button that asked for it, else in its own
+"Plannotator" app. The app closes when the review is submitted. An
 unknown or ambiguous origin opens the system browser instead of using the
 currently focused agent.
 Review cleanup is scoped to Plannotator's review ID and Pi session, including
@@ -245,11 +254,14 @@ the highlighted line shows where it will land.
   `link.open {target, terminal?}` (what an agent's `herdr-app do link.open`
   sends), or a browser pane's link that asks for a new window. A file path
   counts when it exists on the terminal's machine (WSL and SSH ones are
-  checked there); `:42` / `:42:7` after it is a line and column. A mod that
-  waits in `nextLink()` gets each link and shows it in a tab, recording the
-  agent it came from as `props.origin` of the tab's mod pane; it hands back
-  one no tab shows with `link.open {target, system: true}`. Without such a
-  mod, the system's browser or program opens it.
+  checked there); `:42` / `:42:7` after it is a line and column. The first
+  app a mod registers for it (mod.json `app` `links`, see Mods) opens it in
+  the pane of the terminal it came from, else the focused pane: the shipped
+  `vscode` mod takes files and folders, `unity` Unity project folders on this
+  computer. Else a mod that waits in `nextLink()` gets it and shows it in a
+  tab, recording the agent it came from as `props.origin` of the tab's mod
+  pane; it hands back one no tab shows with `link.open {target, system: true}`.
+  Without either, the system's browser or program opens it.
 - **Agent navigation order** belongs to the mods. A mod displaying agents calls
   `setAgentOrder(list.map(a => a.address))` on render so `agent.next` /
   `agent.prev` follow its list.
@@ -946,6 +958,31 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
 - `"side_panel": { "title": "Builds", "order": 10 }` in `mod.json` adds the mod
   as a section of every `{ "side_panel": true }` block (see Layouts): widgets,
   metrics and settings that sit beside the work.
+- `"app"` in `mod.json` registers the mod as an app that opens inside a pane
+  (`pane.app.open`): one object, or a list for several apps of one mod. Each
+  has an `id` (default: the mod's name), a `label`, an `icon` (a file in the
+  mod's folder), an `order` (lower first; default 100), `when` rules that must
+  all hold for the pane and `links` it opens:
+  ```json
+  "app": { "id": "linear", "label": "Linear", "icon": "linear.svg", "order": 50,
+           "when": [{ "has": ".linear-project" }],
+           "links": [{ "url": "(?i)^https://linear\\.app(?:[/?#]|$)" }] }
+  ```
+  `when`: `{"has": "<path>"}` (the file exists in the pane's project: its
+  terminal's Git work tree, else its folder, looked at on its machine),
+  `{"remote": "<regex>"}` (the project's `origin` URL matches),
+  `{"label": "<name>"}` (the pane's terminal has that label; one whose JSON
+  value names a `pid` counts while that process is in front) and
+  `{"local": true}` (the project is on this computer or a WSL machine whose
+  `editorAuthority` in `machines.json` is `wsl+…`; `false`: elsewhere).
+  `links`: `{"url": "<regex>"}`, `{"file": true}`, `{"folder": true}`, each
+  optionally with `"has"` (in the folder, or the file's folder) and `"local"`.
+  A link goes to the first app (by `order`) that takes it, in the pane of the
+  terminal it came from, else the focused pane; the copy gets it as
+  `props().link`, or from `nextLink()` when that pane already has the app.
+  `apps(pane?)` lists the registrations with `available` for a pane: a tab bar
+  shows those as buttons. An app's copy gets `props().project`, `pane`, `app`
+  (its id) and `registration`.
 
 - The first time Herdr sees a folder, it docks one copy per `mod.json` into
   the shown layout (`"none"`: only where a layout or another mod puts it).
