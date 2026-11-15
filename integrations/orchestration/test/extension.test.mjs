@@ -31,8 +31,9 @@ test('real Pi behind a wrapper shell stays quiet in a terminal it does not own',
   const root = await mkdtemp(path.join(tmpdir(),'herdr-nested-pi-'));
   try {
     // The terminal's root and foreground process is the wrapper shell, PID 1 here, as for a replicate copy.
-    const calls = path.join(root,'hc-calls.log'), hc = path.join(root,'hc');
-    await writeFile(hc, `#!/bin/sh\necho "$*" >> '${calls}'\necho '{"address":"t1","pid":1,"foreground":{"pid":1,"name":"bash"},"labels":{}}'\n`, { mode: 0o755 });
+    // HC_BIN is Node itself, so `hc get t1 --json` runs the script `get` in Pi's working directory on every platform.
+    const calls = path.join(root,'hc-calls.log'), hc = process.execPath;
+    await writeFile(path.join(root,'get'), `require('node:fs').appendFileSync(${JSON.stringify(calls)}, ['get', ...process.argv.slice(2)].join(' ') + '\\n');\nprocess.stdout.write(JSON.stringify({ address: 't1', pid: 1, foreground: { pid: 1, name: 'bash' }, labels: {} }));\n`);
     const run = await new PiIntegrationTest({ testName:'herdr-nested-pi',cwd:root, artifactsDir:path.resolve(here,'../.tmp/test-runs'), isolateUserResources:true, transport:'tui', rawMode:false,
       extensions:[path.resolve(here,'../index.ts')],tools:['herdr_agent_list'],
       environment:{HC_TERMINAL_ID:'t1',HC_TERMINAL_SOCKET:path.join(root,'core.sock'),HC_BIN:hc},
