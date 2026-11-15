@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ownsTerminal, requestViaMailbox, resolveHc } from '../client.mjs';
+import { AppClient, ownsTerminal, requestViaMailbox, resolveHc } from '../client.mjs';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -54,6 +54,19 @@ test('accepted requests time out without replay and an App restart is unknown', 
   await assert.rejects(requestViaMailbox(core, route, identity, { do: 'tab.new', args: {} }, { timeout: 8, pollMs: 1 }), /unknown|not confirmed/i);
   assert.equal(core.writes, 1);
   await assert.rejects(requestViaMailbox(fixture({ restart: true }), route, identity, { ls: true }, { timeout: 50, pollMs: 0 }), /restart|epoch|unknown/i);
+});
+test('each agent opens in a new space named after it; a fallback joins its given space', async () => {
+  const app = new AppClient(() => {}, 12, 'session-a');
+  const calls = [];
+  app.context = async () => ({ machine: 'laptop', space: 'laptop/sp1' });
+  app.command = async (name, args) => { calls.push([name, args]); return name === 'tab.new' ? { terminal: 'laptop/t3', tab: 'laptop/tb3' } : { space: 'laptop/sp2', tab: 'laptop/tb2', terminal: 'laptop/t2' }; };
+  const input = { name: 'LPT-1 task', folder: '/repo', model: 'p/main', thinking: 'high', message: 'Implement LPT-1' };
+  assert.equal((await app.launch(input)).space, 'laptop/sp2');
+  assert.deepEqual(calls[0], ['space.new', { folder: '/repo', argv: ['pi', '--model', 'p/main', '--thinking', 'high'], task: 'Implement LPT-1', focus: false, name: 'LPT-1 task', tab: 'LPT-1 task', machine: 'laptop' }]);
+  await app.launch({ ...input, machine: '' });
+  assert.equal(calls[1][1].machine, '', 'an explicit empty machine selects the App\u2019s own computer');
+  assert.equal((await app.launch({ ...input, space: 'laptop/sp2' })).space, 'laptop/sp2');
+  assert.deepEqual([calls[2][0], calls[2][1].space, calls[2][1].focus], ['tab.new', 'laptop/sp2', false]);
 });
 test('a missing route refuses instead of contacting an unrelated App', async () => {
   await assert.rejects(requestViaMailbox(fixture(), undefined, identity, { ls: true }), /reload|route/i);

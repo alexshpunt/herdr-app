@@ -46,6 +46,11 @@ test('request receipts survive reload and prevent duplicate launches', () => fix
   assert.equal(api.calls.filter(c => c[0] === 'launch').length, 1);
   await assert.rejects(new Orchestrator(api, root).create({ ...input, message: 'different task' }), /different/);
 }));
+test('a caller cannot put an agent into an existing space', () => fixture(async root => {
+  const api = client();
+  await new Orchestrator(api, root, { pollMs: 0 }).create({ ...input, space: 'm/sp1', newSpace: { name: 'shared' } });
+  assert.equal(api.calls[0][1].space, undefined);
+}));
 test('concurrent same-key calls do not duplicate a task', () => fixture(async root => {
   const api = client();
   const results = await Promise.allSettled([new Orchestrator(api, root).create(input), new Orchestrator(api, root).create(input)]);
@@ -60,6 +65,8 @@ test('only explicit first-response failure starts fallback, exactly once', () =>
   assert.equal(result.outcome, 'started');
   assert.equal(result.model, 'p/backup');
   assert.deepEqual(api.calls.filter(c => c[0] === 'launch').map(c => c[1].model), ['p/main', 'p/backup']);
+  // The primary gets a space of its own; its fallback joins the primary there.
+  assert.deepEqual(api.calls.filter(c => c[0] === 'launch').map(c => c[1].space), [undefined, 'm/sp1']);
   assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
   assert.equal(result.retainedPrimary.terminal, 'm/t2');
 }));
