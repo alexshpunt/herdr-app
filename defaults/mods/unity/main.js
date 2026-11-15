@@ -1,7 +1,8 @@
 import { View, div } from "gpui-kit";
 import { v_flex } from "gpui-base";
 import { NativeAppState, NativeApp } from "herdr-browser";
-import { props, theme, focused, nextCommand, nextLink } from "herdr";
+import { props, theme, focused, nextCommand, nextLink, readTextFile, env } from "herdr";
+import { editorVersion, localFolder, unityLaunch, unityRoots } from "./launch.js";
 
 // The Unity Editor, embedded, on a Unity project in the editor version the
 // project names: as an app in a pane (`pane.app.open`, the Unity button, a
@@ -13,7 +14,10 @@ export default class UnityEditor extends View {
   init(_props, cx) {
     this.app = null;
     this.error = null;
-    this.open(props() ?? {});
+    cx.spawn(async (cx) => {
+      await this.open(props() ?? {});
+      cx.notify();
+    });
     // A pane's app gets each later Unity project's folder link Herdr routes
     // to it: that project replaces this one (the old state's editor closes
     // once it is dropped).
@@ -21,7 +25,7 @@ export default class UnityEditor extends View {
       cx.spawn(async (cx) => {
         for (;;) {
           const opened = await nextLink();
-          if (opened?.link?.kind === "folder") this.open({ ...props(), ...opened });
+          if (opened?.link?.kind === "folder") await this.open({ ...props(), ...opened });
           cx.notify();
         }
       });
@@ -38,20 +42,29 @@ export default class UnityEditor extends View {
       let last = "";
       for (;;) {
         await cx.sleep(500);
-        const now = `${this.app?.status()}|${this.app?.error()}`;
+        const now = `${this.app?.status()}|${this.app?.error()}|${this.error}`;
         if (now !== last) { last = now; cx.notify(); }
       }
     });
   }
 
   /** Opens the editor on the project props `p` name, unless it has it open. @param {any} p */
-  open(p) {
+  async open(p) {
     try {
-      const target = this.target(p);
-      if (this.app && target === this.project) return;
-      this.project = target;
+      const folder = this.target(p);
+      if (this.app && folder === this.project) return;
+      const text = await readTextFile(`${folder}\\ProjectSettings\\ProjectVersion.txt`);
+      if (text == null) throw new Error(`${folder} is not a Unity project`);
+      const version = editorVersion(text);
+      if (!version) throw new Error(`${folder}\\ProjectSettings\\ProjectVersion.txt names no editor version`);
+      const appData = env("APPDATA");
+      const chosen = appData ? await readTextFile(`${appData}\\UnityHub\\secondaryInstallPath.json`) : null;
+      const description = unityLaunch(folder, version, unityRoots(env, chosen));
+      const app = NativeAppState(`unity\n${folder}`);
+      app.open(description);
+      this.project = folder;
       this.error = null;
-      this.app = NativeAppState("unity", target);
+      this.app = app;
     } catch (error) {
       this.error = String(error?.message ?? error);
     }
@@ -61,10 +74,15 @@ export default class UnityEditor extends View {
   // `/mnt/<drive>/…` folder as that drive's.
   /** @param {any} p its props, or those of a later `pane.app.open` */
   target(p) {
-    if (typeof p.app !== "string") return p.folder || p.uri || focused()?.cwd || "";
+    if (typeof p.app !== "string") {
+      const given = p.folder || p.uri || focused()?.cwd || "";
+      const folder = localFolder(given);
+      if (!folder) throw new Error(given ? `Unity opens projects on this computer's drives, not ${given}.` : "No Unity project to open.");
+      return folder;
+    }
     const where = p.link?.kind === "folder" ? { folder: p.link.path, machine: p.link.machine ?? null } : p.project;
     if (!where?.folder) throw new Error("No Unity project to open.");
-    if (where.machine == null) return where.folder;
+    if (where.machine == null) return localFolder(where.folder) ?? where.folder;
     const mount = /^\/mnt\/([a-z])(?:\/(.*))?$/.exec(where.folder);
     if (!mount) throw new Error(`Unity opens projects on this computer's drives, not ${where.folder} on ${where.machine}.`);
     return `${mount[1].toUpperCase()}:\\${(mount[2] ?? "").replaceAll("/", "\\")}`;

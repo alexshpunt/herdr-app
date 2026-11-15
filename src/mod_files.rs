@@ -93,6 +93,55 @@ pub fn read_with(
     }
 }
 
+/// A folder's entries on this computer, by name: `{name, folder, modified}`
+/// (milliseconds since 1970, null when unknown), or None when it is absent.
+fn list(path: &Path) -> Result<Option<Vec<serde_json::Value>>, String> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut out: Vec<serde_json::Value> = entries
+        .flatten()
+        .map(|entry| {
+            // A link counts as what it points to.
+            let meta = std::fs::metadata(entry.path()).ok();
+            let modified = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as f64);
+            serde_json::json!({
+                "name": entry.file_name().to_string_lossy(),
+                "folder": meta.as_ref().is_some_and(std::fs::Metadata::is_dir),
+                "modified": modified,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Ok(Some(out))
+}
+
+/// Lists a folder off the UI thread (`list`).
+pub fn list_with(
+    path: String,
+) -> impl std::future::Future<Output = Result<HostValue, HostError>> + Send {
+    let (tx, rx) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        let _ = tx.send_blocking(list(Path::new(&path)));
+    });
+    async move {
+        let value = rx
+            .recv()
+            .await
+            .map_err(|e| HostError::new(e.to_string()))?
+            .map_err(HostError::new)?;
+        Ok(value.map_or(HostValue::Null, |entries| {
+            crate::mods::to_host(&serde_json::Value::Array(entries))
+        }))
+    }
+}
+
 pub fn write_text(
     path: String,
     text: String,

@@ -1052,6 +1052,10 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         })
         .function("home", |_| Ok(home().to_string_lossy().into_owned().into()))
         .function("appHome", |_| Ok(app_dir().to_string_lossy().into_owned().into()))
+        .function("env", |a| {
+            Ok(std::env::var_os(a.string(0)?).filter(|v| !v.is_empty()).map_or(HostValue::Null, |v| v.to_string_lossy().into_owned().into()))
+        })
+        .async_function("listFolder", |a| Ok(crate::mod_files::list_with(a.string(0)?.to_owned())))
         .function("fonts", |_| Ok(to_host(&json!(*FONTS.lock().unwrap()))))
         .function("updates", |_| Ok(to_host(&crate::update::status())))
         .function("presentUpdateNotes", |a| {
