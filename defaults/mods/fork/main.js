@@ -4,8 +4,8 @@ import { NativeAppState, NativeApp } from "herdr-browser";
 import { props, theme, focused, nextCommand, readTextFile, writeTextFile, listFolder, appHome, exec, env, shared, setShared } from "herdr";
 import { forkGits, forkLaunch, forkWorkspace, safeDirectory, windowsFolder } from "./launch.js";
 
-// The person's Fork (git client), embedded, on one repository: as an app in
-// a pane (`pane.app.open`, the Diff button) the pane's project, as a tab's mod
+// The person's Fork (git client), embedded, on one repository: as an app
+// (`app.open`, the Diff button) its agent's project, as a tab's mod
 // pane props.uri (a folder URI such as vscode-remote://wsl+Ubuntu/root/app)
 // or props.folder (a local path). Each has a Fork process of its own with only
 // this repository; closing the pane or app closes it.

@@ -5,10 +5,10 @@ import { props, theme, focused, nextCommand, nextLink, panes, shared, setShared,
 import { appTarget, outsideFolder } from "./uri.js";
 import { HAND_AGAIN, roundsPast, vscodeLaunch } from "./launch.js";
 
-// The person's own VS Code, embedded. As an app in a pane (`pane.app.open`,
-// the Files button, a file or folder link) it opens the pane's project, or the
-// folder of the link it was opened for, on the file that link names; files
-// linked later open in the same window, a folder linked later replaces it.
+// The person's own VS Code, embedded. As an app (`app.open`: the Files button,
+// a file or folder link) it opens its agent's project, or the folder of the
+// link it was opened for, on the file that link names; files linked later open
+// in the same window, a folder linked later replaces it.
 // As a tab's mod pane it opens props.uri (a folder URI such as
 // vscode-remote://wsl+Ubuntu/root/app) or props.folder (a local path), with
 // props.goto (a file URI, `:line:column` after it) on that file. Closing the
@@ -30,7 +30,7 @@ export default class VsCode extends View {
         cx.notify();
       }
     });
-    // A pane's app is opened again with each link Herdr routes to it.
+    // An app is opened again with each link Herdr routes to it.
     if (typeof props()?.app === "string") {
       cx.spawn(async (cx) => {
         for (;;) {
@@ -57,8 +57,8 @@ export default class VsCode extends View {
     try { return JSON.parse(await readTextFile(`${appHome()}/machines.json`) ?? "[]"); } catch { return []; }
   }
 
-  // A file link outside the pane's project opens in its own Git work tree
-  // (else its folder, below): its project, as the pane's would be.
+  // A file link outside the app's project opens in its own Git work tree
+  // (else its folder, below): its project, as the app's would be.
   /** @param {any} p */
   async withLinkProject(p) {
     const folder = outsideFolder(p);

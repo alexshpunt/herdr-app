@@ -121,9 +121,9 @@ Close a pane and end its terminal.
 |---|---|
 | `pane` | no |
 
-## `pane.app.open`
+## `app.open`
 
-Open a mod as an app inside a pane (default: the focused one; terminal: the pane showing it) and show it there instead of the pane's terminal, which keeps running; focuses the pane. app: which of the mod's mod.json `app` registrations it is. The app of the same mod and registration the pane already holds is reused: its running copy gets props from nextLink(). Returns pane, app (its id) and reused.
+Open a mod as an app in a tab of its own (title: its name; default: the app's label) and show it. It is opened for the agent the pane of `for` works for (a terminal: an address, or the id on its machine with space naming its space there; default: the focused pane): that agent's own terminal, else the agent the pane's tab was opened for, else the agent focused last in that tab. Its tab goes after the agent's tab and its earlier tabs and closes with the agent; without an agent it goes after the selected tab. app: which of the mod's mod.json `app` registrations it is. props get `app` (the registration), `origin` (the agent) and `project` (the agent's Git work tree or folder) unless given. An open app is shown again instead, its running copy given the props from nextLink(): with reuse "agent" (the default, or the registration's `reuse`) the one opened for that agent, "project" the one for that agent on the same project, "none" never, and no later open shows one opened so (its props get `reuse: "none"`). Returns space, tab, pane and reused.
 
 | Argument | Required |
 |---|---|
@@ -131,32 +131,25 @@ Open a mod as an app inside a pane (default: the focused one; terminal: the pane
 | `app` | no |
 | `props` | no |
 | `title` | no |
+| `for` | no |
+| `space` | no |
+| `reuse` | no |
+
+## `app.beside`
+
+Move an app's tab (default: the selected one) into the tab of the agent it was opened for, right of the agent's pane. The app keeps running.
+
+| Argument | Required |
+|---|---|
+| `tab` | no |
+
+## `app.apart`
+
+Move an app beside its agent (default: the focused pane) back into a tab of its own after the agent's tab. The app keeps running.
+
+| Argument | Required |
+|---|---|
 | `pane` | no |
-| `terminal` | no |
-
-## `pane.app.show`
-
-Show an app in its pane and focus that pane (selecting its space and tab).
-
-| Argument | Required |
-|---|---|
-| `app` | yes |
-
-## `pane.app.hide`
-
-Show a pane's own terminal again (default: the focused pane); its apps stay open.
-
-| Argument | Required |
-|---|---|
-| `pane` | no |
-
-## `pane.app.close`
-
-Close an app: its pane shows its own terminal again if the app was shown.
-
-| Argument | Required |
-|---|---|
-| `app` | yes |
 
 ## `terminal.open`
 

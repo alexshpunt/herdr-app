@@ -315,24 +315,6 @@ pub struct ClonedFrom {
     pub version: String,
 }
 
-/// An app a pane holds beside its own terminal or mod (`pane.app.open`): a
-/// mod copy the pane draws instead while it is the pane's shown app. It
-/// belongs to the pane, so it goes wherever the pane goes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PaneApp {
-    pub id: String,
-    #[serde(rename = "mod")]
-    pub name: String,
-    /// The mod.json `app` registration it was opened from, if it named one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub app: Option<String>,
-    /// What it was last opened with; a running copy got later ones as links.
-    #[serde(default, skip_serializing_if = "Value::is_null")]
-    pub props: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     #[serde(default)]
@@ -402,12 +384,6 @@ pub struct Node {
     /// Dragging this node moves the window; a double-click maximizes it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub window_drag: bool,
-    /// A pane in a tab: the apps it holds (`pane.app.open`), in the order they opened.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub apps: Vec<PaneApp>,
-    /// The app the pane draws instead of its own content; None: its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shown_app: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -446,14 +422,7 @@ impl Node {
             terminal_menu: None,
             toast: None,
             window_drag: false,
-            apps: Vec::new(),
-            shown_app: None,
         }
-    }
-
-    /// The app this pane draws instead of its own content, if any.
-    pub fn shown_app(&self) -> Option<&PaneApp> {
-        self.shown_app.as_deref().and_then(|id| self.apps.iter().find(|a| a.id == id))
     }
 
     pub fn block(id: impl Into<String>, content: Content) -> Node {

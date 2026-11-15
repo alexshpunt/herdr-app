@@ -76,9 +76,10 @@ one run at a time in the order asked (VS Code's
 `--goto --file-uri <uri>` opens a file in the window that has its folder).
 The bundled `vscode` mod shows the person's own VS Code (`HERDR_VSCODE_EXE`,
 else its user or machine install) and registers the Files app (mod.json
-`app`): in a pane it opens the pane's project, or the folder of the file or
-folder link it was opened for, on that file; files linked later open in the
-same window, and a folder linked later replaces it with that folder's window.
+`app`): as an agent's Files tab it opens the agent's project, or the folder of
+the file or folder link it was opened for, on that file; files linked later
+open in the same window, and a folder linked later replaces it with that
+folder's window.
 VS Code has one window per folder: a second pane on the same folder takes
 that window over. As a tab's mod pane it opens `props.uri` (a folder URI such
 as `vscode-remote://wsl+Ubuntu/root/app`) or `props.folder` and `props.goto`
@@ -86,24 +87,27 @@ as its window first starts (not again after a restart).
 The bundled `fork` mod shows Fork, the git client (`HERDR_FORK_EXE`, else its
 user install), on a local or WSL repository: a Fork process of the pane's
 own, which a "Herdr" workspace in Fork's settings gives only that repository;
-a WSL repository becomes a git `safe.directory`. It registers the Diff app.
+a WSL repository becomes a git `safe.directory`. It registers the Diff app,
+one per agent and project.
 The bundled `unity` mod shows the Unity Editor on a local Unity project, in
 the version its `ProjectSettings/ProjectVersion.txt` names, from Unity Hub's
 editor folders; an editor that already has the project open is adopted, and
-its menu bar stays. It registers the Unity app; a Unity project's folder
-link that reaches an open Unity app opens that project in it instead.
+its menu bar stays. It registers the Unity app, one per agent and project;
+a Unity project's folder link opens in the agent's Unity tab of that project,
+else in a new one.
 
 The shipped `plannotator-browser` mod takes `{ url, origin? }` props and opens a
 review with Back, Reload and Open externally controls. `herdr-app --browser-api`
 prints the machine-readable browser API version without opening a window.
 It registers the Annotate diff (`review`) and Annotate reply (`last`) apps,
-available in a pane whose terminal runs a Pi with the Herdr Plannotator
-integration: opened without a `url`, the app asks that Pi for the review.
+available for an agent whose terminal runs a Pi with the Herdr Plannotator
+integration: opened without a `url`, the app asks that Pi for the review, and
+pressing its button again asks again.
 The Pi integration in `integrations/plannotator` uses the core terminal's space
-label to open a review as an app in the requesting agent's pane
-(`pane.app.open`): in the app of the button that asked for it, else in its own
-"Plannotator" app. The app closes when the review is submitted. An
-unknown or ambiguous origin opens the system browser instead of using the
+label to open a review as an app of the requesting agent (`app.open` with
+`for`): in the tab of the button that asked for it, else in a new
+"Plannotator" tab. The tab closes when the review is submitted. An
+unknown or ambiguous terminal opens the system browser instead of using the
 currently focused agent.
 Review cleanup is scoped to Plannotator's review ID and Pi session, including
 reviews that reuse a listening port. Unmatched browser requests, such as the
@@ -114,14 +118,16 @@ is the terminal's `foreground.pid`), run
 `exec(label.node, [label.request, <terminal id on that machine>, "review" | "last", label.hc], { on: machine })`.
 The annotations go back to that Pi session (`docs/FORK.md`).
 
-A mod tab opened for an agent records it: give the tab's mod pane an `origin`
-prop with that agent's terminal as on the space's machine (`$HC_TERMINAL_ID`),
-as `tab.new {space, mod, props: {..., origin}}`. `TabInfo.origin` and the tab
-in `herdr-app ls` report it as a full address, as `AgentInfo.address`, also
-after that agent ends. Plannotator reviews record their agent this way.
+A mod tab opened for an agent records it: its mod pane's `origin` prop names
+that agent's terminal as on the space's machine (`$HC_TERMINAL_ID`).
+`app.open` sets it (see Apps below); `tab.new {space, mod, props: {..., origin}}`
+does it by hand. `TabInfo.origin` and the tab in `herdr-app ls` report it as a
+full address, as `AgentInfo.address`, also after that agent ends.
 Such a tab opens right after that agent's tab and the tabs already opened for
 it, so they stay in opening order; without an `origin`, or when the agent has no
-tab in the space, a new tab opens after the selected one.
+tab in the space, a new tab opens after the selected one and the tabs opened
+for the selected tab's agent, so they stay together. An agent's own tab
+that holds an app moved beside it (`app.beside`) is nobody's.
 
 ## What mods are written in
 
@@ -238,13 +244,15 @@ the highlighted line shows where it will land.
   with the same address; its original command is never run again. Splits
   and mod panes stay. An exited or killed terminal is closed, not restarted.
   Focus, zoom, recent spaces, settled tabs and seen attention stay on this screen.
-- A pane can also hold **apps**: mods opened inside it with `pane.app.open`
-  (an editor, a git client, a browser for the agent working there). The pane
-  draws its shown app instead of its terminal, which keeps running; another
-  pane focused leaves it shown; `pane.app.hide` shows the terminal again. A
-  pane's apps are saved with it and go wherever it goes: split, swap, move,
-  zoom; closing the pane closes them. A native window an app embeds hides
-  while the app isn't drawn. `panes()` lists them (`apps`, `shown_app`).
+- **Apps** are mods opened for an agent with `app.open` (an editor, a git
+  client, a browser for the agent working there). Each opens as a tab of its
+  own: right after its agent's tab and the agent's earlier tabs, listed under
+  the agent, and closed with the agent's tab or when the agent's terminal
+  ends (a tab someone added a terminal to stays). `app.beside` moves an app
+  into its agent's tab, right of the agent's pane; `app.apart` moves it back
+  into a tab of its own. Its copy keeps running through both. A native window
+  an app embeds hides while the app isn't drawn. Pane apps that layouts saved
+  before (`apps` and `shown_app` of a pane) are dropped when they load.
 - Every terminal is a core terminal. Herdr labels the ones it starts with
   `herdr.space=<id>` and `herdr.tab=<id>`. **A terminal with those
   labels shows up there**, even one you start yourself:
@@ -277,10 +285,12 @@ the highlighted line shows where it will land.
   checked there); `:42` / `:42:7` after it is a line and column. A web page
   an open app was opened on (its `props.url`, such as a Plannotator review)
   shows that app. Else the first
-  app a mod registers for it (mod.json `app` `links`, see Mods) opens it in
-  the pane of the terminal it came from, else the focused pane: the shipped
-  `vscode` mod takes files and folders, `unity` Unity project folders on this
-  computer. Else a mod that waits in `nextLink()` gets it and shows it in a
+  app a mod registers for it (mod.json `app` `links`, see Mods) opens it
+  (`app.open`) for the agent the terminal it came from works for, else the
+  focused pane's: in a new tab, or in that agent's open app when the link rule
+  says `"reuse": true`. The shipped `vscode` mod takes files and folders in
+  its Files tab, `unity` Unity project folders on this computer in the Unity
+  tab of that project. Else a mod that waits in `nextLink()` gets it and shows it in a
   tab, recording the agent it came from as `props.origin` of the tab's mod
   pane; it hands back one no tab shows with `link.open {target, system: true}`.
   Without either, the system's browser or program opens it.
@@ -711,13 +721,23 @@ The main ones:
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
   `pane.swap {pane?, direction | target}`.
-  Apps in a pane: `pane.app.open {mod, app?, props?, title?, pane? | terminal?}`
-  opens a mod in the pane (default: the focused one) and shows it there,
-  focusing the pane; the pane's app of the same mod and `app` registration is
-  reused, and its running copy gets `props` from `nextLink()`. It returns
-  `{pane, app, reused}`. `pane.app.show {app}` shows an app and focuses its pane,
-  `pane.app.hide {pane?}` shows the pane's terminal again, and
-  `pane.app.close {app}` closes one.
+  Apps: `app.open {mod, app?, props?, title?, for?, space?, reuse?}` opens a mod
+  as an app in a tab of its own (`title`; default: the registration's label)
+  and shows it. It is for the agent the pane of `for` (a terminal: an address,
+  or the id on its machine with `space` naming its space there; default: the
+  focused pane) works for: the agent running in that pane, else the agent its
+  tab was opened for, else the agent focused last in that tab; or for nobody.
+  Its props get `app` (the registration; default: the mod's only one, else the
+  mod's name), `origin` (the agent) and `project` (the agent's Git work tree,
+  else its folder; without an agent, the pane's) unless given. An open app is
+  shown again instead, its stored props updated and its running copy given
+  the props from `nextLink()`: with `reuse` `"agent"` (the default, or the
+  registration's `reuse`) the same agent's app, `"project"` the same agent's on
+  the same project, `"none"` never, and no later open shows one opened so
+  (its props get `reuse: "none"`). It returns `{space, tab, pane, reused}`.
+  `app.beside {tab?}` moves an app's tab (default: the selected one) into its
+  agent's tab, right of the agent's pane; `app.apart {pane?}` moves an app
+  beside its agent (default: the focused pane) back into a tab of its own.
   `pane.go` prefers the most recently focused pane along the nearest edge in that
   direction; unvisited panes fall back to overlap, then top/left layout order.
   `pane.go` also reaches visible mods whose `mod.json` says `"focusable": true`, and
@@ -813,7 +833,7 @@ From a shell:
 ```sh
 herdr-app do tab.new --name "fix login" --argv '["claude"]' --task "look at the login bug"
 herdr-app do pane.split:right
-herdr-app ls          # spaces, their tabs and terminals (sub-agents under their parent)
+herdr-app ls          # spaces, their tabs with their terminals (sub-agents under their parent) and apps (pane, mod, app, props)
 herdr-app status      # what's on screen: layout, focus, overlays, zoom, errors from files and mods
 herdr-app commands    # every command and its arguments
 ```
@@ -980,31 +1000,37 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
 - `"side_panel": { "title": "Builds", "order": 10 }` in `mod.json` adds the mod
   as a section of every `{ "side_panel": true }` block (see Layouts): widgets,
   metrics and settings that sit beside the work.
-- `"app"` in `mod.json` registers the mod as an app that opens inside a pane
-  (`pane.app.open`): one object, or a list for several apps of one mod. Each
-  has an `id` (default: the mod's name), a `label`, an `icon` (a file in the
-  mod's folder), an `order` (lower first; default 100), `when` rules that must
-  all hold for the pane and `links` it opens:
+- `"app"` in `mod.json` registers the mod as an app that opens as a tab of the
+  agent it is opened for (`app.open`): one object, or a list for several apps
+  of one mod. Each has an `id` (default: the mod's name), a `label`, an `icon`
+  (a file in the mod's folder), an `order` (lower first; default 100), `when`
+  rules that must all hold for the agent, the `links` it opens and `reuse`:
   ```json
   "app": { "id": "linear", "label": "Linear", "icon": "linear.svg", "order": 50,
-           "when": [{ "has": ".linear-project" }],
+           "reuse": "project", "when": [{ "has": ".linear-project" }],
            "links": [{ "url": "(?i)^https://linear\\.app(?:[/?#]|$)" }] }
   ```
-  `when`: `{"has": "<path>"}` (the file exists in the pane's project: its
-  terminal's Git work tree, else its folder, looked at on its machine),
-  `{"remote": "<regex>"}` (the project's `origin` URL matches),
-  `{"label": "<name>"}` (the pane's terminal has that label; one whose JSON
+  The rules look at the agent a pane works for (see `app.open`), or at the
+  pane itself without one. `when`: `{"has": "<path>"}` (the file exists in the
+  project: the agent's Git work tree, else its folder, looked at on its
+  machine), `{"remote": "<regex>"}` (the project's `origin` URL matches),
+  `{"label": "<name>"}` (the agent's terminal has that label; one whose JSON
   value names a `pid` counts while that process is in front) and
   `{"local": true}` (the project is on this computer or a WSL machine whose
   `editorAuthority` in `machines.json` is `wsl+…`; `false`: elsewhere).
+  `reuse`: which open app its button shows again instead of opening another:
+  `"agent"` (default: one per agent), `"project"` (one per agent and project)
+  or `"none"`.
   `links`: `{"url": "<regex>"}`, `{"file": true}`, `{"folder": true}`, each
-  optionally with `"has"` (in the folder, or the file's folder) and `"local"`.
-  A link goes to the first app (by `order`) that takes it, in the pane of the
-  terminal it came from, else the focused pane; the copy gets it as
-  `props().link`, or from `nextLink()` when that pane already has the app.
-  `apps(pane?)` lists the registrations with `available` for a pane: a tab bar
-  shows those as buttons. An app's copy gets `props().project`, `pane`, `app`
-  (its id) and `registration`.
+  optionally with `"has"` (in the folder, or the file's folder), `"local"` and
+  `"reuse": true` (the link goes to the open app `reuse` names; otherwise each
+  link opens a new tab). A link goes to the first app (by `order`) that takes
+  it; the copy gets it as `props().link`, or from `nextLink()` when an open
+  app takes it. `apps(pane?)` lists the registrations with `available` for the
+  agent a pane works for, and `tab`: the open tab its button shows again, else
+  null. A tab bar shows the available ones as buttons that run `app.open`. An
+  app's copy gets `props().app` (its registration), `origin`, `project` and
+  `pane`.
 
 - The first time Herdr sees a folder, it docks one copy per `mod.json` into
   the shown layout (`"none"`: only where a layout or another mod puts it).

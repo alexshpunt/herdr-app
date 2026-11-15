@@ -1,6 +1,7 @@
 //! Apps that mods register in their mod.json (`"app"`: one object or a list):
 //! the buttons a tab bar offers for a pane, when each one is available there,
-//! and which links open in it. An app opens inside a pane (`pane.app.open`).
+//! which links open in it, and when one already open is shown again. An app
+//! opens as a tab of the agent it is opened for (`app.open`).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -25,6 +26,33 @@ pub struct Registration {
     /// Links that open in this app; the first registration (by order) wins.
     #[serde(default)]
     pub links: Vec<LinkRule>,
+    /// Which open app its button shows again instead of opening another.
+    #[serde(default)]
+    pub reuse: Reuse,
+}
+
+/// Which open app an `app.open` shows again (given new props from
+/// `nextLink()`) instead of opening a new tab.
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Reuse {
+    /// The one opened for the same agent (without one: on the same project).
+    #[default]
+    Agent,
+    /// The one opened for the same agent on the same project.
+    Project,
+    /// None: a new tab each time.
+    None,
+}
+
+impl Reuse {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reuse::Agent => "agent",
+            Reuse::Project => "project",
+            Reuse::None => "none",
+        }
+    }
 }
 
 fn default_order() -> i32 {
@@ -49,7 +77,8 @@ pub enum Rule {
 
 /// Which links open in an app: URLs matching `url`, or file or folder paths,
 /// optionally only those where `has` exists (in the folder, or the file's
-/// folder) and on this computer or not (`local`).
+/// folder) and on this computer or not (`local`). A link opens a new tab,
+/// unless `reuse`: then the open app its registration's `reuse` names shows it.
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct LinkRule {
@@ -58,6 +87,7 @@ pub struct LinkRule {
     pub folder: bool,
     pub has: Option<String>,
     pub local: Option<bool>,
+    pub reuse: bool,
 }
 
 /// A registration with the mod that made it.
@@ -77,7 +107,7 @@ impl App {
         json!({
             "mod": self.name, "app": self.id(), "label": self.reg.label, "order": self.reg.order,
             "icon": self.reg.icon.as_ref().map(|i| format!("mods/{}/{}", self.name, i.trim_start_matches("./"))),
-            "available": available,
+            "reuse": self.reg.reuse.as_str(), "available": available,
         })
     }
 }
@@ -218,11 +248,17 @@ pub fn link_needs_probe(apps: &[App], link: &Value) -> bool {
         .any(|r| r.has.is_some() && ((r.file && kind == "file") || (r.folder && kind == "folder")))
 }
 
-/// Whether an app opens this link (`kind`: url, file or folder), given where
-/// it is (`local`) and what its folder has (`probe`).
-pub fn opens(app: &App, link: &Value, local: bool, probe: Option<&Probe>) -> bool {
+/// The first of an app's link rules that takes this link (`kind`: url, file
+/// or folder), given where it is (`local`) and what its folder has (`probe`).
+/// None: the app doesn't open it.
+pub fn link_rule<'a>(
+    app: &'a App,
+    link: &Value,
+    local: bool,
+    probe: Option<&Probe>,
+) -> Option<&'a LinkRule> {
     let kind = link["kind"].as_str().unwrap_or_default();
-    app.reg.links.iter().any(|r| {
+    app.reg.links.iter().find(|r| {
         let kind_ok = match kind {
             "url" => r
                 .url
@@ -400,8 +436,34 @@ mod tests {
         let json = shipped()[3].json(true);
         assert_eq!(
             json,
-            json!({ "mod": "vscode", "app": "files", "label": "Files", "order": 30, "icon": null, "available": true })
+            json!({ "mod": "vscode", "app": "files", "label": "Files", "order": 30, "icon": null, "reuse": "agent", "available": true })
         );
+    }
+
+    #[test]
+    fn a_registration_says_which_open_app_it_shows_again() {
+        let all = apps(json!({
+            "fork": { "id": "diff", "label": "Diff", "reuse": "project" },
+            "web": { "label": "Web", "reuse": "none", "links": [{ "url": "^https://a/", "reuse": true }, { "url": "^https://b/" }] },
+            "vscode": { "label": "Files" },
+            "odd": { "label": "Odd", "reuse": "sometimes" }
+        }));
+        let reuse: Vec<(&str, Reuse)> = all.iter().map(|a| (a.id(), a.reg.reuse)).collect();
+        assert_eq!(
+            reuse,
+            [
+                ("diff", Reuse::Project),
+                ("vscode", Reuse::Agent),
+                ("web", Reuse::None)
+            ]
+        );
+        let web = &all[2];
+        let rule = |url: &str| {
+            link_rule(web, &json!({ "kind": "url", "url": url }), true, None).map(|r| r.reuse)
+        };
+        assert_eq!(rule("https://a/1"), Some(true));
+        assert_eq!(rule("https://b/1"), Some(false));
+        assert_eq!(rule("https://c/1"), None);
     }
 
     #[test]
@@ -461,7 +523,7 @@ mod tests {
         let all = shipped();
         let first = |link: Value, local: bool, probe: Option<&Probe>| {
             all.iter()
-                .find(|a| opens(a, &link, local, probe))
+                .find(|a| link_rule(a, &link, local, probe).is_some())
                 .map(App::id)
         };
         assert_eq!(

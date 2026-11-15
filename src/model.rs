@@ -3,10 +3,13 @@
 //! how they're split. Plus which pane has focus and agent attention (done vs
 //! seen) with Herdr's rollup. Pure data; the window drives it.
 
-use crate::layout::{Axis, Content, Node, PaneApp};
+use crate::layout::{Axis, Content, Kind, Node};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
+
+mod app_tabs;
+pub use app_tabs::{AppQuery, app_of, app_project};
 
 /// A named piece of work in a space: its terminals and how they're split.
 #[derive(Clone, Debug)]
@@ -106,18 +109,12 @@ impl Model {
         for space in &self.spaces {
             for tab in &space.tabs {
                 for pane in tab.root.panes() {
-                    // A review pane, or a review app in a pane.
-                    let own = match pane.content() {
-                        Some(Content::Mod { name, props }) => Some((name.as_str(), props)),
-                        _ => None,
-                    };
-                    for (name, props) in own.into_iter().chain(pane.apps.iter().map(|a| (a.name.as_str(), &a.props))) {
-                        if name != "plannotator-browser" || !props.get("review").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
-                            continue;
-                        }
-                        let Some(address) = origin_address(space, props) else { continue };
-                        origins.insert((space.id.clone(), address));
+                    let Some(Content::Mod { name, props }) = pane.content() else { continue };
+                    if name != "plannotator-browser" || !props.get("review").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
+                        continue;
                     }
+                    let Some(address) = origin_address(space, props) else { continue };
+                    origins.insert((space.id.clone(), address));
                 }
             }
         }
@@ -139,13 +136,18 @@ fn origin_address(space: &Space, props: &Value) -> Option<String> {
 }
 
 /// The agent a tab was opened for, as a full address: the first terminal that a
-/// mod pane's `origin` prop names (`tab.new {mod, props: {origin}}`, see
-/// `origin_address`).
+/// mod pane's `origin` prop names (`app.open`, `tab.new {mod, props: {origin}}`,
+/// see `origin_address`). An agent's own tab, with an app moved beside it
+/// (`app.beside`), is nobody's.
 pub fn tab_origin(space: &Space, tab: &Tab) -> Option<String> {
-    tab.root.panes().into_iter().find_map(|pane| match pane.content() {
-        Some(Content::Mod { props, .. }) => origin_address(space, props),
-        _ => None,
-    })
+    tab.root
+        .panes()
+        .into_iter()
+        .find_map(|pane| match pane.content() {
+            Some(Content::Mod { props, .. }) => origin_address(space, props),
+            _ => None,
+        })
+        .filter(|origin| !tab.root.terminals().iter().any(|n| n.terminal() == Some(origin.as_str())))
 }
 
 impl Tab {
@@ -317,10 +319,15 @@ impl Model {
 
     /// Adds a tab and selects it (not the space). A tab opened for an agent (see
     /// `tab_origin`) goes after that agent's tab and the tabs already opened for
-    /// it; any other tab goes after the space's selected one.
+    /// it; any other tab goes after the space's selected one, and after the
+    /// tabs opened for the selected tab's agent, so they stay together.
     pub fn add_tab(&mut self, space: &str, ctx: Tab) -> bool {
         let Some(p) = self.space_mut(space) else { return false };
-        let selected = || p.active.as_deref().and_then(|a| p.tabs.iter().position(|c| c.id == a)).map_or(p.tabs.len(), |i| i + 1);
+        let selected = || {
+            let Some(i) = p.active.as_deref().and_then(|a| p.tabs.iter().position(|c| c.id == a)) else { return p.tabs.len() };
+            let agents: Vec<String> = addresses(&p.tabs[i].root).into_iter().chain(tab_origin(p, &p.tabs[i])).collect();
+            i + 1 + p.tabs[i + 1..].iter().take_while(|tab| tab_origin(p, tab).is_some_and(|o| agents.contains(&o))).count()
+        };
         let at = tab_origin(p, &ctx)
             .and_then(|origin| {
                 let agent = p.tabs.iter().position(|tab| tab.root.panes().iter().any(|pane| matches!(pane.content(), Some(Content::Terminal { terminal }) if *terminal == origin)))?;
@@ -407,24 +414,30 @@ impl Model {
 
     /// Removes a pane. Returns what else closed: the tab, and the space if it was its last.
     pub fn remove_pane(&mut self, pane_id: &str) -> (bool, bool) {
-        let Some(c) = self.tab_of_mut(pane_id) else { return (false, false) };
-        c.root.remove(pane_id);
+        let Some(id) = self.tab_of(pane_id).map(|c| c.id.clone()) else { return (false, false) };
+        if self.take_pane(pane_id).is_none() || self.tab(&id).is_some_and(|c| !c.root.panes().is_empty()) {
+            return (false, false);
+        }
+        let (_, space_closed) = self.remove_tab(&id);
+        (true, space_closed)
+    }
+
+    /// Takes a pane out of its tab, which focuses the pane focused before it.
+    /// A tab left without panes stays, empty, for the caller.
+    fn take_pane(&mut self, pane_id: &str) -> Option<Node> {
+        let c = self.tab_of_mut(pane_id)?;
+        let node = c.root.remove(pane_id)?;
         if c.zoomed.as_deref() == Some(pane_id) {
             c.zoomed = None;
         }
-        if !c.root.panes().is_empty() {
-            c.before.retain(|p| p != pane_id);
-            if c.focused.as_deref() == Some(pane_id) {
-                // Back to the pane focused before it that's still here, else the first.
-                let here: Vec<String> = c.root.panes().iter().map(|n| n.id.clone()).collect();
-                c.before.retain(|p| here.contains(p));
-                c.focused = c.before.pop().or_else(|| here.first().cloned());
-            }
-            return (false, false);
+        c.before.retain(|p| p != pane_id);
+        if c.focused.as_deref() == Some(pane_id) {
+            // Back to the pane focused before it that's still here, else the first.
+            let here: Vec<String> = c.root.panes().iter().map(|n| n.id.clone()).collect();
+            c.before.retain(|p| here.contains(p));
+            c.focused = c.before.pop().or_else(|| here.first().cloned());
         }
-        let id = c.id.clone();
-        let (_, space_closed) = self.remove_tab(&id);
-        (true, space_closed)
+        Some(node)
     }
 
     /// Removes a tab. Returns its terminal addresses and whether its space closed.
@@ -522,73 +535,6 @@ impl Model {
 
     pub fn pane_of(&self, address: &str) -> Option<String> {
         self.tabs().flat_map(|c| c.root.terminals()).find(|n| n.terminal() == Some(address)).map(|n| n.id.clone())
-    }
-
-    /// An app opened on web page `page` (its `props.url`, as `apps::page` reads it).
-    pub fn app_on_page(&self, page: &str) -> Option<String> {
-        self.tabs()
-            .flat_map(|c| c.root.panes())
-            .flat_map(|n| &n.apps)
-            .find(|a| a.props["url"].as_str().and_then(crate::apps::page).as_deref() == Some(page))
-            .map(|a| a.id.clone())
-    }
-
-    /// The pane holding app `app` (`pane.app.open`).
-    pub fn app_pane(&self, app: &str) -> Option<String> {
-        self.tabs().flat_map(|c| c.root.panes()).find(|n| n.apps.iter().any(|a| a.id == app)).map(|n| n.id.clone())
-    }
-
-    fn pane_mut(&mut self, pane: &str) -> Option<&mut Node> {
-        self.tab_of_mut(pane)?.root.find_mut(pane).filter(|n| n.is_pane())
-    }
-
-    /// Shows an app in a pane and focuses the pane: the app of the same mod
-    /// and registration the pane already holds (given `props`, unless null),
-    /// else a new one with id `fresh`. Returns its id and whether it was there.
-    pub fn open_app(&mut self, pane: &str, name: &str, app: Option<&str>, props: Value, title: Option<String>, fresh: String) -> Option<(String, bool)> {
-        let node = self.pane_mut(pane)?;
-        let found = match node.apps.iter_mut().find(|a| a.name == name && a.app.as_deref() == app) {
-            Some(a) => {
-                if !props.is_null() {
-                    a.props = props;
-                }
-                if title.is_some() {
-                    a.title = title;
-                }
-                (a.id.clone(), true)
-            }
-            None => {
-                node.apps.push(PaneApp { id: fresh.clone(), name: name.to_owned(), app: app.map(str::to_owned), props, title });
-                (fresh, false)
-            }
-        };
-        node.shown_app = Some(found.0.clone());
-        self.focus_pane(pane);
-        Some(found)
-    }
-
-    /// Shows an app in its pane and focuses the pane. Returns the pane.
-    pub fn show_app(&mut self, app: &str) -> Option<String> {
-        let pane = self.app_pane(app)?;
-        self.pane_mut(&pane)?.shown_app = Some(app.to_owned());
-        self.focus_pane(&pane);
-        Some(pane)
-    }
-
-    /// The pane shows its own terminal or mod again; its apps stay open.
-    pub fn hide_app(&mut self, pane: &str) -> bool {
-        self.pane_mut(pane).is_some_and(|n| n.shown_app.take().is_some())
-    }
-
-    /// Closes an app. Returns its pane and what it was.
-    pub fn close_app(&mut self, app: &str) -> Option<(String, PaneApp)> {
-        let pane = self.app_pane(app)?;
-        let node = self.pane_mut(&pane)?;
-        let i = node.apps.iter().position(|a| a.id == app)?;
-        if node.shown_app.as_deref() == Some(app) {
-            node.shown_app = None;
-        }
-        Some((pane, node.apps.remove(i)))
     }
 
     /// Every terminal in every tab, in space → tab → pane order.
@@ -1208,70 +1154,5 @@ mod tests {
         assert_eq!(m.active.as_deref(), Some("p1"));
         assert_eq!(m.focused_pane().as_deref(), Some("x1"));
         assert_eq!(m.active_tab().map(|c| addresses(c.shown())).unwrap_or_default(), ["t1"]);
-    }
-
-    #[test]
-    fn a_pane_shows_the_apps_opened_in_it_and_reuses_one_per_registration() {
-        let mut m = model_with_one();
-        assert!(m.split("x1", Axis::Row, "x2", "t2"));
-        let (files, reused) = m.open_app("x1", "vscode", Some("files"), json!({ "folder": "/src/api" }), None, "a1".into()).unwrap();
-        assert_eq!((files.as_str(), reused), ("a1", false));
-        // Opening it focuses its pane and shows it there.
-        assert_eq!(m.focused_pane().as_deref(), Some("x1"));
-        assert_eq!(m.app_pane("a1").as_deref(), Some("x1"));
-        let pane = |m: &Model, id: &str| m.tab("c1").unwrap().root.find(id).unwrap().clone();
-        assert_eq!(pane(&m, "x1").shown_app().map(|a| a.name.as_str()), Some("vscode"));
-
-        let (diff, _) = m.open_app("x1", "fork", None, Value::Null, Some("Diff".into()), "a2".into()).unwrap();
-        assert_eq!(pane(&m, "x1").shown_app.as_deref(), Some(diff.as_str()));
-        // The same registration again: the app it has, given the new props.
-        let (again, reused) = m.open_app("x1", "vscode", Some("files"), json!({ "goto": "file:///src/api/a.rs" }), None, "a3".into()).unwrap();
-        assert_eq!((again.as_str(), reused), ("a1", true));
-        let x1 = pane(&m, "x1");
-        assert_eq!(x1.apps.len(), 2);
-        assert_eq!(x1.apps[0].props, json!({ "goto": "file:///src/api/a.rs" }));
-        assert_eq!(x1.shown_app.as_deref(), Some("a1"));
-
-        // Another pane focused: the app stays open and shown in its own pane.
-        assert!(m.focus_pane("x2"));
-        assert_eq!(pane(&m, "x1").shown_app.as_deref(), Some("a1"));
-        // Showing it focuses its pane again.
-        assert_eq!(m.show_app("a2").as_deref(), Some("x1"));
-        assert_eq!(m.focused_pane().as_deref(), Some("x1"));
-        assert_eq!(pane(&m, "x1").shown_app.as_deref(), Some("a2"));
-
-        assert!(m.hide_app("x1"));
-        assert_eq!(pane(&m, "x1").shown_app, None);
-        assert_eq!(pane(&m, "x1").apps.len(), 2, "hidden apps stay open");
-        // Closing the shown one shows the pane's own content again.
-        m.show_app("a1");
-        let (from, closed) = m.close_app("a1").unwrap();
-        assert_eq!((from.as_str(), closed.name.as_str()), ("x1", "vscode"));
-        assert_eq!(pane(&m, "x1").shown_app, None);
-        assert_eq!(pane(&m, "x1").apps.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["a2"]);
-        assert!(m.close_app("a1").is_none());
-        assert!(m.open_app("nope", "vscode", None, Value::Null, None, "a4".into()).is_none());
-    }
-
-    #[test]
-    fn an_app_is_found_by_the_page_it_was_opened_on() {
-        let mut m = model_with_one();
-        m.open_app("x1", "plannotator-browser", None, json!({ "url": "http://localhost:19432/" }), None, "a1".into()).unwrap();
-        m.open_app("x1", "vscode", Some("files"), json!({ "folder": "/src" }), None, "a2".into()).unwrap();
-        assert_eq!(m.app_on_page("http://localhost:19432").as_deref(), Some("a1"));
-        assert_eq!(m.app_on_page("http://localhost:19500"), None);
-    }
-
-    #[test]
-    fn a_pane_keeps_its_apps_when_it_moves() {
-        let mut m = model_with_one();
-        assert!(m.split("x1", Axis::Row, "x2", "t2"));
-        m.open_app("x1", "fork", None, Value::Null, None, "a1".into()).unwrap();
-        m.swap_panes("x1", "x2").unwrap();
-        assert_eq!(m.app_pane("a1").as_deref(), Some("x1"));
-        assert!(m.move_pane("x1", "x2", Some(crate::layout::Edge::Bottom)));
-        assert_eq!(m.app_pane("a1").as_deref(), Some("x1"));
-        m.remove_pane("x1");
-        assert_eq!(m.app_pane("a1"), None, "a closed pane takes its apps with it");
     }
 }

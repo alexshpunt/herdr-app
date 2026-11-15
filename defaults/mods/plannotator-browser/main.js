@@ -3,12 +3,13 @@ import { h_flex, v_flex } from "gpui-base";
 import { BrowserState, Browser } from "herdr-browser";
 import { props, theme, panes, terminals, exec, nextLink, notify, shared, setShared } from "herdr";
 
-// A Plannotator review in an embedded browser, on props.url. As an app in an
-// agent's pane opened from a button (Annotate diff: registration "review",
-// Annotate reply: "last") without a url, it asks that pane's Pi for the review
-// first: the Pi publishes how to reach it in its terminal's `herdr.plannotator`
-// label, and its Herdr Plannotator integration opens the review here
-// (`pane.app.open` of this app again, which arrives from nextLink()).
+// A Plannotator review in an embedded browser, on props.url. As an app opened
+// for an agent from a button (`app.open`; Annotate diff: app "review", Annotate
+// reply: "last") without a url, it asks that agent's Pi for the review first:
+// the Pi publishes how to reach it in its terminal's `herdr.plannotator` label,
+// and its Herdr Plannotator integration opens the review here (`app.open` of
+// this app again, which arrives from nextLink()). Pressing the button again
+// asks again.
 export default class PlannotatorBrowser extends View {
   init(_props, cx) {
     const url = props()?.url;
@@ -16,11 +17,12 @@ export default class PlannotatorBrowser extends View {
     this.url = url ?? null;
     this.waiting = null;
     if (typeof props()?.app !== "string") return;
-    if (!url) this.ask(props().registration, cx);
+    if (!url) this.ask(props().app, false, cx);
     cx.spawn(async (cx) => {
       for (;;) {
         const opened = await nextLink();
         if (opened?.url) this.show(opened.url);
+        else this.ask(opened?.app ?? props().app, true, cx);
         cx.notify();
       }
     });
@@ -38,23 +40,33 @@ export default class PlannotatorBrowser extends View {
     }
   }
 
-  // Asks the pane's Pi for a review of its changes ("review") or its last reply ("last").
-  /** @param {string} kind @param {any} cx */
-  ask(kind, cx) {
+  // The agent this app was opened for: its `origin` prop, the terminal as on
+  // the machine of its space, whose pane ids carry that machine (`vps/p…`).
+  agent() {
+    const origin = props()?.origin;
+    if (typeof origin !== "string" || !origin) return null;
+    const pane = String(props()?.pane ?? "");
+    const cut = pane.indexOf("/");
+    return cut < 0 || origin.includes("/") ? origin : `${pane.slice(0, cut + 1)}${origin}`;
+  }
+
+  // Asks the agent's Pi for a review of its changes ("review") or its last
+  // reply ("last"). A copy restored after a restart doesn't ask again; the
+  // button pressed again (`again`) does.
+  /** @param {string} kind @param {boolean} again @param {any} cx */
+  ask(kind, again, cx) {
     if (kind !== "review" && kind !== "last") return;
-    // Once per app: one restored after a restart doesn't ask again.
     const asked = shared("plannotator.asked") ?? {};
-    const id = props().app;
-    if (asked[id]) { this.waiting = "No review arrived. Close this and ask again."; return; }
-    const live = new Set(panes().flatMap((p) => (p.apps ?? []).map((a) => a.id)));
+    const id = props().pane;
+    if (asked[id] && !again) { this.waiting = "No review arrived. Press the button again to ask again."; return; }
+    const live = new Set(panes().map((p) => p.pane));
     setShared("plannotator.asked", { ...Object.fromEntries(Object.keys(asked).filter((a) => live.has(a)).map((a) => [a, true])), [id]: true });
-    const pane = panes().find((p) => p.pane === props()?.pane);
-    const address = pane?.terminal;
+    const address = this.agent();
     const terminal = terminals().find((t) => t.address === address);
     let label = null;
     try { label = JSON.parse(terminal?.labels?.["herdr.plannotator"] ?? "null"); } catch { /* Below. */ }
     if (!address || !label?.request || label.pid !== terminal?.foreground?.pid) {
-      this.waiting = "No Pi with the Herdr Plannotator integration runs in this pane.";
+      this.waiting = "No Pi with the Herdr Plannotator integration runs for this agent.";
       return;
     }
     const cut = address.indexOf("/");
@@ -88,6 +100,7 @@ export default class PlannotatorBrowser extends View {
         .child(this.button(t, "reload", "Reload", () => this.browser.reload()))
         .child(this.button(t, "external", "Open externally", (_event, cx) => cx.open_url(this.browser.url())))
         .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(this.url || "Plannotator")))
+      .when(Boolean(this.waiting), el => el.child(div().px(12).py(6).text_color(t.muted).child(this.waiting)))
       .when(Boolean(this.browser.error()), el => el.child(div().px(12).py(6).text_color(t.blocked).child(this.browser.error())))
       .child(div().flex_1().min_h(0).child(Browser(this.browser).size_full()));
   }

@@ -8,13 +8,13 @@ use crate::hc::Core;
 mod floats;
 mod movable;
 mod pane_drag;
-mod pane_apps;
+mod app_tabs;
 mod pane_size;
 mod side_panel;
 mod titlebar;
 
 use crate::links;
-use crate::layout::{Axis, Background as Paint, Content, Fit, HeaderContent, Kind, Line, Node, PaneApp, PaneFrame, Size as Span};
+use crate::layout::{Axis, Background as Paint, Content, Fit, HeaderContent, Kind, Line, Node, PaneFrame, Size as Span};
 use crate::model::{self, Tab, Model};
 use crate::mods::{self, Found, Instance, Request};
 use crate::settings;
@@ -456,9 +456,6 @@ pub struct AppWindow {
     /// The mod block holding the keyboard for directional navigation.
     focused_block: Option<String>,
     synced_model_pane: Option<String>,
-    /// The app the focused pane showed at the last sync: when that changes,
-    /// the keyboard moves between the app and the pane's terminal.
-    synced_app: Option<String>,
     /// A terminal block in a window (an overlay's layout) holding the keyboard.
     /// `focused()` reports it like a layout terminal block; the focused pane stays.
     window_terminal: Option<String>,
@@ -572,7 +569,6 @@ impl AppWindow {
             focused_pane: None,
             focused_block: None,
             synced_model_pane: None,
-            synced_app: None,
             window_terminal: None,
             tab_shown: true,
             pane_history: Vec::new(),
@@ -1258,13 +1254,8 @@ impl AppWindow {
                 {
                     mods.push(pane_header_mod(n, name, props));
                 }
-                // A pane showing an app draws it, not its terminal or mod.
-                if let Some(app) = n.shown_app() {
-                    mods.push(self.app_mod(n, app));
-                    continue;
-                }
                 match n.content() {
-                    Some(Content::Mod { name, props }) => mods.push((n.id.clone(), tab_mod(n, name, props))),
+                    Some(Content::Mod { name, props }) => mods.push((n.id.clone(), self.pane_mod(n, name, props))),
                     _ => visit(n, &mut terms, &mut mods),
                 }
                 if let Some(a) = self.swapped.get(&n.id) {
@@ -1326,11 +1317,7 @@ impl AppWindow {
         for c in self.model.tabs() {
             for n in c.root.walk() {
                 if let Some(Content::Mod { name, props }) = n.content() {
-                    out.insert(n.id.clone(), tab_mod(n, name, props));
-                }
-                for app in &n.apps {
-                    let (slot, i) = self.app_mod(n, app);
-                    out.insert(slot, i);
+                    out.insert(n.id.clone(), self.pane_mod(n, name, props));
                 }
                 if let Some((name, props)) = &header
                     && n.is_pane()
@@ -1355,26 +1342,24 @@ impl AppWindow {
         out
     }
 
-    /// A pane's app: its slot (the app id) and copy, told its pane and app id.
-    /// A running copy keeps the props it started with: the app opened again
-    /// reaches it as a link (`pane.app.open`), never as a restart. `visible`
-    /// and `owned_mods` both use this, so they build the same.
-    fn app_mod(&self, pane: &Node, app: &PaneApp) -> (String, Instance) {
-        if let Some(copy) = self.copies.get(&app.id).filter(|c| c.inst.name == app.name) {
-            return (app.id.clone(), copy.inst.clone());
+    /// A tab's mod pane as `tab_mod` builds it. An app's (`app.open`) running
+    /// copy keeps the props it started with: the app opened again reaches it
+    /// as a link (`nextLink()`), never as a restart. `visible` and
+    /// `owned_mods` both use this, so they build the same.
+    fn pane_mod(&self, n: &Node, name: &str, props: &Value) -> Instance {
+        if model::app_of(n).is_some()
+            && let Some(copy) = self.copies.get(&n.id).filter(|c| c.inst.name == name)
+        {
+            return copy.inst.clone();
         }
-        let mut props = if app.props.is_object() { app.props.clone() } else { json!({}) };
-        props["pane"] = json!(pane.id);
-        props["app"] = json!(app.id);
-        props["registration"] = json!(app.app);
-        (app.id.clone(), Instance { name: app.name.clone(), props })
+        tab_mod(n, name, props)
     }
 
     /// Another layout: its mods start fresh. Pane mods (they belong to their
     /// tab) and overlays stay.
     fn drop_layout_copies(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let gone: Vec<_> = self.copies.keys().filter(|s| {
-            self.model.tab_of(s).is_none() && self.model.app_pane(s).is_none() && !self.overlays.iter().any(|o| o.slot == **s || o.layout.as_ref().is_some_and(|l| l.find(s).is_some()))
+            self.model.tab_of(s).is_none() && !self.overlays.iter().any(|o| o.slot == **s || o.layout.as_ref().is_some_and(|l| l.find(s).is_some()))
         }).cloned().collect();
         for slot in gone {
             self.remove_copy(&slot, window, cx);
@@ -1573,9 +1558,6 @@ impl AppWindow {
         if let Some(id) = self.focused_block.as_ref().or(model_pane.as_ref()) {
             remember_pane(&mut self.pane_history, id);
         }
-        let shown_app = model_pane.as_deref().and_then(|p| self.shown_app_of(p)).map(|a| a.id.clone());
-        let app_changed = shown_app != self.synced_app;
-        self.synced_app = shown_app.clone();
         self.synced_model_pane = model_pane;
         self.focused_pane = focused.clone();
         let no_dialog = !self.overlays.iter().any(|o| o.kind.modal_keys());
@@ -1596,15 +1578,15 @@ impl AppWindow {
                     t.focus.focus(window, cx);
                 }
             }
-        } else if pane_changed || app_changed {
+        } else if pane_changed {
             // Outside an agent view, the agent shown later follows the focused pane.
             self.agent = None;
             // A mod pane takes the keyboard on a click; until then the window holds
             // it, so another tab's terminal can't keep it (and pull its tab back).
             if no_dialog {
-                focused.and_then(|p| self.pane_focus(&p, cx)).unwrap_or_else(|| self.focus.clone()).focus(window, cx);
-                // An app shown in the focused pane gets the keyboard (`focus` from `nextCommand()`).
-                if let Some(copy) = shown_app.as_ref().and_then(|a| self.copies.get(a)) {
+                focused.as_ref().and_then(|p| self.pane_focus(p, cx)).unwrap_or_else(|| self.focus.clone()).focus(window, cx);
+                // An app's pane focused (`app.open`) gives it the keyboard (`focus` from `nextCommand()`).
+                if let Some(copy) = focused.as_ref().filter(|p| self.is_app_pane(p)).and_then(|p| self.copies.get(p)) {
                     mods::send_command_to(copy.id, "focus");
                 }
             }
@@ -1746,18 +1728,15 @@ impl AppWindow {
         }
     }
 
-    /// The keyboard target of a pane: its terminal's. A mod, or an app shown
-    /// over the terminal, takes the keyboard on a click (the window holds it until then).
+    /// The keyboard target of a pane: its terminal's. A mod takes the keyboard
+    /// on a click (the window holds it until then).
     fn pane_focus(&self, pane: &str, cx: &App) -> Option<FocusHandle> {
-        if self.shown_app_of(pane).is_some() {
-            return None;
-        }
         self.pane_term(pane).map(|t| t.view.read(cx).focus_target(cx))
     }
 
-    /// The app a tab's pane shows instead of its own content, if any.
-    fn shown_app_of(&self, pane: &str) -> Option<&PaneApp> {
-        self.model.tab_of(pane)?.root.find(pane)?.shown_app()
+    /// Whether a tab's pane is an app (`app.open`).
+    fn is_app_pane(&self, pane: &str) -> bool {
+        self.model.tab_of(pane).and_then(|t| t.root.find(pane)).and_then(model::app_of).is_some()
     }
 
     fn load(&self, inst: Instance, window: &mut Window, cx: &mut Context<Self>) -> Copy {
@@ -1836,10 +1815,9 @@ impl AppWindow {
                 for p in ctx.root.panes() {
                     let focused = m.active.as_deref() == Some(pr.id.as_str()) && focused_pane.as_deref() == Some(p.id.as_str());
                     let zoomed = ctx.zoomed.as_deref() == Some(p.id.as_str());
-                    let apps = pane_apps_json(p);
                     // A mod pane: what it shows, no terminal.
                     if let Some(Content::Mod { name, props }) = p.content() {
-                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "props": props, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id), "apps": apps, "shown_app": p.shown_app }));
+                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "props": props, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
                         continue;
                     }
                     let Some(addr) = p.terminal() else { continue };
@@ -1852,7 +1830,6 @@ impl AppWindow {
                         "cwd": self.cwds.get(addr), "branch": m.folder_info.get(addr).and_then(|f| f.branch.clone()),
                         "status": m.status(addr), "app": a.and_then(|a| a.app.clone()), "program": self.program(addr),
                         "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id),
-                        "apps": apps, "shown_app": p.shown_app,
                     }));
                     let Some(status) = m.status(addr) else { continue };
                     agents.push(json!({
@@ -2560,8 +2537,10 @@ impl AppWindow {
             // stream that just broke (the core died) says neither.
             let closed = matches!(why.as_str(), "exited" | "killed" | "finished");
             if closed && self.model.address_of(block).as_deref() == Some(t.address.as_str()) {
-                self.reported.remove(&t.address);
+                let address = t.address.clone();
+                self.reported.remove(&address);
                 self.model.remove_pane(block);
+                self.close_owned(&[address]);
                 return self.sync(window, cx);
             }
         }
@@ -2783,6 +2762,7 @@ impl AppWindow {
                         this.reported.remove(&addr);
                         this.notify_launch_failure(&addr, window, cx);
                         this.model.remove_pane(&pane);
+                        this.close_owned(&[addr]);
                         changed = true;
                     }
                 }
@@ -3327,12 +3307,15 @@ impl AppWindow {
                 let Some(id) = Self::owned(a, "id").or(active_ctx) else { return self.fail("no tab to close") };
                 let Some(p) = self.model.space_of(&id) else { return self.fail(format!("no tab {id:?}")) };
                 // The last tab takes its space with it: ask like closing the space.
-                if p.tabs.len() == 1 {
+                // Its agents' app tabs close with it.
+                let with = self.model.tabs_closing_with(&p.tab(&id).map(|c| model::addresses(&c.root)).unwrap_or_default());
+                if p.tabs.len() == 1 + with.iter().filter(|t| p.tab(t).is_some()).count() {
                     let mut args = json!({ "id": p.id });
                     args["confirmed"] = a.get("confirmed").cloned().unwrap_or(Value::Null);
                     return self.dispatch("space.close", &args, person, window, cx);
                 }
                 let (addrs, _) = self.model.remove_tab(&id);
+                self.close_owned(&addrs);
                 self.kill(&addrs, cx);
             }
             "tab.rename" => {
@@ -3401,9 +3384,10 @@ impl AppWindow {
                     let id = c.id.clone();
                     return self.dispatch("tab.close", &json!({ "id": id }), person, window, cx);
                 }
-                let addr = self.model.address_of(&pane);
+                let addrs: Vec<String> = self.model.address_of(&pane).into_iter().collect();
                 self.model.remove_pane(&pane);
-                self.kill(&addr.into_iter().collect::<Vec<_>>(), cx);
+                self.close_owned(&addrs);
+                self.kill(&addrs, cx);
             }
             "pane.zoom" => {
                 let pane = Self::owned(a, "pane").or_else(|| self.model.focused_pane());
@@ -3463,41 +3447,17 @@ impl AppWindow {
                     return self.fail(e);
                 }
             }
-            "pane.app.open" => {
-                let r = self.open_app(a);
+            "app.open" | "app.beside" | "app.apart" => {
+                let r = match name {
+                    "app.open" => self.open_app(a),
+                    "app.beside" => self.app_beside(a),
+                    _ => self.app_apart(a),
+                };
                 let failed = r.is_err();
                 self.answer(r);
                 if failed {
                     return;
                 }
-            }
-            "pane.app.show" => {
-                let app = Self::arg(a, "app").unwrap_or_default();
-                let Some(pane) = self.model.app_pane(app) else { return self.fail(format!("no app {app:?}")) };
-                if let Err(error) = self.require_document(self.machine_of_node(&pane).as_deref()) {
-                    return self.fail(error);
-                }
-                self.model.show_app(app);
-                self.focused_block = None;
-                self.focused_pane = None;
-            }
-            "pane.app.hide" => {
-                let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else { return self.fail("no pane") };
-                if self.model.tab_of(&pane).is_none() {
-                    return self.fail(format!("no pane {pane:?}"));
-                }
-                if let Err(error) = self.require_document(self.machine_of_node(&pane).as_deref()) {
-                    return self.fail(error);
-                }
-                self.model.hide_app(&pane);
-            }
-            "pane.app.close" => {
-                let app = Self::arg(a, "app").unwrap_or_default();
-                let Some(pane) = self.model.app_pane(app) else { return self.fail(format!("no app {app:?}")) };
-                if let Err(error) = self.require_document(self.machine_of_node(&pane).as_deref()) {
-                    return self.fail(error);
-                }
-                self.model.close_app(app);
             }
             // ---- terminals
             "terminal.open" => {
@@ -4356,7 +4316,10 @@ impl AppWindow {
                     if removing {
                         let current = this.agent_placement(&address);
                         let expected_tab_exists = placement.as_ref().and_then(|p| p["tab"].as_str()).is_some_and(|id| this.model.tab(id).is_some());
-                        if let Some(tab) = crate::agents::removal_tab(current.as_ref(), placement.as_ref(), expected_tab_exists)? { this.model.remove_tab(&tab); }
+                        if let Some(tab) = crate::agents::removal_tab(current.as_ref(), placement.as_ref(), expected_tab_exists)? {
+                            let (addrs, _) = this.model.remove_tab(&tab);
+                            this.close_owned(&addrs);
+                        }
                         this.sync(window, cx);
                         this.flush_documents(false, window, cx);
                     }
@@ -4531,7 +4494,7 @@ impl AppWindow {
         json!({ "error": "expected { do }, { ls }, { commands } or { status }" })
     }
 
-    /// Spaces, their tabs and terminals, for `herdr-app ls`. Sub-agents are listed
+    /// Spaces, their tabs, terminals and apps, for `herdr-app ls`. Sub-agents are listed
     /// under the terminal that started them.
     fn world(&self) -> Value {
         let m = &self.model;
@@ -4552,7 +4515,6 @@ impl AppWindow {
                 "app": m.agents.get(addr).and_then(|a| a.app.clone()),
                 "name": rec.and_then(|r| r.get("name")).cloned(),
                 "sub_agents": children(addr),
-                "apps": pane_apps_json(pane), "shown_app": pane.shown_app,
             })
         };
         let spaces: Vec<Value> = m
@@ -4565,7 +4527,12 @@ impl AppWindow {
                     .iter()
                     .map(|c| {
                         let terms: Vec<Value> = c.root.terminals().iter().filter_map(|n| Some(terminal(n, n.terminal()?))).collect();
-                        json!({ "id": c.id, "name": Model::tab_name(p, c), "active": Some(&c.id) == active.as_ref(), "settled": c.settled.is_some(), "origin": model::tab_origin(p, c), "terminals": terms })
+                        // Its apps (`app.open`): their panes, mods and props.
+                        let apps: Vec<Value> = c.root.panes().into_iter().filter_map(|n| {
+                            let (name, app, props) = model::app_of(n)?;
+                            Some(json!({ "pane": n.id, "mod": name, "app": app, "props": props }))
+                        }).collect();
+                        json!({ "id": c.id, "name": Model::tab_name(p, c), "active": Some(&c.id) == active.as_ref(), "settled": c.settled.is_some(), "origin": model::tab_origin(p, c), "terminals": terms, "apps": apps })
                     })
                     .collect();
                 json!({ "id": p.id, "name": m.space_name(p, &home()), "folder": p.folder, "machine": p.machine, "active": m.active.as_deref() == Some(&p.id), "tabs": tabs })
@@ -4831,10 +4798,6 @@ impl AppWindow {
     }
 
     fn render_block(&self, n: &Node, content: &Content, focused: &HashSet<String>, cx: &mut Context<Self>) -> AnyElement {
-        // A pane showing an app draws it; its terminal keeps running unseen.
-        if let Some(app) = n.shown_app() {
-            return self.render_slot(&app.id, cx);
-        }
         match content {
             Content::Terminal { .. } => match self.pane_term(&n.id) {
                 Some(t) => {
@@ -4900,10 +4863,9 @@ impl AppWindow {
         let in_overlay = slot.starts_with("overlay:") || self.overlays.iter().any(|o| o.layout.as_ref().is_some_and(|l| l.find(slot).is_some()));
         // Side panel sections are as tall as their content; the panel scrolls them.
         let section = self.is_section(slot);
-        // A mod that is a pane in a tab, or a pane's app (`pane.app.open`): a click
-        // makes its pane the focused one, and the keyboard is its own (an editor,
-        // a board), like a terminal's.
-        let pane = if self.model.tab_of(slot).is_some() { Some(slot.to_owned()) } else { self.model.app_pane(slot) };
+        // A mod that is a pane in a tab: a click makes it the focused pane, and the
+        // keyboard is its own (an editor, a board), like a terminal's.
+        let pane = self.model.tab_of(slot).is_some().then(|| slot.to_owned());
         let in_pane = pane.is_some();
         match self.copies.get(slot) {
             Some(Copy { root: Some(root), inst, .. }) => div()
@@ -5506,8 +5468,8 @@ fn swap_by(args: &Value) -> Result<SwapBy<'_>, String> {
 
 fn needs_model_pane(name: &str, args: &Value) -> bool {
     match name {
-        "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "terminal.show" | "pane.app.hide" => AppWindow::arg(args, "pane").is_none(),
-        "pane.app.open" => AppWindow::arg(args, "pane").is_none() && AppWindow::arg(args, "terminal").is_none(),
+        "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "terminal.show" | "app.apart" => AppWindow::arg(args, "pane").is_none(),
+        "app.open" => AppWindow::arg(args, "for").is_none(),
         "pane.go" => true,
         "terminal.open" | "terminal.keep" => matches!(AppWindow::arg(args, "place"), Some("right" | "down")),
         _ => false,
@@ -5577,17 +5539,6 @@ fn pane_header_mod(n: &Node, name: &str, props: &Value) -> (String, Instance) {
     props["pane"] = json!(n.id);
     props["terminal"] = json!(n.terminal());
     (format!("{}#frame", n.id), Instance { name: name.to_owned(), props })
-}
-
-/// A pane's apps as `panes()` lists them: `title` is the one it was opened
-/// with, else its mod's name.
-fn pane_apps_json(pane: &Node) -> Value {
-    Value::Array(
-        pane.apps
-            .iter()
-            .map(|a| json!({ "id": a.id, "mod": a.name, "app": a.app, "title": a.title.as_deref().unwrap_or(&a.name), "props": a.props }))
-            .collect(),
-    )
 }
 
 /// A tab's mod pane, told which pane it is (its props as stored, plus `pane`).
@@ -7169,6 +7120,13 @@ export default class SystemToast extends View {
         for name in ["pane.focus", "terminal.copy", "terminal.paste", "terminal.paste_image", "terminal.right_click"] {
             assert!(!super::needs_model_pane(name, &json!({})), "{name}");
         }
+        // An app opens for the focused pane's agent unless `for` names a terminal;
+        // `app.apart` moves the focused pane unless it names one.
+        assert!(super::needs_model_pane("app.open", &json!({"mod": "vscode"})));
+        assert!(!super::needs_model_pane("app.open", &json!({"mod": "vscode", "for": "t1"})));
+        assert!(super::needs_model_pane("app.apart", &json!({})));
+        assert!(!super::needs_model_pane("app.apart", &json!({"pane": "explicit-pane"})));
+        assert!(!super::needs_model_pane("app.beside", &json!({})));
     }
 
     #[test]

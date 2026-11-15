@@ -588,7 +588,7 @@ thread_local! {
     /// Where key commands for each loaded copy go: (copy, mod, sender).
     static COMMANDS: RefCell<Vec<(u64, String, async_channel::Sender<String>)>> = const { RefCell::new(Vec::new()) };
     /// The copies that wait for links (`nextLink()`), oldest first: (copy, sender).
-    /// A pane's app (`props().app`) never joins: only its own links reach it.
+    /// An app (`app.open`, `props().app`) never joins: only its own links reach it.
     static LINKS: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
     /// Every loaded copy's own link queue, which its `nextLink()` reads: (copy, sender).
     static LINK_QUEUES: RefCell<Vec<(u64, async_channel::Sender<Value>)>> = const { RefCell::new(Vec::new()) };
@@ -608,7 +608,7 @@ pub struct Snapshot {
     pub agents: Value,
     /// Every pane: { pane, terminal, tab, title, cwd, branch, status, app, focused, zoomed }.
     pub panes: Value,
-    /// { apps: [registration], available: { pane: [[mod, app]] } } (`apps()`).
+    /// { apps: [registration], available: { pane: [[mod, app, tab]] } } (`apps()`).
     pub apps: Value,
     pub terminals: Value,
     pub focused: Value,
@@ -658,7 +658,8 @@ pub fn publish_apps(v: Value) -> bool {
 }
 
 /// `apps(pane?)`: every registered app, each with whether it is available
-/// for that pane (default: the focused one).
+/// for that pane (default: the focused one) and the open tab its button
+/// shows again (`tab`, else null).
 fn apps_for(s: &Snapshot, pane: Option<&str>) -> Value {
     let pane = pane.or_else(|| s.focused["pane"].as_str());
     let available = pane.and_then(|p| s.apps["available"].get(p)).and_then(Value::as_array);
@@ -666,9 +667,10 @@ fn apps_for(s: &Snapshot, pane: Option<&str>) -> Value {
     Value::Array(
         list.iter()
             .map(|a| {
-                let key = json!([a["mod"], a["app"]]);
+                let found = available.and_then(|ids| ids.iter().find(|e| e[0] == a["mod"] && e[1] == a["app"]));
                 let mut a = a.clone();
-                a["available"] = json!(available.is_some_and(|ids| ids.contains(&key)));
+                a["available"] = json!(found.is_some());
+                a["tab"] = found.map_or(Value::Null, |e| e[2].clone());
                 a
             })
             .collect(),
@@ -766,7 +768,7 @@ pub fn send_link(link: Value) -> bool {
     })
 }
 
-/// Queues a link for one copy (a pane's app opened again): its `nextLink()`
+/// Queues a link for one copy (an app opened again, `app.open`): its `nextLink()`
 /// returns it, now or once it asks. Returns whether that copy is loaded.
 pub fn send_link_to(copy: u64, link: Value) -> bool {
     LINK_QUEUES.with_borrow_mut(|queues| {
@@ -1015,7 +1017,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         queues.retain(|(_, tx)| !tx.is_closed());
         queues.push((copy, link_tx.clone()));
     });
-    let pane_app = inst.props.get("app").is_some_and(Value::is_string);
+    let app = inst.props.get("app").is_some_and(Value::is_string);
     HostModule::new("herdr")
         .declarations(DECLARATIONS)
         .async_function("exec", |a| {
@@ -1248,11 +1250,11 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             Ok(async move { rx.recv().await.map(HostValue::Str).map_err(|_| HostError::new("herdr-app is shutting down")) })
         })
         // The first call makes this copy take links: they queue for it from then on.
-        // A pane's app gets only the links opened in it (`send_link_to`).
+        // An app gets only the links opened in it (`send_link_to`).
         .async_function("nextLink", move |_| {
             LINKS.with_borrow_mut(|links| {
                 links.retain(|(_, tx)| !tx.is_closed());
-                if !pane_app && !links.iter().any(|(c, _)| *c == copy) {
+                if !app && !links.iter().any(|(c, _)| *c == copy) {
                     links.push((copy, link_tx.clone()));
                 }
             });
