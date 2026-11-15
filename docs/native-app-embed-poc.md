@@ -37,28 +37,40 @@ It starts `<root>\<version>\Editor\Unity.exe -projectPath <folder>`, where
 shows an error in the pane. The first start of a project imports all its
 assets: the pane waits for the window for up to 30 minutes.
 
-## How it works (`src/browser/embed.rs`)
+## How it works
 
-- **Window.** Herdr runs `Code.exe --new-window` on the target and adopts the
-  new top-level window of VS Code's process. When VS Code already shows that
-  folder, it is adopted instead, found as the foreground window or by its title.
-  One pane shows a folder: a new pane on a folder that another pane shows
-  takes that window over.
+Each mod describes its program's launch (`NativeAppState(key).open({...})`,
+see `defaults/AGENTS.md`): where the program is, its arguments, its window
+class and title, and the flags below. Herdr (`src/browser/embed.rs`) starts
+it, adopts and crops its window and follows the pane; it names no program.
+
+- **Window.** The `vscode` mod has Herdr run `Code.exe --new-window` on the
+  target, and Herdr adopts the new top-level window of VS Code's process. When
+  VS Code already shows that folder, it is adopted instead, found as the
+  foreground window or by its title. One pane shows a folder: a new pane on a
+  folder that another pane shows takes that window over (the state's key).
+  The mod hands later files to VS Code with `run(["--goto", "--file-uri",
+  uri])`, again 3, 8 and 15 s after Herdr adopted a new window, which still
+  connects to its machine then and drops a file's line.
 - **A Fork of each pane's own.** `Fork.exe <folder>` hands the folder to a
-  running Fork and exits, so each Fork pane starts `Fork.exe` without a folder:
-  a new process, which restores the tabs of Fork's active workspace. Before
-  the start, Herdr makes the "Herdr" workspace in
-  `%LOCALAPPDATA%\Fork\settings.json` hold only the pane's repository and makes
-  it active; other workspaces and settings stay. Fork starts one at a time, and
-  a pane adopts only a window of the process it started. A Fork opened outside
-  Herdr afterwards also starts in the "Herdr" workspace; its workspace menu
-  switches back.
-- **Unity.** Unity opens a project in one editor only. A pane adopts an editor
-  window already showing the project (found by the project folder's name in
-  its title) instead of starting another, and two panes on one project never
-  start two editors: the later one waits and takes the window. Unity's main
-  window has a Win32 menu bar, which a child window cannot have, so it stays
-  a captionless popup inside the container, and the menu bar is not cropped.
+  running Fork and exits, so each Fork pane starts `Fork.exe` without a folder
+  (`ownProcess`): a new process, which restores the tabs of Fork's active
+  workspace. Before each start ("Open again" too), the `fork` mod makes the
+  "Herdr" workspace in `%LOCALAPPDATA%\Fork\settings.json` hold only the
+  pane's repository and makes it active; other workspaces and settings stay.
+  Fork starts one at a time across panes (a start record in
+  `shared("fork.starting")`, which the starting pane renews until its window
+  shows, at most 30 s; a pane that goes away mid-start stops renewing and
+  frees it within 4 s), and a pane adopts only a window of the process it
+  started. A Fork opened outside Herdr afterwards also starts in the "Herdr"
+  workspace; its workspace menu switches back.
+- **Unity.** Unity opens a project in one editor only (`once`). A pane adopts
+  an editor window already showing the project (found by the project folder's
+  name in its title) instead of starting another, and two panes on one project
+  never start two editors: the later one waits and takes the window. Unity's
+  main window has a Win32 menu bar, which a child window cannot have, so it
+  stays a captionless popup inside the container (`menuWindow`), and the menu
+  bar is not cropped.
   A popup shares no input queue with Herdr, so Herdr cannot give it focus;
   it takes the keyboard as the foreground window (see Keyboard focus).
   Unity's main thread is often busy for many seconds (loading, compiling,
@@ -67,9 +79,9 @@ assets: the pane waits for the window for up to 30 minutes.
   Unity's floating windows (its other windows of the main window's class) are
   hidden while the pane is hidden and come back with it.
 - **Safe repositories.** Windows git treats every WSL repository as owned by
-  another user and refuses it. Before the start Herdr adds a UNC repository
-  (`\\wsl.localhost\...`) to the global `safe.directory` list with Fork's own
-  git, as Fork's "Mark repository as safe" does.
+  another user and refuses it. Before the start the `fork` mod adds a UNC
+  repository (`\\wsl.localhost\...`) to the global `safe.directory` list with
+  Fork's own git, as Fork's "Mark repository as safe" does.
 - **Mod restarts.** A dropped pane state (a mod reload, a layout change) keeps
   its window hidden for two seconds. The new copy of the pane takes it over;
   otherwise it closes. A Fork still starting when its pane goes away leaves its

@@ -49,30 +49,48 @@ hidden. Linux
 requires X11/XWayland and WebKitGTK 4.1. Windows requires WebView2. Keep an
 external-browser fallback in mods that open pages.
 
-On Windows, `NativeAppState("vscode", target)` and `NativeApp(state)` show the
-person's own VS Code window on `target` (a folder URI such as
-`vscode-remote://wsl+Ubuntu/root/app`, or a local folder) inside the element.
-Herdr asks VS Code for a window, adopts it and crops its frame; closing the
-pane closes that window. `status()`, `error()`, `shown()`, `reopen()` and
-`focus()` follow and control it; `goto(fileUri)` opens a file URI (`:42:7`
-after it for a line and column): called before the window starts, the new
-window opens with it; later, VS Code opens it in the window that has its
-folder. The bundled `vscode` mod registers the Files app (mod.json `app`):
-in a pane it opens the pane's project, or the folder of the file or folder
-link it was opened for, on that file; files linked later open in the same
-window, and a folder linked later replaces it with that folder's window.
+On Windows, `NativeAppState(key)` and `NativeApp(state)` show a native
+program's own window inside the element. Herdr names no program: the mod
+describes the launch with `state.open({ program, args, class, title,
+ownProcess, once, menuWindow, wait, missing })`, and the window starts when
+the element first renders after that. `program` lists the paths the program
+may be at, the first file found runs (`missing`: the pane's error when none
+exists); `args` its arguments; `class` the Win32 class of its top-level
+windows (a trailing `*` matches any rest); `title` a " - "-separated part of
+the title of a window that already shows the target (or that part with
+" [...]" after it), which Herdr adopts when the program brings that window
+forward instead of opening one; `ownProcess` adopts only a window of the
+started process; `once` opens a target in one window only (a window already
+showing it is adopted, and two starts with one key never overlap);
+`menuWindow` adopts the window with a Win32 menu bar and keeps the bar;
+`wait` is how many seconds the window may take (default 20). One launch per
+state: open another target with a new state. Herdr adopts the window, crops
+its frame and gives it back to the desktop closed when the pane closes.
+`key` names what the window shows: a restarted copy of the mod takes its
+earlier copy's window back, and a second pane with the same key takes the
+window over. `status()`, `error()`, `shown()`, `reopen()` and `focus()`
+follow and control it; `origin()` says how the shown window came (`"new"`,
+`"restart"` or `"pane"`); `embeddedAt()` when Herdr adopted it
+(milliseconds since 1970); `run(args)` runs the program again with `args`,
+one run at a time in the order asked (VS Code's
+`--goto --file-uri <uri>` opens a file in the window that has its folder).
+The bundled `vscode` mod shows the person's own VS Code (`HERDR_VSCODE_EXE`,
+else its user or machine install) and registers the Files app (mod.json
+`app`): in a pane it opens the pane's project, or the folder of the file or
+folder link it was opened for, on that file; files linked later open in the
+same window, and a folder linked later replaces it with that folder's window.
 VS Code has one window per folder: a second pane on the same folder takes
-that window over. As a tab's mod pane it opens `props.uri` or
-`props.folder` and `props.goto` as its window first starts (not again after
-a restart).
-`NativeAppState("fork", target)` shows Fork, the git client, on a local
-folder, `file://` URI or WSL folder URI: a Fork process of the pane's own,
-with only that repository. The bundled `fork` mod registers the Diff app.
-`NativeAppState("unity", target)` shows the Unity Editor on the Unity project
-at `target` (a local folder or `file://` URI), in the version its
-`ProjectSettings/ProjectVersion.txt` names, from Unity Hub's editor folders.
-An editor that already has the project open is adopted; its menu bar stays.
-The bundled `unity` mod registers the Unity app; a Unity project's folder
+that window over. As a tab's mod pane it opens `props.uri` (a folder URI such
+as `vscode-remote://wsl+Ubuntu/root/app`) or `props.folder` and `props.goto`
+as its window first starts (not again after a restart).
+The bundled `fork` mod shows Fork, the git client (`HERDR_FORK_EXE`, else its
+user install), on a local or WSL repository: a Fork process of the pane's
+own, which a "Herdr" workspace in Fork's settings gives only that repository;
+a WSL repository becomes a git `safe.directory`. It registers the Diff app.
+The bundled `unity` mod shows the Unity Editor on a local Unity project, in
+the version its `ProjectSettings/ProjectVersion.txt` names, from Unity Hub's
+editor folders; an editor that already has the project open is adopted, and
+its menu bar stays. It registers the Unity app; a Unity project's folder
 link that reaches an open Unity app opens that project in it instead.
 
 The shipped `plannotator-browser` mod takes `{ url, origin? }` props and opens a
@@ -1193,7 +1211,8 @@ All of it is in `herdr.d.ts`. In short:
   `timeout` is milliseconds, defaults to 30,000 and is capped at 600,000 (10 minutes),
   locally and remotely. It rejects on timeout, if the program cannot start or the machine cannot be reached.
   `hc(args)` (`hc read <t>` gives a terminal's text),
-  `home()`, `appHome()`, `playSound("done" | "blocked" | file)`.
+  `home()`, `appHome()`, `env(name)` (this computer's environment variable,
+  null when unset), `playSound("done" | "blocked" | file)`.
   `knownAgents({ on })`: the agents people can start (programs.json's
   `run`), most picked first, each `installed` or not there (asked of the
   shell agents start in; a remote Unix machine's login/interactive shell when supported);
@@ -1201,7 +1220,9 @@ All of it is in `herdr.d.ts`. In short:
   `pickFolder({ prompt })`: the system's folder picker (here only),
   resolves with the folder or null.
 - Files: `readTextFile(path, { on })` (here, or on that machine),
-  `writeTextFile(path, text, expected)` (here only), and
+  `writeTextFile(path, text, expected)` (here only),
+  `listFolder(path)` (here only: `{ name, folder, modified }` by name, null
+  when absent), and
   `watchFolder(dir)` (here only; poll a remote space's folder): resolves with the changed paths the next time anything
   under `dir` changes. On Linux, Git-ignored directories and Git objects are skipped,
   and trees above 4096 non-ignored directories reject the watch; use a timer fallback.
