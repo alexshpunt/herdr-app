@@ -6,6 +6,10 @@ Herdr resolves the target machine's Pi npm entrypoint and starts it directly wit
 
 The six `herdr_agent_*` tools use Pi's native deferred exposure in the `Herdr` namespace. Discover them through `tool_search`. They manage independent user-owned agents in visible App tabs. Use `replicate` for the calling agent's own subtasks.
 
+## Placement
+
+Each agent that `herdr_agent_create` starts opens in a new space of its own, named after the agent, with one tab of the same name. The space is on the requested `machine`, else on the calling Pi's machine, and starts in the given folder. It does not take focus, so the caller's space and tab bar stay as they were. The tool has no way to put an agent into an existing space. A startup fallback opens as a second tab in its primary's space. Apps opened for the agent (Linear, GitHub, Files, Diff, reviews) open as tabs in its space. `herdr_agent_remove` closes the agent's tab; the space closes with its last tab.
+
 ## Identity and transport
 
 Only the terminal's own Pi publishes `herdr.pi`. Its version-1 label contains `pid`, `session`, the available model catalog (`models` with `id` and `name`), and `startup`. The catalog uses the scoped picker models when present, otherwise the authenticated model registry. Refresh happens on session load, model selection and before a run.
