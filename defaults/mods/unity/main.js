@@ -5,8 +5,8 @@ import { props, theme, focused, nextCommand, nextLink, readTextFile, env } from 
 import { editorVersion, localFolder, unityLaunch, unityRoots } from "./launch.js";
 
 // The Unity Editor, embedded, on a Unity project in the editor version the
-// project names: as an app in a pane (`pane.app.open`, the Unity button, a
-// Unity project's folder link) the link's folder or the pane's project, as a
+// project names: as an app (`app.open`, the Unity button, a Unity project's
+// folder link) the link's folder or its agent's project, as a
 // tab's mod pane props.folder (a local path) or props.uri (a file:// URI). An
 // editor that already has the project open moves in. Closing the pane or app
 // closes the editor, as its own close button does.
@@ -18,7 +18,7 @@ export default class UnityEditor extends View {
       await this.open(props() ?? {});
       cx.notify();
     });
-    // A pane's app gets each later Unity project's folder link Herdr routes
+    // An app gets each later Unity project's folder link Herdr routes
     // to it: that project replaces this one (the old state's editor closes
     // once it is dropped).
     if (typeof props()?.app === "string") {
@@ -72,7 +72,7 @@ export default class UnityEditor extends View {
 
   // A project on this computer: a Windows folder, or a WSL machine's
   // `/mnt/<drive>/…` folder as that drive's.
-  /** @param {any} p its props, or those of a later `pane.app.open` */
+  /** @param {any} p its props, or those of a later `app.open` */
   target(p) {
     if (typeof p.app !== "string") {
       const given = p.folder || p.uri || focused()?.cwd || "";

@@ -1,3 +1,3 @@
 { "place": "none", "title": "VS Code", "focusable": true, "frameless": true,
-  "app": { "id": "files", "label": "Files", "icon": "code.svg", "order": 30,
-           "links": [{ "file": true }, { "folder": true }] } }
+  "app": { "id": "files", "label": "Files", "icon": "code.svg", "order": 30, "reuse": "agent",
+           "links": [{ "file": true, "reuse": true }, { "folder": true, "reuse": true }] } }

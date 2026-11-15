@@ -1,4 +1,4 @@
 { "place": "none", "title": "Unity", "focusable": true, "frameless": true,
-  "app": { "id": "unity", "label": "Unity", "icon": "unity.svg", "order": 20,
+  "app": { "id": "unity", "label": "Unity", "icon": "unity.svg", "order": 20, "reuse": "project",
            "when": [{ "local": true }, { "has": "ProjectSettings/ProjectVersion.txt" }],
-           "links": [{ "folder": true, "local": true, "has": "ProjectSettings/ProjectVersion.txt" }] } }
+           "links": [{ "folder": true, "local": true, "has": "ProjectSettings/ProjectVersion.txt", "reuse": true }] } }

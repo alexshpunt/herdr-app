@@ -1,2 +1,2 @@
 { "place": "none", "title": "Fork", "focusable": true, "frameless": true,
-  "app": { "id": "diff", "label": "Diff", "icon": "diff.svg", "order": 40, "when": [{ "local": true }] } }
+  "app": { "id": "diff", "label": "Diff", "icon": "diff.svg", "order": 40, "reuse": "project", "when": [{ "local": true }] } }

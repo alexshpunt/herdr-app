@@ -10,8 +10,8 @@ herdr-app do tab.new '{"name":"VS Code","mod":"vscode","props":{"uri":"vscode-re
 
 `props.uri` is a VS Code folder URI; `props.folder` a local folder. Without
 either, the tab opens the focused terminal's folder. The mod also registers
-the Files app, which opens VS Code inside a pane (`pane.app.open`, see
-`defaults/AGENTS.md`).
+the Files app, which opens VS Code as a tab of the agent it is opened for
+(`app.open`, see `defaults/AGENTS.md`).
 
 The `fork` mod does the same with Fork, the git client, and registers the
 Diff app:

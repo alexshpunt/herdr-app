@@ -53,7 +53,7 @@ herdr-app: the Herdr desktop app. With no arguments it opens the window.
 
 Usage:
   herdr-app                        open the window
-  herdr-app ls                     spaces, their tabs and terminals, in the open window
+  herdr-app ls                     spaces, their tabs, terminals and apps, in the open window
   herdr-app do <command> [args]    run a command: --name api --argv '[\"pi\"]', or one JSON object
   herdr-app feedback <text>        draft feedback for the person to review and send
   herdr-app commands               every command, its arguments, what it does

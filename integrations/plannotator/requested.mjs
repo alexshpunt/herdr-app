@@ -1,8 +1,8 @@
 // A review that answers a tab bar request (Annotate diff, Annotate reply)
-// opens in the app that button opened in the agent's pane: the
-// plannotator-browser registration of the same name (`review`, `last`), whose
-// title is the button's. Other reviews, such as those an agent opens itself,
-// open as the app named "Plannotator".
+// opens in the tab that button opened for the agent: the plannotator-browser
+// registration of the same name (`review`, `last`), whose title is the
+// button's. Other reviews, such as those an agent opens itself, open in a new
+// tab named "Plannotator".
 const BUTTONS = {
     review: { action: 'code-review', tab: 'Annotate diff' },
     last: { action: 'annotate-last', tab: 'Annotate reply' },

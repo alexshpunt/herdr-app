@@ -47,11 +47,10 @@ pub const COMMANDS: &[Command] = &[
     cmd("tab.move", &[req("id"), req("index")], "Move a tab to a position in its space (1 = first)."),
     cmd("pane.split", &[req("direction"), opt("pane"), opt("argv"), opt("folder"), opt("mod"), opt("props")], "Split a pane (default: the focused one) \"right\" or \"down\" with a new terminal in folder (default: the pane's terminal's folder; empty string: the pane's machine's home), or with a mod (`mod`, its `props`) beside it."),
     cmd("pane.close", &[opt("pane")], "Close a pane and end its terminal."),
-    cmd("pane.app.open", &[req("mod"), opt("app"), opt("props"), opt("title"), opt("pane"), opt("terminal")],
-        "Open a mod as an app inside a pane (default: the focused one; terminal: the pane showing it) and show it there instead of the pane's terminal, which keeps running; focuses the pane. app: which of the mod's mod.json `app` registrations it is. The app of the same mod and registration the pane already holds is reused: its running copy gets props from nextLink(). Returns pane, app (its id) and reused."),
-    cmd("pane.app.show", &[req("app")], "Show an app in its pane and focus that pane (selecting its space and tab)."),
-    cmd("pane.app.hide", &[opt("pane")], "Show a pane's own terminal again (default: the focused pane); its apps stay open."),
-    cmd("pane.app.close", &[req("app")], "Close an app: its pane shows its own terminal again if the app was shown."),
+    cmd("app.open", &[req("mod"), opt("app"), opt("props"), opt("title"), opt("for"), opt("space"), opt("reuse")],
+        "Open a mod as an app in a tab of its own (title: its name; default: the app's label) and show it. It is opened for the agent the pane of `for` works for (a terminal: an address, or the id on its machine with space naming its space there; default: the focused pane): that agent's own terminal, else the agent the pane's tab was opened for, else the agent focused last in that tab. Its tab goes after the agent's tab and its earlier tabs and closes with the agent; without an agent it goes after the selected tab. app: which of the mod's mod.json `app` registrations it is. props get `app` (the registration), `origin` (the agent) and `project` (the agent's Git work tree or folder) unless given. An open app is shown again instead, its running copy given the props from nextLink(): with reuse \"agent\" (the default, or the registration's `reuse`) the one opened for that agent, \"project\" the one for that agent on the same project, \"none\" never, and no later open shows one opened so (its props get `reuse: \"none\"`). Returns space, tab, pane and reused."),
+    cmd("app.beside", &[opt("tab")], "Move an app's tab (default: the selected one) into the tab of the agent it was opened for, right of the agent's pane. The app keeps running."),
+    cmd("app.apart", &[opt("pane")], "Move an app beside its agent (default: the focused pane) back into a tab of its own after the agent's tab. The app keeps running."),
     cmd("terminal.open", &[opt("argv"), opt("folder"), opt("place"), opt("name")], "Start a terminal: as a new tab (place \"tab\", default), or \"right\"/\"down\" of the focused pane."),
     cmd("terminal.keep", &[req("terminal"), opt("place")], "Give a running terminal without a pane (a sub-agent) a pane: a new tab, or \"right\"/\"down\"."),
     cmd("terminal.park", &[req("terminal")], "Take a terminal's pane away and disable core keep; it keeps running (a sub-agent shows under its parent again)."),
@@ -173,7 +172,7 @@ pub fn validate_args(c: &Command, args: &Value) -> Result<(), String> {
             for (key, value) in args {
                 if matches!(
                     key.as_str(),
-                    "id" | "pane" | "space" | "terminal" | "target" | "app"
+                    "id" | "pane" | "space" | "terminal" | "target" | "app" | "for" | "tab"
                 ) && !value.is_string()
                     && !value.is_null()
                 {
@@ -276,6 +275,9 @@ mod tests {
             ("terminal.show", "terminal"),
             ("pane.swap", "pane"),
             ("pane.swap", "target"),
+            ("app.open", "for"),
+            ("app.beside", "tab"),
+            ("app.apart", "pane"),
         ] {
             let c = find(name).unwrap();
             for value in [json!(123), json!(false), json!([]), json!({"id": "target"})] {
