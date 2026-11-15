@@ -51,7 +51,6 @@ export class Orchestrator {
   async create(input, signal, update = (_data) => {}) {
     aborted(signal);
     for (const key of ['requestId', 'name', 'folder', 'message', 'profile']) nonempty(input[key], key);
-    if (input.space && input.newSpace) throw new Error('Give space or newSpace, not both');
     if (!/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(input.folder)) throw new Error('folder must be an absolute path on the target machine');
     const origin = await this.client.context();
     const config = await this.client.workflow();
@@ -103,7 +102,8 @@ export class Orchestrator {
       return { outcome: 'pending', detail: 'Startup observation timed out; the agent is left running. Inspect it before retrying.' };
     };
     try {
-      let target = await launch(model, input.space);
+      // The primary opens a space of its own; a fallback joins it there.
+      let target = await launch(model);
       let outcome = await observe(target);
       receipt = { ...receipt, ...outcome };
       await this.save(file, receipt);

@@ -170,14 +170,15 @@ export class AppClient {
     const { terminal, pid, session } = input;
     return this.command('agent.remove', { terminal, pid, session });
   }
+  // Every agent gets a space of its own, named after it, so it does not crowd
+  // the caller's tab bar. Only a startup fallback joins its primary's space.
   async launch(input) {
-    const origin = await this.context();
     const common = { folder: input.folder, argv: ['pi', '--model', input.model, '--thinking', input.thinking], task: input.message, focus: false };
-    if (input.space || !input.newSpace) {
-      const space = input.space || origin.space;
-      const result = await this.command('tab.new', { ...common, space, name: input.name });
-      return { ...result, space: result.space || space };
+    if (input.space) {
+      const result = await this.command('tab.new', { ...common, space: input.space, name: input.name });
+      return { ...result, space: result.space || input.space };
     }
-    return this.command('space.new', { ...common, name: input.newSpace.name, tab: input.name, machine: input.newSpace.machine ?? origin.machine ?? '' });
+    const origin = await this.context();
+    return this.command('space.new', { ...common, name: input.name, tab: input.name, machine: input.machine ?? origin.machine ?? '' });
   }
 }

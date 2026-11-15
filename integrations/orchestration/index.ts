@@ -160,19 +160,18 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     terminal: target.terminal, lines: Type.Optional(Type.Integer({ minimum: 0, maximum: 400, default: 40, description: 'Lines of history above the screen.' })),
     screen: Type.Optional(Type.Boolean({ default: true, description: 'Set false for identity and status only, without waiting for terminal output.' })),
   }), false, async args => { await client!.context(); return client!.inspect(args.terminal, args.lines, args.screen); });
-  register('herdr_agent_create', 'Use herdr_agent_create to start an independent task for the user in a visible Herdr tab. Use replicate for your own subtasks. The first message is submitted at launch; fallback is limited to startup before the first successful assistant response.', Type.Object({
+  register('herdr_agent_create', 'Use herdr_agent_create to start an independent task for the user in a new Herdr space of its own. Use replicate for your own subtasks. The first message is submitted at launch; fallback is limited to startup before the first successful assistant response.', Type.Object({
     requestId: Type.String({ minLength: 1, description: 'Stable unique task key, such as its issue ID. Reuse the same key and inputs after interruption; do not choose a new key to retry an unknown launch.' }),
-    name: Type.String({ minLength: 1, description: 'Visible agent tab name.' }),
+    name: Type.String({ minLength: 1, description: 'Visible agent name; it also names the agent’s new space and tab.' }),
     message: Type.String({ minLength: 1, description: 'First task message, including its accepted task link.' }),
     folder: Type.String({ minLength: 1, description: 'Absolute repository folder on the target machine.' }),
     profile: Type.String({ minLength: 1, description: 'Workflow profile ID from Herdr settings: feature or bug.' }),
-    space: Type.Optional(Type.String({ description: 'Existing exact space ID. Omit to use this Pi’s space unless newSpace is supplied.' })),
-    newSpace: Type.Optional(Type.Object({ name: Type.String({ minLength: 1 }), machine: Type.Optional(Type.String({ description: 'Configured machine; default this Pi’s machine. Empty string selects the app’s local machine.' })) })),
+    machine: Type.Optional(Type.String({ description: 'Configured machine for the agent’s new space; default this Pi’s machine. Empty string selects the app’s local machine.' })),
     model: Type.Optional(Type.String({ minLength: 1, description: 'Explicit provider/model override. Default the profile’s primary model.' })),
     fallbackModel: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: 'Startup-only provider/model override. Null disables fallback; omitted uses the profile.' })),
     thinking: Type.Optional(Type.Union(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map(value => Type.Literal(value)), { description: 'Thinking override. Default the profile’s level.' })),
   }), true, (args, signal, update) => service!.create(args, signal, update));
   register('herdr_agent_send', 'Use herdr_agent_send to submit a follow-up message to an agent the user asked you to contact. Read its current identity first; do not bypass a blocked user question.', Type.Object({ ...target, message: Type.String({ minLength: 1 }) }), true, args => service!.act('send', args));
   register('herdr_agent_stop', 'Use herdr_agent_stop to interrupt an agent at the user’s request without closing its tab or killing its terminal.', Type.Object(target), true, args => service!.act('stop', args));
-  register('herdr_agent_remove', 'Use herdr_agent_remove to close a dedicated agent tab and end its terminal at the user’s request. Keep the user’s other agents and panes intact.', Type.Object(target), true, args => service!.act('remove', args));
+  register('herdr_agent_remove', 'Use herdr_agent_remove to close a dedicated agent tab, and its space once nothing else is left there, and end its terminal at the user’s request. Keep the user’s other agents and panes intact.', Type.Object(target), true, args => service!.act('remove', args));
 }
