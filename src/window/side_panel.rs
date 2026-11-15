@@ -132,8 +132,9 @@ impl AppWindow {
                             .child(if folded { "▸" } else { "▾" })
                             .child(title),
                     )
+                    // Only an open section is followed by a gap; folded headings stack tightly.
                     .when(!folded, |d| {
-                        d.child(
+                        d.mb(settings::z(14.0)).child(
                             div()
                                 .w_full()
                                 .flex()
@@ -159,8 +160,6 @@ impl AppWindow {
                     .track_scroll(&handle)
                     .flex()
                     .flex_col()
-                    .gap(settings::z(14.0))
-                    .pb(settings::z(14.0))
                     .children(sections),
             )
             .child(
