@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestViaMailbox, resolveHc } from '../client.mjs';
+import { ownsTerminal, requestViaMailbox, resolveHc } from '../client.mjs';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -68,4 +68,10 @@ test('direct launches find hc without a login-shell PATH', async () => {
     assert.equal(resolveHc({ home, env: { PATH: '' } }), command);
     assert.equal(resolveHc({ home, env: { PATH: '', HC_BIN: 'explicit-hc' } }), 'explicit-hc');
   } finally { await rm(home, { recursive: true, force: true }); }
+});test('only the terminal root or foreground process owns a Herdr terminal', () => {
+  assert.equal(ownsTerminal({ pid: 12, foreground: { pid: 30 } }, 12), true);
+  assert.equal(ownsTerminal({ pid: 10, foreground: { pid: 12 } }, 12), true);
+  // A replicate copy runs behind a wrapper shell that is the foreground process.
+  assert.equal(ownsTerminal({ pid: 10, foreground: { pid: 11 } }, 12), false);
+  assert.equal(ownsTerminal({ pid: 10 }, 12), false);
 });
