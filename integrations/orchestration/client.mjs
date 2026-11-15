@@ -122,6 +122,9 @@ export async function requestViaMailbox(core, route, identity, wire, { timeout =
   } while (Date.now() < expires);
   throw new Error('The App did not confirm this request before its deadline; its effect is unknown. Inspect Herdr before retrying.');
 }
+// A nested Pi, such as one behind a wrapper shell, inherits the HC identity of a
+// terminal whose root and foreground processes are someone else.
+export function ownsTerminal(terminal, pid) { return terminal?.pid === pid || terminal?.foreground?.pid === pid; }
 export class AppClient {
   constructor(bindOrigin, pid, session) { this.bindOrigin = bindOrigin; this.pid = pid; this.session = session; this.hc = resolveHc(); }
   async app(args, options = {}) {
@@ -138,10 +141,13 @@ export class AppClient {
     const launch = ['space.new', 'tab.new', 'pane.split', 'terminal.open'].includes(name);
     return this.app(['do', name, JSON.stringify(args)], { timeout: launch ? 100000 : name.startsWith('agent.') ? 35000 : 15000 });
   }
-  async owner() {
+  async terminal() {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) throw new Error('Run this Pi in a Herdr App terminal; HC terminal identity is missing');
-    const terminal = await runJson(this.hc, ['get', process.env.HC_TERMINAL_ID, '--json']);
-    if (terminal.pid !== this.pid && terminal.foreground?.pid !== this.pid) throw new Error('This Pi is not the Herdr terminal foreground process');
+    return runJson(this.hc, ['get', process.env.HC_TERMINAL_ID, '--json']);
+  }
+  async owner() {
+    const terminal = await this.terminal();
+    if (!ownsTerminal(terminal, this.pid)) throw new Error('This Pi is not the Herdr terminal foreground process');
     return terminal;
   }
   async context() {

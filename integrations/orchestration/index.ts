@@ -42,9 +42,13 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     const suffix = randomUUID();
     const clientUrl = new URL('./client.mjs', import.meta.url); clientUrl.searchParams.set('load', suffix);
     const serviceUrl = new URL('./orchestration.mjs', import.meta.url); serviceUrl.searchParams.set('load', suffix);
-    const [{ AppClient }, { Orchestrator, bindOrigin }] = await Promise.all([importFresh(clientUrl.href), importFresh(serviceUrl.href)]);
-    client = new AppClient(bindOrigin, process.pid, session);
-    const owner = await client!.owner();
+    const [{ AppClient, ownsTerminal }, { Orchestrator, bindOrigin }] = await Promise.all([importFresh(clientUrl.href), importFresh(serviceUrl.href)]);
+    const candidate = new AppClient(bindOrigin, process.pid, session);
+    const owner = await candidate.terminal();
+    // A nested Pi, such as a replicate copy behind a wrapper shell, does not own
+    // the terminal it inherited. It stays inactive instead of warning on every publication.
+    if (!ownsTerminal(owner, process.pid)) return;
+    client = candidate;
     // /reload must never reopen the fallback window of an already-started agent.
     // Session history also proves success when publishing the label was interrupted.
     if (ctx.sessionManager.getBranch().some(entry => entry.type === 'message' && entry.message.role === 'assistant' && entry.message.stopReason !== 'error' && entry.message.stopReason !== 'aborted')) startup = 'started';
@@ -52,22 +56,20 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       const previous = JSON.parse(owner.labels?.['herdr.pi'] ?? '{}');
       if (previous.pid === process.pid && previous.session === session && previous.startup === 'started') startup = 'started';
     } catch { /* An unrelated/malformed label cannot establish successful startup. */ }
-    if (owner.pid === process.pid || owner.foreground?.pid === process.pid) {
-      const ipcUrl = new URL('./ipc.mjs', import.meta.url); ipcUrl.searchParams.set('load', suffix);
-      const { startAgentIpc } = await importFresh(ipcUrl.href) as typeof import('./ipc.mjs');
-      const currentClient = client;
-      ipc = await startAgentIpc({ pid: process.pid, session,
-        validate: async () => {
-          const current = await currentClient!.owner();
-          if (ownerSession !== session || ctx.sessionManager.getSessionId() !== session) throw new Error('The Pi session changed; inspect the agent again');
-          if (startup !== 'started') throw new Error('The Pi agent has not completed startup');
-          const status = typeof current.status === 'object' ? current.status : current.report;
-          if (current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
-        },
-        submit: (message: string) => pi.sendUserMessage(message, { deliverAs: 'followUp' }),
-        report: (value: unknown) => report(ctx, value),
-      });
-    }
+    const ipcUrl = new URL('./ipc.mjs', import.meta.url); ipcUrl.searchParams.set('load', suffix);
+    const { startAgentIpc } = await importFresh(ipcUrl.href) as typeof import('./ipc.mjs');
+    const currentClient = candidate;
+    ipc = await startAgentIpc({ pid: process.pid, session,
+      validate: async () => {
+        const current = await currentClient.owner();
+        if (ownerSession !== session || ctx.sessionManager.getSessionId() !== session) throw new Error('The Pi session changed; inspect the agent again');
+        if (startup !== 'started') throw new Error('The Pi agent has not completed startup');
+        const status = typeof current.status === 'object' ? current.status : current.report;
+        if (current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
+      },
+      submit: (message: string) => pi.sendUserMessage(message, { deliverAs: 'followUp' }),
+      report: (value: unknown) => report(ctx, value),
+    });
     service = new Orchestrator(client, path.join(getAgentDir(), 'herdr-orchestration', 'requests'));
     await publish(ctx);
   };
@@ -77,7 +79,9 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;
     try {
       if (!client || !service) await initialize(ctx);
-      const origin = await client!.context();
+      // A nested Pi has no Herdr placement of its own and gets no Herdr prompt section.
+      if (!client) return;
+      const origin = await client.context();
       await publish(ctx);
       event.systemPromptOptions.sections.herdr = `${JSON.stringify(origin)}\nUse Herdr's deferred agent tools only to manage the user's independent agents and tasks. Start agents only at the user's explicit request or for an accepted process-findings task. Use replicate for your own parallel subtasks; do not supervise or remove the user's agents as your helpers.`;
     } catch (value) {

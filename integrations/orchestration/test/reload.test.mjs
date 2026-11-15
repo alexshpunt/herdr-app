@@ -9,8 +9,10 @@ const here=path.dirname(fileURLToPath(import.meta.url));
 const clientModule=version=>`import {readFile,writeFile} from 'node:fs/promises';
 const label=new URL('./label.json',import.meta.url);
 export function importFresh(url){return import(url)}
+export function ownsTerminal(terminal,pid){return terminal.pid===pid}
 export class AppClient {
- async owner(){return {labels:{'herdr.pi':await readFile(label,'utf8').catch(()=>'{}')}}}
+ async terminal(){return {pid:process.pid,labels:{'herdr.pi':await readFile(label,'utf8').catch(()=>'{}')}}}
+ async owner(){return this.terminal()}
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async list(){return {version:${JSON.stringify(version)},agents:[]}}
@@ -21,7 +23,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
  const prior=new Map(['HC_TERMINAL_ID','HC_TERMINAL_SOCKET'].map(key=>[key,process.env[key]]));
  let session;
  try {
-  for(const file of ['index.ts','orchestration.mjs']) await copyFile(path.join(here,'..',file),path.join(root,file));
+  for(const file of ['index.ts','orchestration.mjs','ipc.mjs']) await copyFile(path.join(here,'..',file),path.join(root,file));
   await writeFile(path.join(root,'client.mjs'),clientModule('first'));
   process.env.HC_TERMINAL_ID='fixture';process.env.HC_TERMINAL_SOCKET='fixture';
   const bus=createEventBus(),settings=SettingsManager.inMemory();
