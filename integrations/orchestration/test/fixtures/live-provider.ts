@@ -30,7 +30,10 @@ export default function fixture(pi: ExtensionAPI) {
           output.errorMessage = options?.signal?.aborted ? 'Fixture aborted' : 'Intentional fixture model failure (not a network error)';
           stream.push({ type: 'error', reason: output.stopReason, error: output });
         } else if (model.id === 'controller' && last?.role === 'user') {
-          const request = JSON.parse(text(last));
+          // Other installed extensions can prefix the message, such as with a
+          // `[timestamp]`; the request is the JSON object from the first brace.
+          const message = text(last);
+          const request = JSON.parse(message.slice(message.indexOf('{')));
           output.content = [{ type: 'toolCall', id: `fixture-${Date.now()}`, name: request.name, arguments: request.arguments }];
           output.stopReason = 'toolUse';
           stream.push({ type: 'done', reason: 'toolUse', message: output });
