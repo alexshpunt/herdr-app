@@ -43,6 +43,12 @@ export function workflow(action: "models", args?: { machine?: string }): Promise
 export function home(): string;
 /** The app's folder (`~/.config/herdr-app`, or `$HERDR_APP_HOME`): settings.json, keys.json, layouts/. */
 export function appHome(): string;
+/** This computer's environment variable `name` as Herdr got it, or null when unset or empty. */
+export function env(name: string): string | null;
+
+/** A folder's entries on this computer, by name, or null when it is absent. Runs off the UI thread.
+ *  `modified`: milliseconds since 1970, null when unknown; a link counts as what it points to. */
+export function listFolder(path: string): Promise<{ name: string; folder: boolean; modified: number | null }[] | null>;
 
 /** Reads UTF-8 text (up to 1 MiB), or null if absent. Runs off the UI thread.
  *  `on`: from that machine (a space's `machine`). */

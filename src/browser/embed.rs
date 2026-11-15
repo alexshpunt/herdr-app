@@ -1,13 +1,13 @@
 //! A native program's own window shown inside a Herdr pane (Windows).
 //!
-//! The pane asks the program for a new window and adopts that top-level
-//! window. VS Code opens it with `--new-window` on a folder, from a process
-//! that may already run the person's other windows. Fork gets a process of its
-//! own per pane, which opens only the pane's repository. The window moves into
-//! a container child window that Herdr owns: the container follows the pane,
-//! crops the program's own title bar and frame, and has overlays cut out of it.
-//! Closing the pane gives the window back to the desktop and closes it, as its
-//! own close button would.
+//! A mod describes the launch (`open`): which program, its arguments and how
+//! to recognize its window. The pane starts the program, or finds a window it
+//! already shows, and adopts that top-level window. It moves into a container
+//! child window that Herdr owns: the container follows the pane, crops the
+//! program's own title bar and frame, and has overlays cut out of it. Closing
+//! the pane gives the window back to the desktop and closes it, as its own
+//! close button would. Herdr knows no program by name: the shipped `vscode`,
+//! `fork` and `unity` mods describe theirs.
 //!
 //! Native calls on another process's window send messages to it. They run in
 //! foreground tasks between App updates, never inside layout or paint, so a
@@ -22,43 +22,110 @@ thread_local! {
     static APPS: RefCell<Vec<Weak<RefCell<NativeApp>>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// What to start and how to recognize its windows.
+/// What a mod asks to start and how to recognize its windows (`open`).
+#[derive(serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Description {
+    /// Where the program may be: the first file that exists runs.
+    program: Vec<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    /// Win32 class of the program's top-level windows; a trailing `*` matches
+    /// any rest (WPF adds a GUID per run).
+    class: String,
+    /// What the title of a window already showing the target has as a
+    /// " - "-separated part (or that part with " [...]" after it).
+    #[serde(default)]
+    title: String,
+    /// Only a window of the started process is the pane's.
+    #[serde(default)]
+    own_process: bool,
+    /// The program opens a target in one window only (Unity locks its
+    /// project): a window already showing the target is adopted instead of
+    /// starting it, and two panes with one key never start it twice.
+    #[serde(default)]
+    once: bool,
+    /// The program's main window is the one with a Win32 menu bar (Unity),
+    /// which it keeps: it is embedded as a popup, not as a child window.
+    #[serde(default)]
+    menu_window: bool,
+    /// Seconds the program may take to show its window.
+    #[serde(default = "default_wait")]
+    wait: f64,
+    /// The pane's error when no `program` path exists.
+    #[serde(default)]
+    missing: Option<String>,
+}
+
+fn default_wait() -> f64 {
+    20.0
+}
+
+impl Description {
+    fn parse(value: &ComponentDataValue) -> anyhow::Result<Self> {
+        let description: Self = serde_json::from_value(plain(value)).map_err(|e| anyhow::anyhow!("Invalid launch description: {e}"))?;
+        anyhow::ensure!(description.program.iter().any(|p| !p.trim().is_empty()), "The launch description names no program");
+        anyhow::ensure!(!description.class.is_empty(), "The launch description names no window class");
+        anyhow::ensure!(description.wait.is_finite() && description.wait > 0.0, "The launch description's wait must be a positive number of seconds");
+        Ok(description)
+    }
+
+    /// The program to run: the first `program` path that is a file.
+    fn program(&self) -> anyhow::Result<PathBuf> {
+        self.program.iter().filter(|p| !p.trim().is_empty()).map(PathBuf::from).find(|p| p.is_file()).ok_or_else(|| {
+            anyhow::anyhow!("{}", self.missing.clone().unwrap_or_else(|| format!("None of these programs exists: {}", self.program.join(", "))))
+        })
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn launch(&self) -> anyhow::Result<Launch> {
+        Ok(Launch {
+            program: self.program()?, args: self.args.clone(), class: self.class.clone(), title: self.title.clone(),
+            own_process: self.own_process, once: self.once, menu_window: self.menu_window,
+            wait: std::time::Duration::from_secs_f64(self.wait),
+        })
+    }
+}
+
+/// Plain data from a mod as JSON.
+fn plain(value: &ComponentDataValue) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        ComponentDataValue::Null => Value::Null,
+        ComponentDataValue::Boolean(b) => Value::Bool(*b),
+        ComponentDataValue::Number(n) => serde_json::Number::from_f64(*n).map_or(Value::Null, Value::Number),
+        ComponentDataValue::String(s) => Value::String(s.clone()),
+        ComponentDataValue::Array(items) => Value::Array(items.iter().map(plain).collect()),
+        ComponentDataValue::Object(fields) => Value::Object(fields.iter().map(|(k, v)| (k.clone(), plain(v))).collect()),
+    }
+}
+
+/// A launch description with its program found.
 #[derive(Clone, Debug)]
 #[cfg_attr(not(windows), allow(dead_code))]
 struct Launch {
     program: PathBuf,
     args: Vec<String>,
-    /// Win32 class of the program's top-level windows; a trailing `*` matches
-    /// any rest (WPF adds a GUID per run).
-    class: &'static str,
-    /// What the title of a window already showing the target contains as a
-    /// " - "-separated part (VS Code: the folder's name, maybe with " [WSL: …]").
+    class: String,
     title: String,
-    /// Only a window of the started process is the pane's.
     own_process: bool,
-    /// Fork: the repository that Fork's settings get as the only one of the
-    /// active workspace just before the start.
-    fork_repo: Option<String>,
-    /// The program opens a target in one window only (Unity locks its
-    /// project): a window already showing the target is adopted instead of
-    /// starting it, and two panes on one target never start it twice.
     once: bool,
-    /// The program's main window is the one with a Win32 menu bar (Unity),
-    /// which it keeps: it is embedded as a popup, not as a child window.
     menu_window: bool,
-    /// How long the program may take to show its window.
     wait: std::time::Duration,
 }
 
 /// A rectangle in device pixels, relative to the host window's client area.
 type Rect = [i32; 4];
 
-// Program, target and launch details are used by the Windows backend only.
+// The key and launch details are used by the Windows backend only.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(super) struct NativeApp {
     window: WindowId,
-    app: String,
-    target: String,
+    /// What the window shows: a restarted copy of the mod, or another pane
+    /// with the same key, takes the window over.
+    key: String,
+    /// The mod's launch description, once it gave one.
+    description: Option<Description>,
     status: String,
     error: Option<String>,
     hitbox: Option<HitboxId>,
@@ -73,155 +140,19 @@ pub(super) struct NativeApp {
     /// Keyboard focus was asked for while the pane was hidden: give it when
     /// the pane shows up soon after (a tab selected just before).
     focus_until: Option<std::time::Instant>,
-    /// A file URI (VS Code) asked for before the window is shown: one asked
-    /// for before it starts goes with the launch, so the new window opens it
-    /// instead of its Welcome page; one asked for while it starts is handed
-    /// to it once it is shown.
-    goto: Option<String>,
+    /// How the shown window came (`origin`): "new" (started, or found by its
+    /// title), "restart" (kept from a restarted copy of this pane's mod) or
+    /// "pane" (taken from another pane with the same key).
+    origin: Option<&'static str>,
     #[cfg(windows)]
     embedded: Option<win::Embedded>,
     #[cfg(windows)]
     opening: bool,
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
-fn launch(app: &str, target: &str) -> anyhow::Result<Launch> {
-    match app {
-        "vscode" => vscode(target),
-        "fork" => fork(target),
-        "unity" => unity(target),
-        other => anyhow::bail!("Unknown native app {other:?}; Herdr knows \"vscode\", \"fork\" and \"unity\""),
-    }
-}
-
-/// How long VS Code and Fork may take to show a window.
-const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// The Unity Editor on a project, in the version the project names. Its
-/// first start imports every asset: that may take many minutes.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn unity(target: &str) -> anyhow::Result<Launch> {
-    let folder = windows_folder(target)?;
-    let version = unity_version(std::path::Path::new(&folder))?;
-    let program = unity_roots().into_iter().map(|root| root.join(&version).join("Editor").join("Unity.exe")).find(|p| p.is_file())
-        .ok_or_else(|| anyhow::anyhow!("Unity {version} is not installed: install it with Unity Hub"))?;
-    let title = folder.rsplit(['\\', '/']).next().unwrap_or_default().to_owned();
-    Ok(Launch {
-        program, args: vec!["-projectPath".into(), folder], class: "UnityContainerWndClass", title,
-        own_process: true, fork_repo: None, once: true, menu_window: true, wait: std::time::Duration::from_secs(30 * 60),
-    })
-}
-
-/// The editor version a Unity project is bound to: `m_EditorVersion` of its
-/// `ProjectSettings/ProjectVersion.txt`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn unity_version(folder: &std::path::Path) -> anyhow::Result<String> {
-    let not_unity = || anyhow::anyhow!("{} is not a Unity project", folder.display());
-    let text = std::fs::read_to_string(folder.join("ProjectSettings").join("ProjectVersion.txt")).map_err(|_| not_unity())?;
-    editor_version(&text).ok_or_else(|| anyhow::anyhow!("{} names no editor version", folder.join("ProjectSettings").join("ProjectVersion.txt").display()))
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn editor_version(project_version: &str) -> Option<String> {
-    project_version.lines().find_map(|line| line.trim().strip_prefix("m_EditorVersion:")).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned)
-}
-
-/// The folders Unity Hub installs editors in, each holding a `<version>`
-/// folder per editor: the one chosen in the Hub's settings
-/// (`%APPDATA%\UnityHub\secondaryInstallPath.json`), then its default.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn unity_roots() -> Vec<PathBuf> {
-    let env = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let chosen = env("APPDATA").and_then(|d| std::fs::read_to_string(d.join("UnityHub").join("secondaryInstallPath.json")).ok())
-        .and_then(|text| serde_json::from_str::<String>(text.trim_start_matches('\u{feff}')).ok())
-        .filter(|p| !p.is_empty()).map(PathBuf::from);
-    [chosen, env("ProgramFiles").map(|d| d.join("Unity").join("Hub").join("Editor"))].into_iter().flatten().collect()
-}
-
-/// The person's own VS Code: default profile and user data, so a running VS
-/// Code opens the window itself. `target` is a folder URI (`file://`,
-/// `vscode-remote://wsl+…`) or a local folder path.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn vscode(target: &str) -> anyhow::Result<Launch> {
-    let env = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let candidates = [
-        env("HERDR_VSCODE_EXE"),
-        env("LOCALAPPDATA").map(|d| d.join("Programs/Microsoft VS Code/Code.exe")),
-        env("ProgramFiles").map(|d| d.join("Microsoft VS Code/Code.exe")),
-    ];
-    let program = candidates.into_iter().flatten().find(|p| p.is_file())
-        .ok_or_else(|| anyhow::anyhow!("VS Code is not installed (set HERDR_VSCODE_EXE to Code.exe)"))?;
-    let target = target.trim();
-    anyhow::ensure!(!target.is_empty(), "No folder to open");
-    let mut args = vec!["--new-window".to_owned()];
-    if target.contains("://") {
-        args.extend(["--folder-uri".to_owned(), target.to_owned()]);
-    } else {
-        args.push(target.to_owned());
-    }
-    let name = target.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
-    let title = url::form_urlencoded::parse(format!("n={name}").as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default();
-    Ok(Launch { program, args, class: "Chrome_WidgetWin_1", title, own_process: false, fork_repo: None, once: false, menu_window: false, wait: OPEN_WAIT })
-}
-
-/// The arguments of a new VS Code window on folder `target` with `file` (a
-/// file URI, `:line:column` after it) open in it, and the file URI to hand
-/// over once the window is up for its line, if it names one. A VS Code that
-/// is not running yet quits on `--folder-uri` with `--file-uri` (1.146), so
-/// both go as paths, with `--remote` naming a remote folder's machine;
-/// `--goto` there would take a remote folder for a file. None: the file is
-/// not in the folder's machine, or not a URI VS Code takes as a path.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn vscode_with_file(target: &str, file: &str) -> Option<(Vec<String>, Option<String>)> {
-    let (folder_on, folder) = if target.contains("://") { vscode_location(target)? } else { (None, target.to_owned()) };
-    let (bare, placed) = without_place(file);
-    let (file_on, path) = vscode_location(bare)?;
-    if file_on != folder_on {
-        return None;
-    }
-    let mut args = vec!["--new-window".to_owned()];
-    if let Some(authority) = folder_on {
-        args.extend(["--remote".to_owned(), authority]);
-    }
-    args.extend([folder, path]);
-    Some((args, placed.then(|| file.to_owned())))
-}
-
-/// A VS Code URI as the machine `--remote` takes (none for this computer)
-/// and the path there.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn vscode_location(uri: &str) -> Option<(Option<String>, String)> {
-    let (scheme, rest) = uri.split_once("://")?;
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    match scheme {
-        "file" => Some((None, windows_folder(uri).ok()?)),
-        "vscode-remote" if !authority.is_empty() => Some((Some(percent_decoded(authority)), format!("/{}", percent_decoded(path)))),
-        _ => None,
-    }
-}
-
-/// A file URI without the `:42` or `:42:7` after it, and whether it had one.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn without_place(uri: &str) -> (&str, bool) {
-    let mut bare = uri;
-    for _ in 0..2 {
-        match bare.rsplit_once(':') {
-            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => bare = head,
-            _ => break,
-        }
-    }
-    (bare, bare.len() != uri.len())
-}
-
-/// `%XX` escapes decoded; `+` stays itself.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn percent_decoded(s: &str) -> String {
-    url::form_urlencoded::parse(format!("n={}", s.replace('+', "%2B")).as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default()
-}
-
 /// A program of the person's, started without the IPC variables of the
-/// VS Code or other Electron app Herdr may run in: with them Code.exe acts
-/// as a CLI or Node instead.
+/// VS Code or other Electron app Herdr may run in: with them an Electron
+/// program acts as a CLI or Node instead.
 fn person_program(program: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new(program);
     for (key, _) in std::env::vars_os() {
@@ -231,197 +162,30 @@ fn person_program(program: &std::path::Path) -> std::process::Command {
     command
 }
 
-/// When, after VS Code's window was adopted, files handed to it go again.
-/// A new window takes a few seconds to connect to its machine (WSL, SSH):
-/// before that it opens a file but drops its line (VS Code 1.146), and the
-/// files come to front in no fixed order. Its title is no sign of it: it
-/// names a file before the window has connected.
-const VSCODE_HAND_AGAIN: [std::time::Duration; 3] =
-    [std::time::Duration::from_secs(3), std::time::Duration::from_secs(8), std::time::Duration::from_secs(15)];
-
-/// The files handed to one VS Code window while it is new, in the order
-/// asked (each once, at its latest place), and the last time they went again.
-#[derive(Default)]
-pub(super) struct Handed {
-    uris: Vec<String>,
-    again: Option<std::time::Instant>,
-}
-
-/// A new VS Code window: when Herdr adopted it, and what it was handed.
-type NewWindow = (std::time::Instant, Arc<std::sync::Mutex<Handed>>);
-
-/// One hand-off at a time, so files reach VS Code in the order asked.
-static HANDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Hands file URIs (`:line:column` after each) to the running VS Code, which
-/// opens each in the window that has its folder. They go one after another,
-/// so the last one ends up in front; at once, the order would be VS Code's.
-/// While the window is new, every file it was handed goes again at each of
-/// `VSCODE_HAND_AGAIN` still ahead, in the order asked: a file open by then
-/// takes its line, and the last one asked comes to front.
-fn vscode_goto(program: &std::path::Path, uris: Vec<String>, window: Option<NewWindow>) {
-    if uris.is_empty() { return; }
-    let program = program.to_owned();
-    // The caller holds HANDING: one Code.exe at a time, each handing its file
-    // over and exiting.
-    let hand_all = move |uris: &[String]| {
-        for uri in uris {
-            let child = person_program(&program).args(["--goto", "--file-uri", uri])
-                .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-            match child {
-                Ok(mut child) => { let _ = child.wait(); }
-                Err(error) => tracing::warn!(%error, "cannot hand {uri} to VS Code"),
+/// Runs `program` with `args` after the runs asked for before have ended, on
+/// one worker thread: a single-instance program (VS Code's `--goto`) gets
+/// them in the order asked. The UI thread never waits for a run.
+fn run_again(program: PathBuf, args: Vec<String>) {
+    type Run = (PathBuf, Vec<String>);
+    static QUEUE: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Run>>> = std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Run>();
+        let _ = std::thread::Builder::new().name("native-app-runs".into()).spawn(move || {
+            for (program, args) in rx {
+                let child = person_program(&program).args(&args)
+                    .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                match child {
+                    Ok(mut child) => { let _ = child.wait(); }
+                    Err(error) => tracing::warn!(%error, "cannot run {}", program.display()),
+                }
             }
-        }
-    };
-    if let Some((_, handed)) = &window {
-        let mut handed = handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        for uri in &uris {
-            handed.uris.retain(|u| u != uri);
-            handed.uris.push(uri.clone());
-        }
-    }
-    // Off the UI thread, which must never wait for HANDING.
-    std::thread::spawn(move || {
-        let handing = || HANDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        {
-            let _handing = handing();
-            hand_all(&uris);
-        }
-        let Some((adopted, handed)) = window else { return };
-        for at in VSCODE_HAND_AGAIN.map(|after| adopted + after) {
-            let Some(wait) = at.checked_duration_since(std::time::Instant::now()) else { continue };
-            std::thread::sleep(wait);
-            let _handing = handing();
-            // Another hand-off to this window may have done this round.
-            let again = {
-                let mut handed = handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if handed.again.is_some_and(|done| done >= at) { continue; }
-                handed.again = Some(at);
-                handed.uris.clone()
-            };
-            hand_all(&again);
-        }
+        });
+        std::sync::Mutex::new(tx)
     });
+    let _ = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).send((program, args));
 }
 
-/// A Fork (git client) process of the pane's own on a repository. `target`
-/// is a local folder, a `file://` URI or a VS Code WSL folder URI
-/// (`vscode-remote://wsl+…`).
-///
-/// Fork started with a folder hands it to a running Fork and exits; started
-/// with none, it is a new process that restores the tabs of its active
-/// workspace. So the pane writes a workspace of only its repository first.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn fork(target: &str) -> anyhow::Result<Launch> {
-    let env = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let candidates = [
-        env("HERDR_FORK_EXE"),
-        env("LOCALAPPDATA").map(|d| d.join("Fork/current/Fork.exe")),
-        env("LOCALAPPDATA").map(|d| d.join("Fork/Fork.exe")),
-    ];
-    let program = candidates.into_iter().flatten().find(|p| p.is_file())
-        .ok_or_else(|| anyhow::anyhow!("Fork is not installed (set HERDR_FORK_EXE to Fork.exe)"))?;
-    let folder = windows_folder(target)?;
-    Ok(Launch { program, args: Vec::new(), class: "HwndWrapper[Fork.exe;*", title: String::new(), own_process: true, fork_repo: Some(folder), once: false, menu_window: false, wait: OPEN_WAIT })
-}
-
-/// The name of the Fork workspace that Herdr's panes start Fork in.
-const FORK_WORKSPACE: &str = "Herdr";
-
-/// Give the "Herdr" workspace of Fork's settings
-/// (`%LOCALAPPDATA%\Fork\settings.json`) only `folder` and make it active,
-/// and mark `folder` safe for Fork's git. Other workspaces and settings stay
-/// as they are. Without that file Fork has never run: then it starts empty.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn prepare_fork(folder: &str) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let dir = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).context("LOCALAPPDATA is not set")?.join("Fork");
-    let path = dir.join("settings.json");
-    let settings: Option<serde_json::Value> = match std::fs::read_to_string(&path) {
-        Ok(text) => Some(serde_json::from_str(text.trim_start_matches('\u{feff}')).with_context(|| format!("Cannot parse {}", path.display()))?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error).with_context(|| format!("Cannot read {}", path.display())),
-    };
-    #[cfg(windows)]
-    let trusted = trust_repository(&dir, settings.as_ref(), folder);
-    #[cfg(not(windows))]
-    let trusted = anyhow::Ok(());
-    let Some(mut settings) = settings else { return trusted };
-    fork_workspace(&mut settings, folder)?;
-    // A running Fork may read the file at any time: replace it whole.
-    let temp = dir.join("settings.json.herdr");
-    std::fs::write(&temp, serde_json::to_vec_pretty(&settings)?).with_context(|| format!("Cannot write {}", temp.display()))?;
-    std::fs::rename(&temp, &path).with_context(|| format!("Cannot replace {}", path.display()))?;
-    trusted
-}
-
-/// Git refuses a repository that another user owns, as every WSL one is
-/// (`\\wsl.localhost\...`), until it is a `safe.directory`. Herdr opens the
-/// person's own repositories: add it to the global git config with Fork's
-/// git, as Fork's "Mark repository as safe" does.
-#[cfg(windows)]
-fn trust_repository(fork_dir: &std::path::Path, settings: Option<&serde_json::Value>, folder: &str) -> anyhow::Result<()> {
-    use std::os::windows::process::CommandExt;
-    let Some(entry) = safe_directory(folder) else { return Ok(()) };
-    let git = fork_git(fork_dir, settings);
-    let config = |args: &[&str]| {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new(&git).arg("config").arg("--global").args(args)
-            .stdin(std::process::Stdio::null()).creation_flags(CREATE_NO_WINDOW).output()
-    };
-    let listed = config(&["--get-all", "safe.directory"])?;
-    if String::from_utf8_lossy(&listed.stdout).lines().any(|line| line.trim() == entry || line.trim() == "*") { return Ok(()); }
-    let added = config(&["--add", "safe.directory", &entry])?;
-    anyhow::ensure!(added.status.success(), "{} cannot mark {folder} safe: {}", git.display(), String::from_utf8_lossy(&added.stderr).trim());
-    Ok(())
-}
-
-/// The git Fork runs: its `GitInstancePath` setting, else its newest bundled
-/// git, else the one on PATH.
-#[cfg(windows)]
-fn fork_git(fork_dir: &std::path::Path, settings: Option<&serde_json::Value>) -> PathBuf {
-    let chosen = settings.and_then(|s| s.get("GitInstancePath")).and_then(serde_json::Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from);
-    if let Some(path) = chosen.into_iter().flat_map(|p| [p.join("bin/git.exe"), p]).find(|p| p.is_file()) { return path; }
-    std::fs::read_dir(fork_dir.join("gitInstance")).into_iter().flatten().flatten()
-        .map(|entry| entry.path().join("bin/git.exe")).filter(|p| p.is_file())
-        .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
-        .unwrap_or_else(|| PathBuf::from("git"))
-}
-
-/// The `safe.directory` entry git asks for a UNC folder (WSL folders are
-/// `\\wsl.localhost\...`); none for a local drive, which the person owns.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn safe_directory(folder: &str) -> Option<String> {
-    let rest = folder.strip_prefix(r"\\")?;
-    Some(format!("%(prefix)///{}", rest.replace('\\', "/")))
-}
-
-/// Fork's settings JSON with the "Herdr" workspace holding only `folder`,
-/// made active.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn fork_workspace(settings: &mut serde_json::Value, folder: &str) -> anyhow::Result<()> {
-    use anyhow::Context;
-    use serde_json::{Value, json};
-    let root = settings.as_object_mut().context("Fork's settings are not a JSON object")?;
-    let workspaces = root.entry("Workspaces").or_insert_with(|| json!({}))
-        .as_object_mut().context("Fork's Workspaces setting is not an object")?;
-    {
-        let all = workspaces.entry("All").or_insert_with(|| json!([]))
-            .as_array_mut().context("Fork's workspace list is not an array")?;
-        let index = match all.iter().position(|w| w.get("Name").and_then(Value::as_str) == Some(FORK_WORKSPACE)) {
-            Some(index) => index,
-            None => { all.push(json!({ "Name": FORK_WORKSPACE })); all.len() - 1 }
-        };
-        let workspace = all[index].as_object_mut().context("A Fork workspace is not an object")?;
-        workspace.insert("Repositories".into(), json!([folder]));
-        workspace.insert("ActiveRepository".into(), json!(folder));
-    }
-    workspaces.insert("ActiveWorkspace".into(), json!(FORK_WORKSPACE));
-    Ok(())
-}
-
-/// A window class against a `Launch.class` pattern.
+/// A window class against a `Description.class` pattern.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn class_matches(pattern: &str, class: &str) -> bool {
     match pattern.strip_suffix('*') {
@@ -430,30 +194,11 @@ fn class_matches(pattern: &str, class: &str) -> bool {
     }
 }
 
-/// A Windows path for a folder given as a path or a folder URI, without a
-/// trailing separator.
+/// Whether a window title has `part` as a " - "-separated part, or that
+/// part with " [...]" after it (VS Code's " [WSL: Ubuntu]").
 #[cfg_attr(not(windows), allow(dead_code))]
-fn windows_folder(target: &str) -> anyhow::Result<String> {
-    let target = target.trim();
-    anyhow::ensure!(!target.is_empty(), "No folder to open");
-    let mut folder = match target.split_once("://") {
-        None => target.to_owned(),
-        Some((scheme, rest)) => {
-            let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
-            let path = percent_decoded(path).replace('/', "\\");
-            match scheme {
-                "file" if authority.is_empty() => path,
-                "file" => format!(r"\\{authority}\{path}"),
-                "vscode-remote" => match percent_decoded(authority).strip_prefix("wsl+") {
-                    Some(distro) if !distro.is_empty() => format!(r"\\wsl.localhost\{distro}\{path}"),
-                    _ => anyhow::bail!("Only local and WSL folders open on Windows, not {target}"),
-                },
-                _ => anyhow::bail!("Only local and WSL folders open on Windows, not {target}"),
-            }
-        }
-    };
-    while folder.len() > 3 && folder.ends_with(['\\', '/']) { folder.pop(); }
-    Ok(folder)
+fn title_shows(title: &str, part: &str) -> bool {
+    !part.is_empty() && title.split(" - ").any(|p| p == part || p.strip_prefix(part).is_some_and(|rest| rest.starts_with(" [")))
 }
 
 impl Drop for NativeApp {
@@ -461,7 +206,7 @@ impl Drop for NativeApp {
         // A mod that restarts (a reload) makes a new state at once: it takes
         // the window back within a moment, or the window closes.
         #[cfg(windows)]
-        if let Some(embedded) = self.embedded.take() { win::orphan(&self.app, &self.target, embedded); }
+        if let Some(embedded) = self.embedded.take() { win::orphan(&self.key, embedded); }
     }
 }
 
@@ -563,20 +308,20 @@ impl ComponentMaterializer for NativeAppElement {
 pub(super) fn register(registry: &mut ComponentRegistry) {
     registry.register_state(StateDescriptor::new(
         "NativeAppState", "HerdrNativeAppState",
-        vec![ArgumentDescriptor::new("app", ArgumentSchema::String), ArgumentDescriptor::new("target", ArgumentSchema::String)],
+        vec![ArgumentDescriptor::new("key", ArgumentSchema::String)],
         |args, window, _| {
-            let (ComponentArgument::String(app), ComponentArgument::String(target)) = (&args[0], &args[1]) else { unreachable!() };
+            let ComponentArgument::String(key) = &args[0] else { unreachable!() };
             let state = Rc::new(RefCell::new(NativeApp {
-                window: window.window_handle().window_id(), app: app.clone(), target: target.clone(),
+                window: window.window_handle().window_id(), key: key.clone(), description: None,
                 status: "Opening…".into(), error: None, hitbox: None, rect: None, visible: false, holes: Vec::new(),
-                apply_pending: false, generation: 0, closed: false, focus_until: None, goto: None,
+                apply_pending: false, generation: 0, closed: false, focus_until: None, origin: None,
                 #[cfg(windows)] embedded: None,
                 #[cfg(windows)] opening: false,
             }));
             APPS.with_borrow_mut(|apps| apps.push(Rc::downgrade(&state)));
             Ok(Box::new(state))
         },
-    ).with_documentation("A program's own window shown in this pane: \"vscode\" (the person's VS Code on a folder URI or path), \"fork\" (a Fork process of this pane's own, showing only one repository: a local or WSL folder) or \"unity\" (the Unity Editor on a local Unity project, in the version the project names). Closing the pane closes that window.")
+    ).with_documentation("A program's own window shown in this pane (Windows), started from the launch description `open` gives. `key` names what the window shows: a restarted mod, or another pane with the same key, takes that window over. Closing the pane closes the window.")
     .with_methods(vec![
         StateMethodDescriptor::new::<State>("status", "(): string", |state, _, _, _| {
             Ok(ComponentDataValue::String(state.borrow().status.clone()))
@@ -590,6 +335,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             #[cfg(not(windows))]
             { let _ = state; Ok(ComponentDataValue::Boolean(false)) }
         }).with_readonly(true),
+        // A closed or failed window starts again from the same launch.
         StateMethodDescriptor::new::<State>("reopen", "(): void", |state, _, _, _| {
             let mut app = state.borrow_mut();
             if app.closed || app.error.is_some() {
@@ -600,30 +346,35 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
             }
             Ok(ComponentDataValue::Null)
         }),
-        // Before the window starts, the file goes with the launch, so the new
-        // window opens it in place of its Welcome page. While it starts, the
-        // file waits for the window: a Code.exe started meanwhile could open a
-        // window of its own. A running VS Code puts a file it is handed later
-        // in the window that has its folder.
-        StateMethodDescriptor::new::<State>("goto", "(fileUri: string): void", |state, args, _, _| {
-            let Some(ComponentDataValue::String(uri)) = args.first() else { anyhow::bail!("Expected a file URI") };
+        StateMethodDescriptor::new::<State>("origin", "(): \"new\" | \"restart\" | \"pane\" | null", |state, _, _, _| {
+            Ok(state.borrow().origin.map_or(ComponentDataValue::Null, |o| ComponentDataValue::String(o.into())))
+        }).with_readonly(true),
+        // When Herdr adopted the window (milliseconds since 1970), null
+        // before: a window taken from another pane keeps its first time.
+        StateMethodDescriptor::new::<State>("embeddedAt", "(): number | null", |state, _, _, _| {
+            #[cfg(windows)]
+            return Ok(state.borrow().embedded.as_ref().map_or(ComponentDataValue::Null, |e| ComponentDataValue::Number(win::adopted_ms(e))));
+            #[cfg(not(windows))]
+            { let _ = state; Ok(ComponentDataValue::Null) }
+        }).with_readonly(true),
+        StateMethodDescriptor::new::<State>("open", "(launch: { program: string[]; args?: string[]; class: string; title?: string; ownProcess?: boolean; once?: boolean; menuWindow?: boolean; wait?: number; missing?: string }): void", |state, args, _, _| {
+            let description = Description::parse(args.first().unwrap_or(&ComponentDataValue::Null))?;
             let mut app = state.borrow_mut();
-            anyhow::ensure!(app.app == "vscode", "Only a VS Code pane opens files");
-            anyhow::ensure!(uri.contains("://"), "Expected a file URI, such as file:///C:/r/a.rs:42:7");
-            #[cfg(windows)]
-            let shown = app.embedded.is_some();
-            #[cfg(not(windows))]
-            let shown = false;
-            if !shown {
-                app.goto = Some(uri.clone());
-                return Ok(ComponentDataValue::Null);
+            match &app.description {
+                Some(given) if *given != description => anyhow::bail!("This state already has a launch: open another target with a new NativeAppState"),
+                Some(_) => {}
+                None => app.description = Some(description),
             }
-            // A window that just started may still be connecting to its machine.
-            #[cfg(windows)]
-            let window = app.embedded.as_ref().map(win::new_window);
-            #[cfg(not(windows))]
-            let window = None;
-            vscode_goto(&vscode(&app.target)?.program, vec![uri.clone()], window);
+            Ok(ComponentDataValue::Null)
+        }),
+        // A single-instance program takes later requests through a run of
+        // its own (VS Code: `--goto --file-uri <uri>` opens a file in the
+        // window that has its folder).
+        StateMethodDescriptor::new::<State>("run", "(args: string[]): void", |state, args, _, _| {
+            let Some(ComponentDataValue::Array(items)) = args.first() else { anyhow::bail!("Expected the arguments as a list of strings") };
+            let args = items.iter().map(|v| match v { ComponentDataValue::String(s) => Ok(s.clone()), _ => Err(anyhow::anyhow!("Expected the arguments as a list of strings")) }).collect::<anyhow::Result<Vec<_>>>()?;
+            let program = state.borrow().description.as_ref().ok_or_else(|| anyhow::anyhow!("No launch yet: call open first"))?.program()?;
+            run_again(program, args);
             Ok(ComponentDataValue::Null)
         }),
         StateMethodDescriptor::new::<State>("focus", "(): void", |state, _, _, _| {
@@ -676,10 +427,14 @@ mod win {
         /// The program's other windows of the same class (Unity's floating
         /// editor windows), hidden while the pane is.
         hidden: Vec<HWND>,
-        /// When Herdr adopted it, and the files handed to it since: a VS
-        /// Code window still connects to its machine for a while after that.
-        adopted: Instant,
-        handed: std::sync::Arc<std::sync::Mutex<super::Handed>>,
+        /// When Herdr adopted it (`embeddedAt`): a new VS Code window still
+        /// connects to its machine for a while after that.
+        adopted: std::time::SystemTime,
+    }
+
+    /// When Herdr adopted the window, in milliseconds since 1970.
+    pub(super) fn adopted_ms(embedded: &Embedded) -> f64 {
+        embedded.adopted.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64)
     }
 
     #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -731,9 +486,9 @@ mod win {
 
     thread_local! {
         static QUIT_HOOKED: Cell<bool> = const { Cell::new(false) };
-        /// Windows of dropped states, by program and target, until a new
-        /// state takes them or their time is up.
-        static ORPHANS: std::cell::RefCell<Vec<(String, String, Embedded, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
+        /// Windows of dropped states, by key, until a new state takes them or
+        /// their time is up.
+        static ORPHANS: std::cell::RefCell<Vec<(String, Embedded, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
     /// How long a dropped state's window waits for a restarted mod.
@@ -741,17 +496,19 @@ mod win {
 
     /// Keep a dropped state's window, hidden, for a state that takes it soon.
     /// Runs inside App updates: posted calls only.
-    pub(super) fn orphan(app: &str, target: &str, embedded: Embedded) {
+    pub(super) fn orphan(key: &str, embedded: Embedded) {
         unsafe { ShowWindowAsync(embedded.container, SW_HIDE) };
-        ORPHANS.with_borrow_mut(|o| o.push((app.to_owned(), target.to_owned(), embedded, Instant::now() + ORPHAN_GRACE)));
+        ORPHANS.with_borrow_mut(|o| o.push((key.to_owned(), embedded, Instant::now() + ORPHAN_GRACE)));
     }
 
     pub(super) fn start(state: &State, window: &mut Window, cx: &mut App) {
-        let (generation, app, target, goto) = {
+        let (generation, key, description) = {
             let mut app = state.borrow_mut();
             if app.embedded.is_some() || app.opening || app.error.is_some() || app.closed { return; }
+            // The mod has not described its launch yet.
+            let Some(description) = app.description.clone() else { return };
             app.opening = true;
-            (app.generation, app.app.clone(), app.target.clone(), app.goto.take())
+            (app.generation, app.key.clone(), description)
         };
         if !QUIT_HOOKED.get() {
             QUIT_HOOKED.set(true);
@@ -767,14 +524,14 @@ mod win {
                         if let Some(e) = app.borrow_mut().embedded.take() { close(e); }
                     }
                 });
-                for (_, _, e, _) in ORPHANS.take() { close(e); }
+                for (_, e, _) in ORPHANS.take() { close(e); }
                 async {}
             }).detach();
             // Close the windows nobody took back.
             cx.spawn(async |cx| loop {
                 cx.background_executor().timer(Duration::from_millis(500)).await;
                 let now = Instant::now();
-                let expired: Vec<_> = ORPHANS.with_borrow_mut(|o| o.extract_if(.., |(_, _, _, until)| *until <= now).collect());
+                let expired: Vec<_> = ORPHANS.with_borrow_mut(|o| o.extract_if(.., |(_, _, until)| *until <= now).collect());
                 drop(expired);
             }).detach();
         }
@@ -782,32 +539,17 @@ mod win {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get() as HWND,
             _ => { fail(state, "No Win32 host window".into()); return; }
         };
-        let mut launch = match super::launch(&app, &target) {
+        let launch = match description.launch() {
             Ok(launch) => launch,
             Err(error) => { fail(state, format!("{error:#}")); return; }
         };
-        // VS Code opens the folder and, in the same new window, the file;
-        // its line once the window is up.
-        let mut place = None;
-        if let Some(uri) = &goto {
-            match super::vscode_with_file(&target, uri) {
-                Some((args, later)) => (launch.args, place) = (args, later),
-                None => launch.args.extend(["--goto".to_owned(), "--file-uri".to_owned(), uri.clone()]),
-            }
-        }
         // A pane whose mod restarted (a mod reload, a layout change) gets the
-        // window its earlier copy still holds for the same target: VS Code
+        // window its earlier copy still holds for the same key: VS Code
         // would only bring that window forward instead of opening another.
-        let left = take_orphan(&app, &target);
-        let restarted = left.is_some();
-        if let Some(embedded) = left.or_else(|| held(state, &app, &target)).map(|e| moved_to(e, host)) {
-            // A window taken from another pane is running: it gets the file on
-            // its own. A restarted copy's window opened it when it started.
-            if !restarted && let Some(uri) = &goto {
-                super::vscode_goto(&launch.program, vec![uri.clone()], Some(new_window(&embedded)));
-            }
+        if let Some((embedded, origin)) = kept(state, &key) {
+            let embedded = moved_to(embedded, host);
             let child = embedded.child as usize;
-            show(state, embedded);
+            show(state, embedded, origin);
             let weak = Rc::downgrade(state);
             window.spawn(cx, async move |cx| {
                 let _ = cx.update(|window, _| window.refresh());
@@ -817,47 +559,35 @@ mod win {
         }
         let weak = Rc::downgrade(state);
         window.spawn(cx, async move |cx| {
-            // Fork reads its settings when it starts: one start at a time,
-            // each with its own repository there. Unity opens a project
-            // once: one start per project, and a later pane takes the window.
-            let key = if launch.fork_repo.is_some() { Some("fork".to_owned()) }
-                else if launch.once { Some(format!("{app}\n{target}")) } else { None };
-            let starting = match key {
-                Some(key) => {
-                    while STARTING.with_borrow(|s| s.contains(&key)) {
-                        let Some(state) = wanted(&weak, generation) else { return };
-                        state.borrow_mut().status = format!("Waiting for another {} to start…", launch.program.file_stem().unwrap_or_default().to_string_lossy());
-                        drop(state);
-                        cx.background_executor().timer(Duration::from_millis(100)).await;
-                    }
-                    // A start whose pane went away meanwhile left its window;
-                    // a Unity pane that got it keeps it until this one takes it.
+            // A program that opens a target once (Unity): one start per key,
+            // and a later pane takes the window.
+            let starting = if launch.once {
+                while STARTING.with_borrow(|s| s.contains(&key)) {
                     let Some(state) = wanted(&weak, generation) else { return };
-                    let left = take_orphan(&app, &target).or_else(|| if launch.once { held(&state, &app, &target) } else { None });
-                    if let Some(embedded) = left {
-                        let child = embedded.child as usize;
-                        show(&state, moved_to(embedded, host));
-                        drop(state);
-                        let _ = cx.update(|window, _| window.refresh());
-                        watch_loop(weak, generation, child, cx).await;
-                        return;
-                    }
+                    state.borrow_mut().status = format!("Waiting for another {} to start…", launch.program.file_stem().unwrap_or_default().to_string_lossy());
                     drop(state);
-                    let starting = Starting::new(key);
-                    if let Some(folder) = launch.fork_repo.clone() && let Err(error) = cx.background_executor().spawn(async move { super::prepare_fork(&folder) }).await {
-                        tracing::warn!(error = format!("{error:#}"), "cannot give Fork the pane's repository");
-                    }
-                    Some(starting)
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
                 }
-                None => None,
-            };
+                // A start whose pane went away meanwhile left its window; a
+                // pane that got it keeps it until this one takes it.
+                let Some(state) = wanted(&weak, generation) else { return };
+                if let Some((embedded, origin)) = kept(&state, &key) {
+                    let child = embedded.child as usize;
+                    show(&state, moved_to(embedded, host), origin);
+                    drop(state);
+                    let _ = cx.update(|window, _| window.refresh());
+                    watch_loop(weak, generation, child, cx).await;
+                    return;
+                }
+                Some(Starting::new(key.clone()))
+            } else { None };
             let Some(state) = wanted(&weak, generation) else { return };
             let before = program_windows(&launch);
             // A pane that goes away (a mod restarting) leaves a started
             // process of its own: its window waits for the pane's next state.
             let mut abandoned = false;
-            // Unity opens a project once: an editor already on it comes into
-            // the pane instead.
+            // A program that opens a target once: a window already on it
+            // comes into the pane instead.
             let open = if launch.once { showing(&before, &launch.title) } else { None };
             let found = if let Some(hwnd) = open { drop(state); hwnd } else {
                 let foreground = unsafe { GetForegroundWindow() };
@@ -883,9 +613,9 @@ mod win {
                     let mut now = program_windows(&launch);
                     if launch.own_process { now.retain(|&hwnd| window_pid(hwnd) == pid); }
                     if let Some(&hwnd) = now.iter().find(|h| !before.contains(h)) { break hwnd; }
-                    // A program that already shows this folder brings that window
-                    // to the front instead of opening another. Windows may not let
-                    // it come forward: then it is found by its title.
+                    // A program that already shows this target brings that
+                    // window to the front instead of opening another. Windows
+                    // may not let it come forward: then it is found by its title.
                     let front = unsafe { GetForegroundWindow() };
                     if opened.elapsed() > Duration::from_secs(2) && front != foreground && now.contains(&front) { break front; }
                     if opened.elapsed() > Duration::from_secs(3) && let Some(hwnd) = showing(&now, &launch.title) { break hwnd; }
@@ -909,19 +639,12 @@ mod win {
             // The container stays hidden until the crop is known.
             embedded.crop = cx.background_executor().spawn(async move { measure(child as HWND) }).await;
             let state = if abandoned { None } else { wanted(&weak, generation) };
-            let Some(state) = state else { orphan(&app, &target, embedded); return };
+            let Some(state) = state else { orphan(&key, embedded); return };
             drop(starting);
-            show(&state, embedded);
+            show(&state, embedded, "new");
             let _ = cx.update(|window, _| window.refresh());
             apply(&state);
             focus::give(found);
-            // The launch's line, then a file asked for while the window
-            // started, the last in front; again while the window may still be
-            // connecting to its machine (vscode_goto).
-            let asked = state.borrow_mut().goto.take();
-            let uris = place.into_iter().chain(asked).collect();
-            let window = state.borrow().embedded.as_ref().map(new_window);
-            super::vscode_goto(&launch.program, uris, window);
             // Only the pane holds its state: closing the pane drops it, and
             // with it the window.
             drop(state);
@@ -930,9 +653,8 @@ mod win {
     }
 
     thread_local! {
-        /// Starts that must not overlap: "fork" while a Fork (which reads its
-        /// settings at start) starts, "unity\n<project>" while a Unity Editor
-        /// opens that project.
+        /// The keys of `once` launches starting now: a second one with the
+        /// same key waits, then takes the first one's window.
         static STARTING: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -974,15 +696,19 @@ mod win {
         Some(state)
     }
 
-    fn show(state: &State, embedded: Embedded) {
+    fn show(state: &State, embedded: Embedded, origin: &'static str) {
         let mut app = state.borrow_mut();
         app.opening = false;
         app.embedded = Some(embedded);
+        app.origin = Some(origin);
         app.status = "Hidden while its pane is covered.".into();
     }
 
-    fn take_orphan(app: &str, target: &str) -> Option<Embedded> {
-        ORPHANS.with_borrow_mut(|o| o.iter().position(|(a, t, _, _)| a == app && t == target).map(|i| o.remove(i).2))
+    /// A window with this key that is already open: one a restarted copy of
+    /// the mod left ("restart"), else one another pane shows ("pane").
+    fn kept(state: &State, key: &str) -> Option<(Embedded, &'static str)> {
+        let left = ORPHANS.with_borrow_mut(|o| o.iter().position(|(k, _, _)| k == key).map(|i| o.remove(i).1));
+        left.map(|e| (e, "restart")).or_else(|| held(state, key).map(|e| (e, "pane")))
     }
 
     fn moved_to(mut embedded: Embedded, host: HWND) -> Embedded {
@@ -993,14 +719,14 @@ mod win {
         embedded
     }
 
-    /// The window another live state of the same program and target holds,
-    /// taken from it. One pane per project: the newest one shows its window.
-    fn held(state: &State, app: &str, target: &str) -> Option<Embedded> {
+    /// The window another live state with the same key holds, taken from
+    /// it. One pane per key: the newest one shows its window.
+    fn held(state: &State, key: &str) -> Option<Embedded> {
         let other = super::APPS.with_borrow(|apps| {
             apps.iter().filter_map(std::rc::Weak::upgrade).find(|other| {
                 if Rc::ptr_eq(other, state) { return false; }
                 let o = other.borrow();
-                o.app == app && o.target == target && o.embedded.is_some()
+                o.key == key && o.embedded.is_some()
             })
         })?;
         let mut o = other.borrow_mut();
@@ -1096,20 +822,13 @@ mod win {
         }
     }
 
-    /// When Herdr adopted a window, and what it was handed: for files handed
-    /// to VS Code while the window may still be connecting to its machine.
-    pub(super) fn new_window(embedded: &Embedded) -> super::NewWindow {
-        (embedded.adopted, embedded.handed.clone())
-    }
-
-    /// The one window whose title has `part` as a " - "-separated part.
+    /// The one window whose title shows `part` (`title_shows`).
     fn showing(windows: &[HWND], part: &str) -> Option<HWND> {
         if part.is_empty() { return None; }
         let matches: Vec<HWND> = windows.iter().copied().filter(|&hwnd| {
             let mut text = [0u16; 512];
             let len = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
-            let title = String::from_utf16_lossy(&text[..len.max(0) as usize]);
-            title.split(" - ").any(|p| p == part || p.strip_prefix(part).is_some_and(|rest| rest.starts_with(" [")))
+            super::title_shows(&String::from_utf16_lossy(&text[..len.max(0) as usize]), part)
         }).collect();
         (matches.len() == 1).then(|| matches[0])
     }
@@ -1142,7 +861,7 @@ mod win {
         }
         let program = std::fs::canonicalize(&launch.program).map(|p| p.to_string_lossy().trim_start_matches(r"\\?\").to_owned())
             .unwrap_or_else(|_| launch.program.to_string_lossy().into_owned());
-        let mut search = Search { class: launch.class, menu: launch.menu_window, program, found: Vec::new(), checked: Vec::new() };
+        let mut search = Search { class: &launch.class, menu: launch.menu_window, program, found: Vec::new(), checked: Vec::new() };
         unsafe { EnumWindows(Some(visit), (&raw mut search) as LPARAM) };
         search.found
     }
@@ -1207,7 +926,7 @@ mod win {
         };
         if menu { cx.background_executor().spawn(async move { reparent() }).await } else { reparent() }
         focus::adopt(host, container, hwnd, menu);
-        Embedded { child: hwnd, container, style, ex_style, crop: Crop::default(), applied: None, popup: menu, hidden: Vec::new(), adopted: Instant::now(), handed: Default::default() }
+        Embedded { child: hwnd, container, style, ex_style, crop: Crop::default(), applied: None, popup: menu, hidden: Vec::new(), adopted: std::time::SystemTime::now() }
     }
 
     /// Give the container the pane's latest geometry, visibility and holes.
@@ -1486,78 +1205,66 @@ mod win {
 
 #[cfg(test)]
 mod tests {
-    use super::{class_matches, editor_version, fork_workspace, safe_directory, unity_version, vscode_with_file, windows_folder};
-    use serde_json::json;
+    use super::{Description, class_matches, title_shows};
+    use gpui_shell::ComponentDataValue as V;
 
-    #[test]
-    fn fork_starts_in_a_workspace_of_one_repository() {
-        let mut settings = json!({
-            "Theme": 1,
-            "Workspaces": {
-                "All": [
-                    { "Name": "Work", "Repositories": [r"C:\work"], "ActiveRepository": r"C:\work" },
-                    { "Name": "Herdr", "Repositories": [r"C:\old", r"C:\other"], "ActiveRepository": r"C:\old", "Color": 3 },
-                ],
-                "ActiveWorkspace": "Work",
-                "ShowInTitle": false,
-            },
-        });
-        fork_workspace(&mut settings, r"C:\new").unwrap();
-        assert_eq!(settings, json!({
-            "Theme": 1,
-            "Workspaces": {
-                "All": [
-                    { "Name": "Work", "Repositories": [r"C:\work"], "ActiveRepository": r"C:\work" },
-                    { "Name": "Herdr", "Repositories": [r"C:\new"], "ActiveRepository": r"C:\new", "Color": 3 },
-                ],
-                "ActiveWorkspace": "Herdr",
-                "ShowInTitle": false,
-            },
-        }));
+    fn object(fields: &[(&str, V)]) -> V {
+        V::Object(fields.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect())
+    }
 
-        let mut fresh = json!({ "Theme": 1 });
-        fork_workspace(&mut fresh, r"\\wsl.localhost\Ubuntu\root\app").unwrap();
-        assert_eq!(fresh["Workspaces"], json!({
-            "All": [{ "Name": "Herdr", "Repositories": [r"\\wsl.localhost\Ubuntu\root\app"], "ActiveRepository": r"\\wsl.localhost\Ubuntu\root\app" }],
-            "ActiveWorkspace": "Herdr",
-        }));
-        assert!(fork_workspace(&mut json!([]), r"C:\new").is_err());
+    fn strings(items: &[&str]) -> V {
+        V::Array(items.iter().map(|s| V::String((*s).to_owned())).collect())
     }
 
     #[test]
-    fn wsl_repositories_become_safe_directories() {
-        assert_eq!(safe_directory(r"\\wsl.localhost\Ubuntu\root\dev\herdr-app").as_deref(), Some("%(prefix)///wsl.localhost/Ubuntu/root/dev/herdr-app"));
-        assert_eq!(safe_directory(r"\\server\share\app").as_deref(), Some("%(prefix)///server/share/app"));
-        assert_eq!(safe_directory(r"C:\dev\app"), None);
+    fn a_launch_description_comes_from_plain_data() {
+        let description = Description::parse(&object(&[
+            ("program", strings(&["C:/a/Code.exe"])),
+            ("args", strings(&["--new-window", "C:/dev/app"])),
+            ("class", V::String("Chrome_WidgetWin_1".into())),
+            ("title", V::String("app".into())),
+            ("ownProcess", V::Boolean(true)),
+            ("menuWindow", V::Boolean(true)),
+            ("once", V::Boolean(true)),
+            ("wait", V::Number(1800.0)),
+            ("missing", V::String("VS Code is not installed".into())),
+        ])).unwrap();
+        assert_eq!(description.program, ["C:/a/Code.exe"]);
+        assert_eq!(description.args, ["--new-window", "C:/dev/app"]);
+        assert!(description.own_process && description.menu_window && description.once);
+        assert_eq!(description.wait, 1800.0);
+
+        let minimal = Description::parse(&object(&[("program", strings(&["a.exe"])), ("class", V::String("C".into()))])).unwrap();
+        assert!(minimal.args.is_empty() && minimal.title.is_empty() && !minimal.own_process && !minimal.once && !minimal.menu_window);
+        assert_eq!(minimal.wait, 20.0);
+
+        let error = |fields: &[(&str, V)]| Description::parse(&object(fields)).unwrap_err().to_string();
+        assert!(error(&[("class", V::String("C".into()))]).contains("program"));
+        assert!(error(&[("program", strings(&[" "])), ("class", V::String("C".into()))]).contains("names no program"));
+        assert!(error(&[("program", strings(&["a.exe"])), ("class", V::String(String::new()))]).contains("window class"));
+        assert!(error(&[("program", strings(&["a.exe"])), ("class", V::String("C".into())), ("wait", V::Number(0.0))]).contains("wait"));
+        // A misspelled field is an error, not a silent default.
+        assert!(error(&[("program", strings(&["a.exe"])), ("class", V::String("C".into())), ("own_process", V::Boolean(true))]).contains("own_process"));
+        assert!(Description::parse(&V::Null).is_err());
     }
 
     #[test]
-    fn folders_become_windows_paths() {
-        assert_eq!(windows_folder(r"C:\dev\app").unwrap(), r"C:\dev\app");
-        assert_eq!(windows_folder("file:///C:/dev/my%20app").unwrap(), r"C:\dev\my app");
-        assert_eq!(windows_folder("file://server/share/app").unwrap(), r"\\server\share\app");
-        assert_eq!(windows_folder("vscode-remote://wsl+Ubuntu/root/dev/c++").unwrap(), r"\\wsl.localhost\Ubuntu\root\dev\c++");
-        assert_eq!(windows_folder("vscode-remote://wsl%2BUbuntu-24.04/root").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\root");
-        assert!(windows_folder("vscode-remote://ssh-remote+vps/root/app").is_err());
-        assert!(windows_folder("  ").is_err());
-        assert_eq!(windows_folder(r"C:\dev\app\").unwrap(), r"C:\dev\app");
-        assert_eq!(windows_folder("file:///C:/").unwrap(), r"C:\");
-    }
-
-    #[test]
-    fn a_new_vscode_window_gets_its_folder_and_file_as_paths() {
-        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let wsl = "vscode-remote://wsl+Ubuntu/root/my%20app";
-        assert_eq!(vscode_with_file(wsl, &format!("{wsl}/src/a.rs:42:7")),
-            Some((args(&["--new-window", "--remote", "wsl+Ubuntu", "/root/my app", "/root/my app/src/a.rs"]), Some(format!("{wsl}/src/a.rs:42:7")))));
-        assert_eq!(vscode_with_file("vscode-remote://ssh-remote%2Bvps/srv", "vscode-remote://ssh-remote%2Bvps/srv/a.rs"),
-            Some((args(&["--new-window", "--remote", "ssh-remote+vps", "/srv", "/srv/a.rs"]), None)));
-        assert_eq!(vscode_with_file("file:///C:/dev/app", "file:///C:/dev/app/a.rs:3"),
-            Some((args(&["--new-window", r"C:\dev\app", r"C:\dev\app\a.rs"]), Some("file:///C:/dev/app/a.rs:3".into()))));
-        assert_eq!(vscode_with_file(r"C:\dev\app", "file:///C:/dev/app/a.rs").map(|(a, _)| a), Some(args(&["--new-window", r"C:\dev\app", r"C:\dev\app\a.rs"])));
-        // A file on another machine, or a URI VS Code takes no path for, goes as a URI.
-        assert_eq!(vscode_with_file(wsl, "file:///C:/dev/a.rs"), None);
-        assert_eq!(vscode_with_file("vscode-vfs://github/a/b", "vscode-vfs://github/a/b/c.rs"), None);
+    fn the_first_program_path_that_exists_runs() {
+        let dir = std::env::temp_dir().join(format!("herdr-native-app-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("present.exe");
+        std::fs::write(&present, b"").unwrap();
+        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let described = |program: Vec<String>, missing: Option<&str>| Description {
+            program, args: Vec::new(), class: "C".into(), title: String::new(), own_process: false, once: false,
+            menu_window: false, wait: 20.0, missing: missing.map(str::to_owned),
+        };
+        let absent = path(&dir.join("absent.exe"));
+        assert_eq!(described(vec![absent.clone(), path(&present), path(&dir)], None).program().unwrap(), present);
+        // A folder is no program.
+        assert!(described(vec![path(&dir)], None).program().unwrap_err().to_string().contains("None of these programs exists"));
+        assert_eq!(described(vec![absent], Some("Fork is not installed")).program().unwrap_err().to_string(), "Fork is not installed");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1569,16 +1276,31 @@ mod tests {
     }
 
     #[test]
-    fn unity_projects_name_their_editor_version() {
-        let text = "m_EditorVersion: 6000.6.6f1\nm_EditorVersionWithRevision: 6000.6.6f1 (d20c9ac777da)\n";
-        assert_eq!(editor_version(text).as_deref(), Some("6000.6.6f1"));
-        assert_eq!(editor_version("m_EditorVersion:   \n"), None);
-        let project = std::env::temp_dir().join(format!("herdr-unity-test-{}", std::process::id()));
-        std::fs::create_dir_all(&project).unwrap();
-        assert!(unity_version(&project).unwrap_err().to_string().contains("is not a Unity project"));
-        std::fs::create_dir(project.join("ProjectSettings")).unwrap();
-        std::fs::write(project.join("ProjectSettings").join("ProjectVersion.txt"), "m_EditorVersion: 2022.3.62f3\r\n").unwrap();
-        assert_eq!(unity_version(&project).unwrap(), "2022.3.62f3");
-        std::fs::remove_dir_all(&project).unwrap();
+    fn the_shipped_mods_call_only_methods_the_state_has() {
+        let registry = crate::browser::components();
+        let state = registry.states().find(|s| s.export() == "NativeAppState").expect("NativeAppState is registered");
+        let methods: Vec<&str> = state.methods().iter().map(|m| m.name()).collect();
+        let call = fancy_regex::Regex::new(r"\bapp\??\.(\w+)\(").unwrap();
+        for (name, source) in [
+            ("vscode", include_str!("../../defaults/mods/vscode/main.js")),
+            ("fork", include_str!("../../defaults/mods/fork/main.js")),
+            ("unity", include_str!("../../defaults/mods/unity/main.js")),
+        ] {
+            let called: Vec<&str> = call.captures_iter(source).map(|c| c.unwrap().get(1).unwrap().as_str()).collect();
+            assert!(called.contains(&"open") && called.contains(&"reopen"), "{name}: {called:?}");
+            for method in called {
+                assert!(methods.contains(&method), "the {name} mod calls NativeAppState's {method}(), which it lacks");
+            }
+        }
+    }
+
+    #[test]
+    fn a_title_shows_a_target_as_one_of_its_parts() {
+        assert!(title_shows("main.rs - app - Visual Studio Code", "app"));
+        assert!(title_shows("main.rs - app [WSL: Ubuntu] - Visual Studio Code", "app"));
+        assert!(title_shows("Game - Win64 - Unity 6000.6.6f1", "Game"));
+        assert!(!title_shows("main.rs - my-app - Visual Studio Code", "app"));
+        assert!(!title_shows("app2 - Visual Studio Code", "app"));
+        assert!(!title_shows("anything", ""));
     }
 }
