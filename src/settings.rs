@@ -357,8 +357,11 @@ fn resolve(p: &Palette, overrides: &BTreeMap<String, String>) -> Theme {
     for (i, c) in p.ansi.iter().enumerate() {
         t.insert(format!("ansi{i}"), hex(*c));
     }
+    // Overrides are reported when invalid; only valid ones apply, written `#hex` like the rest.
     for (k, v) in overrides {
-        t.insert(k.clone(), v.clone());
+        if parse_hex(v).is_some() {
+            t.insert(k.clone(), format!("#{}", v.trim().trim_start_matches('#').to_ascii_lowercase()));
+        }
     }
     t
 }
@@ -878,6 +881,26 @@ mod tests {
         assert_eq!((own.font_family.as_str(), own.font_size, own.ui_font_family.as_str(), own.theme.as_str()), ("layout", 14.0, "layout-ui", "ink"));
         assert_eq!(own.colors["accent"], "#abcdef");
         assert_eq!(own.colors["text"], "#ffffff");
+    }
+
+    #[test]
+    fn mods_get_theme_colors_as_the_hex_values_their_declarations_promise() {
+        let overrides: BTreeMap<String, String> = [
+            ("accent".to_string(), "ABCDEF".to_string()),
+            ("hover".to_string(), " #FFFFFF0E ".to_string()),
+            ("done".to_string(), "blue".to_string()),
+        ]
+        .into();
+        let theme = resolve(&GRAPHITE, &overrides);
+        assert_eq!(theme["accent"], "#abcdef", "a valid override is written as #hex");
+        assert_eq!(theme["hover"], "#ffffff0e");
+        assert_eq!(theme["done"], resolve(&GRAPHITE, &BTreeMap::new())["done"], "an invalid override does not replace the color");
+        for (name, value) in &theme {
+            assert!(value.starts_with('#') && parse_hex(value).is_some(), "{name} = {value:?} is not a #hex color");
+        }
+        let declarations = crate::mods::DECLARATIONS;
+        assert!(declarations.contains("export function theme(): Record<string, import(\"gpui-kit\").Color>;"));
+        assert!(declarations.contains("colors: Record<string, import(\"gpui-kit\").Color> }[];"));
     }
 
     #[test]

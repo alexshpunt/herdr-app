@@ -298,6 +298,9 @@ impl TextView {
     /// The `scrollable` mode used for large content,
     /// will show scrollbar, but requires the parent to have a fixed height,
     /// and use [`gpui::list`] to render the content in a virtualized way.
+    /// The view keeps wheel events over it, even at either end of its
+    /// content, so an enclosing scroll container does not move while the
+    /// pointer is on the view.
     ///
     /// ## If false to fit content
     ///
@@ -718,7 +721,14 @@ impl Element for TextView {
             .id(("text-view-scroll", state.entity_id()))
             .key_context("TextView")
             .track_focus(&focus_handle)
-            .when(self.scrollable, |this| this.size_full())
+            .when(self.scrollable, |this| {
+                // gpui's list scrolls but lets the wheel event bubble; a nested
+                // viewport keeps it, so the container around it stays put.
+                // Registered on the wrapper, it runs after the list (and after
+                // a scrolling code block) in the bubble phase.
+                this.size_full()
+                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            })
             .when_some(max_lines_cap, |this, cap| this.max_h(cap).overflow_hidden())
             .relative()
             .text_color(foreground)
@@ -1853,6 +1863,92 @@ mod tests {
             draw(cx);
             assert_ne!(edges(cx).1, paragraph_top, "actions: {actions}");
         }
+    }
+
+    /// A short scrollable view inside a taller scrolling column, as in a side
+    /// panel: content above and below makes the column itself scrollable.
+    struct NestedScrollRoot {
+        text_view: Entity<TextViewState>,
+        outer: gpui::ScrollHandle,
+    }
+
+    impl Render for NestedScrollRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("outer")
+                .w(px(320.))
+                .h(px(300.))
+                .overflow_y_scroll()
+                .track_scroll(&self.outer)
+                .child(div().h(px(100.)))
+                .child(
+                    div()
+                        .h(px(120.))
+                        .flex_none()
+                        .child(TextView::new(&self.text_view).scrollable(true)),
+                )
+                .child(div().h(px(600.)))
+        }
+    }
+
+    #[gpui::test]
+    fn scrollable_view_keeps_the_wheel_from_an_enclosing_scroll_container(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::init);
+        let markdown = (0..60).map(|i| format!("Line {i}\n\n")).collect::<String>();
+        let outer = gpui::ScrollHandle::new();
+        let (root, cx) = cx.add_window_view(|_, cx| NestedScrollRoot {
+            text_view: cx.new(|cx| TextViewState::markdown(&markdown, cx)),
+            outer: outer.clone(),
+        });
+        let cx: &mut VisualTestContext = cx;
+        let draw = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.run_until_parked();
+        };
+        let list_top = |cx: &mut VisualTestContext| {
+            root.read_with(cx, |root, cx| {
+                let top = root.text_view.read(cx).list_state().logical_scroll_top();
+                (top.item_ix, top.offset_in_item)
+            })
+        };
+        let wheel = |cx: &mut VisualTestContext, dy: Pixels| {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: point(px(40.), px(160.)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.), dy)),
+                ..Default::default()
+            });
+        };
+        draw(cx);
+        let start = list_top(cx);
+
+        // Scrolling down moves the view's content, not the column.
+        wheel(cx, px(-40.));
+        draw(cx);
+        assert_ne!(list_top(cx), start, "the view itself scrolls");
+        assert_eq!(outer.offset().y, px(0.), "the enclosing column stays put");
+
+        // Past the bottom of the view's content the wheel still stays with it.
+        for _ in 0..40 {
+            wheel(cx, px(-80.));
+            draw(cx);
+        }
+        let bottom = list_top(cx);
+        wheel(cx, px(-80.));
+        draw(cx);
+        assert_eq!(list_top(cx), bottom, "the view is at its end");
+        assert_eq!(outer.offset().y, px(0.), "an edge does not hand the wheel to the column");
+
+        // Outside the view the column scrolls as usual.
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: point(px(40.), px(260.)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+        draw(cx);
+        assert!(outer.offset().y < px(0.), "the column scrolls outside the view");
     }
 
     /// Draw a Markdown table with a `table_actions` hook installed, and return

@@ -380,6 +380,8 @@ pub struct AppWindow {
     pane_grip_rows: RefCell<HashMap<String, f32>>,
     /// Each side panel block's scroll position.
     side_scroll: RefCell<HashMap<String, ScrollHandle>>,
+    /// Side panel sections folded to their headings, by mod name; kept across starts.
+    side_folded: HashSet<String>,
     /// A window (`kind: "window"` overlay) being pressed or dragged.
     win_drag: Option<movable::WinDrag>,
     float_anims: HashMap<String, floats::FloatAnim>,
@@ -515,6 +517,7 @@ impl AppWindow {
             pane_grip_hover: None,
             pane_grip_rows: RefCell::default(),
             side_scroll: RefCell::default(),
+            side_folded: side_panel::folded_sections(),
             win_drag: None,
             float_anims: HashMap::new(),
             float_reveal: HashMap::new(),
@@ -6506,6 +6509,20 @@ mod tests {
         assert!(shown.iter().all(|s| s.left() >= panel.left() && s.right() <= panel.right()));
         assert!(cx.debug_bounds("side-section-plain").is_none(), "only registered mods are sections");
         assert!(view.update(cx, |this, _| this.copies.contains_key("side-panel-body/sec-late")));
+
+        // A heading folds its section alone and saves the fold; unfolding restores the content.
+        let heading_bounds = cx.debug_bounds("side-section-heading-sec-early").expect("the Alpha heading is shown");
+        cx.simulate_click(heading_bounds.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("side-section-sec-early").unwrap().size.height, heading, "a folded section is its heading");
+        assert_eq!(cx.debug_bounds("side-section-sec-late").unwrap().size.height, heading + crate::settings::z(120.0), "other sections stay open");
+        assert!(view.update(cx, |this, _| this.copies.contains_key("side-panel-body/sec-early")), "a folded section keeps its copy");
+        assert!(super::side_panel::folded_sections().contains("sec-early"), "the fold is saved");
+        let heading_bounds = cx.debug_bounds("side-section-heading-sec-early").unwrap();
+        cx.simulate_click(heading_bounds.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("side-section-sec-early").unwrap().size.height, heading + crate::settings::z(80.0));
+        assert!(super::side_panel::folded_sections().is_empty());
 
         // workflow.open toggles the panel where the layout has one, without a dock.
         view.update_in(cx, |this, window, cx| this.dispatch("workflow.open", &json!({}), true, window, cx));
