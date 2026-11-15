@@ -6503,6 +6503,7 @@ mod tests {
             .map(|name| cx.debug_bounds(name).unwrap_or_else(|| panic!("{name} is shown")))
             .collect();
         assert!(shown[0].bottom() <= shown[1].top() && shown[1].bottom() <= shown[2].top(), "sections stack in order: {shown:?}");
+        assert_eq!(shown[1].top() - shown[0].bottom(), crate::settings::z(14.0), "open sections keep a gap between them");
         let heading = crate::settings::z(31.0);
         assert_eq!(shown[0].size.height, heading + crate::settings::z(80.0), "a section is its heading plus its content's height");
         assert_eq!(shown[2].size.height, heading + crate::settings::z(120.0));
@@ -6515,6 +6516,8 @@ mod tests {
         cx.simulate_click(heading_bounds.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         assert_eq!(cx.debug_bounds("side-section-sec-early").unwrap().size.height, heading, "a folded section is its heading");
+        assert_eq!(cx.debug_bounds("side-section-sec-early").unwrap().bottom(), cx.debug_bounds("side-section-frame-workflow").unwrap().top(),
+            "a folded section adds no spacing below its heading");
         assert_eq!(cx.debug_bounds("side-section-sec-late").unwrap().size.height, heading + crate::settings::z(120.0), "other sections stay open");
         assert!(view.update(cx, |this, _| this.copies.contains_key("side-panel-body/sec-early")), "a folded section keeps its copy");
         assert!(super::side_panel::folded_sections().contains("sec-early"), "the fold is saved");
