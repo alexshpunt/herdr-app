@@ -21,6 +21,11 @@ on:
       - vendor/**
       - defaults/**
       - assets/**
+      # Embedded with include_str!: the Pi extension src/pi_install.rs installs,
+      # the core version src/hc.rs pins, and the update notes.
+      - integrations/orchestration/**
+      - distribution/core-version
+      - CHANGELOG.md
       - LICENSE
       - THIRD-PARTY-NOTICES
       - scripts/fork-package
