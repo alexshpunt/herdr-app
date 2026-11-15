@@ -2,13 +2,28 @@
 //! register with `"side_panel": { "title", "order" }` in their mod.json, in
 //! one scrolling column. Each section is one copy of its mod, slot
 //! `<block>/<mod>`, as tall as its content, under a heading drawn like the
-//! sidebar's list headings.
+//! sidebar's list headings. Clicking a heading folds its section to the
+//! heading; folds are kept in `side-panel.json` across starts.
 
 use super::*;
 use gpui_base::{Scrollbar, ScrollbarMode};
 
 /// The node the layout shows and hides as the side panel (its toggle).
 pub(super) const PANEL: &str = "side-panel";
+
+fn folds_path() -> PathBuf {
+    file("side-panel.json")
+}
+
+/// The sections folded to their headings, by mod name.
+pub(super) fn folded_sections() -> HashSet<String> {
+    std::fs::read_to_string(folds_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.get("folded").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
 
 /// A section's slot: one copy per side panel block and mod.
 pub(super) fn section_slot(block: &str, name: &str) -> String {
@@ -63,6 +78,19 @@ impl AppWindow {
         })
     }
 
+    /// Folds a section to its heading or shows it again. Its copy keeps running.
+    pub(super) fn toggle_side_section(&mut self, name: &str, cx: &mut Context<Self>) {
+        if !self.side_folded.remove(name) {
+            self.side_folded.insert(name.to_string());
+        }
+        let mut folded: Vec<&String> = self.side_folded.iter().collect();
+        folded.sort();
+        if let Ok(s) = serde_json::to_string_pretty(&json!({ "folded": folded })) {
+            let _ = crate::persist::write_atomic(&folds_path(), s + "\n");
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_side_panel(&self, n: &Node, cx: &mut Context<Self>) -> AnyElement {
         let handle = self
             .side_scroll
@@ -75,6 +103,9 @@ impl AppWindow {
             .into_iter()
             .map(|(name, title)| {
                 let selector = format!("side-section-{name}");
+                let heading = format!("side-section-heading-{name}");
+                let folded = self.side_folded.contains(&name);
+                let toggle = name.clone();
                 div()
                     .id(SharedString::from(selector.clone()))
                     .debug_selector(move || selector)
@@ -84,6 +115,13 @@ impl AppWindow {
                     .flex_col()
                     .child(
                         div()
+                            .id(SharedString::from(heading.clone()))
+                            .debug_selector(move || heading)
+                            .cursor_pointer()
+                            .gap(settings::z(5.0))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_side_section(&toggle, cx)
+                            }))
                             .h(settings::z(31.0))
                             .pl(settings::z(16.0))
                             .pr(settings::z(10.0))
@@ -91,15 +129,18 @@ impl AppWindow {
                             .items_center()
                             .text_size(settings::z(11.5))
                             .text_color(c("dim"))
+                            .child(if folded { "▸" } else { "▾" })
                             .child(title),
                     )
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_col()
-                            .child(self.render_slot(&section_slot(&n.id, &name), cx)),
-                    )
+                    .when(!folded, |d| {
+                        d.child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .child(self.render_slot(&section_slot(&n.id, &name), cx)),
+                        )
+                    })
                     .into_any_element()
             })
             .collect();

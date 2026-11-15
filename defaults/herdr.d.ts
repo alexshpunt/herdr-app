@@ -316,12 +316,13 @@ export function placement(): {
  *  chrome (sidebars and bars), popover, raised, hover, selected, border, input, foreground,
  *  muted, dim, accent, accent_foreground, solid and solid_foreground (a primary button: ink on
  *  paper, paper on ink), selection, working, blocked, done, idle, unknown, ansi0..ansi15.
- *  Light and dark themes name the same colors, so a mod that uses them follows both. */
-export function theme(): Record<string, string>;
+ *  Light and dark themes name the same colors, so a mod that uses them follows both.
+ *  Each value is `#rrggbb` or `#rrggbbaa`, so it goes straight into `text_color`, `bg` and the like. */
+export function theme(): Record<string, import("gpui-kit").Color>;
 
 /** Every theme `app.theme` can use (presets, then `themes/*.json`), each with its colors and
  *  whether it's light. */
-export function themes(): { name: string; light: boolean; colors: Record<string, string> }[];
+export function themes(): { name: string; light: boolean; colors: Record<string, import("gpui-kit").Color> }[];
 
 /** The font families on this machine, by name. */
 export function fonts(): string[];
