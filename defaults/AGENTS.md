@@ -564,6 +564,8 @@ block stacks the sections mods register in `mod.json`:
 `"side_panel": { "title": "Workflow", "order": 0 }`. Each section is one copy
 of the mod, as tall as its content, under its `title` (the folder name when
 missing), in `order` then title order; the panel scrolls them together.
+Clicking a heading folds that section to its heading (its copy keeps running)
+or shows it again; folds are kept in `side-panel.json` across starts.
 A section gets `props()` = null, so a mod that also opens elsewhere tells them
 apart by `props()?.overlay`. Keep sections free of their own titles, close
 buttons and full-height scroll areas. Workflow is the shipped section.
