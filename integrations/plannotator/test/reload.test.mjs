@@ -25,7 +25,7 @@ test('Pi reload uses the updated browser hook when its own hook was already conf
     const modulePath = path.join(root, 'open.mjs');
     await writeFile(modulePath, browserModule('first'));
     for (const key of keys) delete process.env[key];
-    process.env.PLANNOTATOR_BROWSER = modulePath;
+    process.env.PLANNOTATOR_BROWSER = path.join(root, process.platform === 'win32' ? 'open.cmd' : 'open.mjs');
     process.env.HERDR_PLANNOTATOR_SOCKET = path.join(root, 'previous.sock');
     const bus = createEventBus();
     const settings = SettingsManager.inMemory();
