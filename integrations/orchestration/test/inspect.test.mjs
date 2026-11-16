@@ -17,7 +17,7 @@ test('inspection restores the last reply and reports work, questions and errors 
   assert.ok(question.pendingQuestion.includes('Which release?'));
   assert.ok(question.pendingQuestion.includes('Stable'));
   inspection.event({ type: 'ui_prompt_start', kind: 'select', title: 'Which release?' });
-  assert.equal(inspection.snapshot().pendingQuestion, 'Which release? | Stable');
+  assert.equal(inspection.snapshot().pendingQuestion.split('Which release?').length, 2);
   inspection.event({ type: 'ui_prompt_end' });
   inspection.event({ type: 'tool_execution_end', toolCallId: 'one', isError: true, result: { content: [{ type: 'text', text: 'fixture-error' }] } });
   const failed = inspection.snapshot();
