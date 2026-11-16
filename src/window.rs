@@ -2466,7 +2466,7 @@ impl AppWindow {
         let mut moved = false;
         let reported = self.reported_folders(cx);
         for (addr, rec) in &self.live {
-            let cwd = reported.get(addr).cloned().or_else(|| live_folder(addr, rec));
+            let cwd = live_folder(addr, rec, reported.get(addr).map(String::as_str));
             let Some(cwd) = cwd else { continue };
             let busy = busy(rec);
             let last = self.folders_checked.get_mut(addr);
@@ -5364,12 +5364,23 @@ fn front_pid(rec: &Value) -> Option<u64> {
     rec.pointer("/foreground/pid").or_else(|| rec.get("pid")).and_then(Value::as_u64)
 }
 
-/// The core's live folder of what runs in a terminal (any machine), else the
-/// shell's process folder (this machine), else where it started.
-fn live_folder(addr: &str, rec: &Value) -> Option<String> {
-    rec.pointer("/foreground/cwd")
+/// The owning Pi's session folder, an OSC 7 report, or the process folder.
+fn live_folder(addr: &str, rec: &Value, reported: Option<&str>) -> Option<String> {
+    let project = rec.pointer("/labels/herdr.project")
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(|label| {
+            let pid = label.get("pid").and_then(Value::as_u64).filter(|pid| *pid > 0);
+            rec.get("state").and_then(Value::as_str) == Some("live")
+                && pid.is_some()
+                && (pid == rec.get("pid").and_then(Value::as_u64)
+                    || pid == rec.pointer("/foreground/pid").and_then(Value::as_u64))
+        })
+        .and_then(|label| label.get("cwd").and_then(Value::as_str).filter(|cwd| !cwd.is_empty()).map(str::to_owned));
+    project.or_else(|| reported.map(str::to_owned))
+        .or_else(|| rec.pointer("/foreground/cwd")
+        .and_then(Value::as_str)
+        .map(str::to_owned))
         // (a pid on another machine means nothing here)
         .or_else(|| rec.get("pid").and_then(Value::as_u64).filter(|_| !addr.contains('/')).and_then(crate::process_cwd::read).map(|p| p.to_string_lossy().into_owned()))
         .or_else(|| rec.get("cwd").and_then(Value::as_str).map(str::to_owned))
@@ -5863,6 +5874,25 @@ fn changed_asset_paths(home: &std::path::Path, changed: &[std::path::PathBuf]) -
 mod tests {
     use gpui::{div, point, px, size, Context, IntoElement, Render, TestAppContext, Window};
     use gpui::prelude::*;
+
+    #[test]
+    fn a_live_pi_session_folder_wins_over_its_process_folder() {
+        use super::live_folder;
+        use serde_json::json;
+        let mut rec = json!({"state":"live", "pid":10, "cwd":"C:\\launch", "foreground":{"pid":20,"cwd":"C:\\child"},
+            "labels":{"herdr.project":json!({"pid":10,"cwd":"C:\\destination"}).to_string()}});
+        assert_eq!(live_folder("remote/t1", &rec, None).as_deref(), Some("C:\\destination"));
+        assert_eq!(live_folder("remote/t1", &rec, Some("C:\\old-report")).as_deref(), Some("C:\\destination"));
+        rec["labels"]["herdr.project"] = json!(json!({"pid":20,"cwd":"C:\\foreground-session"}).to_string());
+        assert_eq!(live_folder("remote/t1", &rec, None).as_deref(), Some("C:\\foreground-session"));
+        for label in [json!({"pid":99,"cwd":"C:\\nested"}).to_string(), json!({"pid":10,"cwd":""}).to_string(), "invalid".into()] {
+            rec["labels"]["herdr.project"] = json!(label);
+            assert_eq!(live_folder("remote/t1", &rec, None).as_deref(), Some("C:\\child"));
+        }
+        rec["labels"]["herdr.project"] = json!(json!({"pid":10,"cwd":"C:\\destination"}).to_string());
+        rec["state"] = json!("finished");
+        assert_eq!(live_folder("remote/t1", &rec, None).as_deref(), Some("C:\\child"));
+    }
 
     #[test]
     fn a_reported_folder_holds_while_its_program_stays_in_front() {

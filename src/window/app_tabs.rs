@@ -340,7 +340,9 @@ impl AppWindow {
             let record = self.model.address_of(&near).and_then(|a| self.live.get(&a));
             let place = Place {
                 local: machine.as_deref().is_none_or(|m| locals.contains(m)),
+                terminal_live: record.is_some_and(|r| r["state"] == "live"),
                 labels: record.and_then(|r| r.get("labels")).unwrap_or(&Value::Null),
+                root_pid: record.and_then(|r| r.get("pid")).and_then(Value::as_u64),
                 foreground_pid: record
                     .and_then(|r| r.pointer("/foreground/pid"))
                     .and_then(Value::as_u64),

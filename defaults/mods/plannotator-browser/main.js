@@ -65,7 +65,8 @@ export default class PlannotatorBrowser extends View {
     const terminal = terminals().find((t) => t.address === address);
     let label = null;
     try { label = JSON.parse(terminal?.labels?.["herdr.plannotator"] ?? "null"); } catch { /* Below. */ }
-    if (!address || !label?.request || label.pid !== terminal?.foreground?.pid) {
+    if (!address || !label?.request || !Number.isSafeInteger(label.pid) || label.pid <= 0
+      || terminal?.state !== "live" || (label.pid !== terminal?.pid && label.pid !== terminal?.foreground?.pid)) {
       this.waiting = "No Pi with the Herdr Plannotator integration runs for this agent.";
       return;
     }

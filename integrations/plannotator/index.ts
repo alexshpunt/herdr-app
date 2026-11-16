@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { importFresh } from "./fresh-import.mjs";
-import { resolveHc } from "./hc.mjs";
+import { ownsTerminal, resolveHc } from "./hc.mjs";
 import { createReviewRouter } from "./router.mjs";
 import { createRequestNamer } from "./requested.mjs";
 import type { startBrowserIpc } from "./ipc.mjs";
@@ -44,7 +44,7 @@ export default function herdrPlannotator(pi: ExtensionAPI): void {
       const owner = await pi.exec(hc, ["get", terminal, "--json"], { timeout: 3000 });
       if (owner.code !== 0) throw new Error(owner.stderr.trim() || `${hc} get failed`);
       // Nested Pi processes inherit HC_*: only the terminal's own Pi publishes.
-      if (JSON.parse(owner.stdout).foreground?.pid !== process.pid) return;
+      if (!ownsTerminal(JSON.parse(owner.stdout), process.pid)) return;
       const label = { pid: process.pid, session, socket: server.socket, token: server.token, node: process.execPath, request: requestScript, hc };
       const result = await pi.exec(hc, ["label", terminal, `herdr.plannotator=${JSON.stringify(label)}`], { timeout: 3000 });
       if (result.code !== 0) throw new Error(result.stderr.trim() || "hc label failed");

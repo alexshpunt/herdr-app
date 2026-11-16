@@ -2,15 +2,18 @@
 // Starts a Plannotator command in the Pi of a herdr-core terminal on this
 // machine, for Herdr's tab bar: `request.mjs <terminal> <review|last> [hc]`.
 // The terminal's `herdr.plannotator` label, which that Pi publishes, says
-// how to reach it; it counts only while that Pi is the terminal's foreground.
+// how to reach it; it counts while that Pi owns the live terminal.
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { COMMANDS, requestCommand } from './ipc.mjs';
+import { ownsTerminal } from './hc.mjs';
 
 export function reachable(terminal) {
-    const label = JSON.parse(terminal?.labels?.['herdr.plannotator'] ?? 'null');
-    return label && label.pid === terminal.foreground?.pid ? label : null;
+    try {
+        const label = JSON.parse(terminal?.labels?.['herdr.plannotator'] ?? 'null');
+        return label && ownsTerminal(terminal, label.pid) ? label : null;
+    } catch { return null; }
 }
 
 // `hc`: herdr-core's CLI, by path when the caller's PATH lacks it (the label's `hc`).
