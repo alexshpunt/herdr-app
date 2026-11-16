@@ -35,6 +35,7 @@ test('installed Pi resolves all scoped models without a live Pi or provider cred
   await writeFile(path.join(root, 'settings.json'), settings);
   const before = await readdir(root);
   const catalog = run(root);
+  assert.equal(catalog.error, undefined);
   assert.deepEqual(catalog.models.map(model => model.id).sort(), ['herdr-catalog/first', 'herdr-catalog/second']);
   assert.equal(catalog.source, 'pi-settings');
   assert.equal(catalog.error, undefined);
@@ -44,6 +45,7 @@ test('installed Pi resolves all scoped models without a live Pi or provider cred
 test('unresolved scope patterns expose diagnostics instead of silently widening the catalog', () => fixture(async root => {
   await writeFile(path.join(root, 'settings.json'), JSON.stringify({ enabledModels: ['herdr-catalog/missing'] }));
   const catalog = run(root);
+  assert.equal(catalog.error, undefined);
   assert.deepEqual(catalog.models, []);
   assert.equal(catalog.diagnostics[0].pattern, 'herdr-catalog/missing');
 }));
