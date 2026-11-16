@@ -1014,6 +1014,7 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
 - `"side_panel": { "title": "Builds", "order": 10 }` in `mod.json` adds the mod
   as a section of every `{ "side_panel": true }` block (see Layouts): widgets,
   metrics and settings that sit beside the work.
+  Optional `feature: "workflow"` or `feature: "usage"` makes a section follow the corresponding integration switch; other sections are unaffected.
 - `"app"` in `mod.json` registers the mod as an app that opens as a tab of the
   agent it is opened for (`app.open`): one object, or a list for several apps
   of one mod. Each has an `id` (default: the mod's name), a `label`, an `icon`
