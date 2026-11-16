@@ -87,6 +87,7 @@ test('Pi reload uses updated browser and core helpers and republishes its bindin
     for (const [key, value] of prior) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
-    await rm(root, { recursive: true, force: true });
+    // Windows can retain a child's working-directory handle briefly after its receipt.
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
