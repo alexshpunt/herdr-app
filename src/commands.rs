@@ -103,7 +103,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("agent.remove", &[req("terminal"), req("pid"), req("session")], "End the inspected Pi agent and remove its dedicated single-pane tab. Rejects changed identities and tabs with sibling panes."),
     cmd("workflow.get", &[], "Read the persisted Features and Bugs workflow profiles, including their primary model, startup-only fallback model, and thinking level."),
     cmd("workflow.set", &[req("profile"), req("model"), opt("fallbackModel"), opt("thinking")], "Update one workflow profile atomically. Models use provider/model ids; omit fallbackModel to keep it, or pass null to disable it. Existing agents keep their model."),
-    cmd("workflow.models", &[opt("machine")], "Read live Pi model pickers for one configured machine (default: the selected space's; empty string: this computer). Reports missing or stale catalogs instead of fabricating model availability, plus extension installation status."),
+    cmd("workflow.models", &[opt("machine")], "Read Pi's configured model scope on one machine without a running Pi (default: the selected space's; empty string: this computer). Returns a cached snapshot with loading, diagnostics and errors, supplemented by current live Pi catalogs, plus extension installation status. Model selection does not prove launch availability."),
     cmd("workflow.open", &[], "Toggle the right side panel with the Workflow settings section. Layouts without a side panel toggle a Workflow dock instead."),
     cmd("app.help", &[], "Toggle the keys dialog."),
     cmd("app.welcome", &[], "Show the welcome again."),

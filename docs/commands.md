@@ -552,7 +552,7 @@ Update one workflow profile atomically. Models use provider/model ids; omit fall
 
 ## `workflow.models`
 
-Read live Pi model pickers for one configured machine (default: the selected space's; empty string: this computer). Reports missing or stale catalogs instead of fabricating model availability, plus extension installation status.
+Read Pi's configured model scope on one machine without a running Pi (default: the selected space's; empty string: this computer). Returns a cached snapshot with loading, diagnostics and errors, supplemented by current live Pi catalogs, plus extension installation status. Model selection does not prove launch availability.
 
 | Argument | Required |
 |---|---|

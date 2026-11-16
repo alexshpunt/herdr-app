@@ -8,6 +8,7 @@ import { requestAgentMessage } from '../ipc.mjs';
 import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const clientModule=version=>`import {readFile,writeFile} from 'node:fs/promises';
+export { workflowSelectionError } from ${JSON.stringify(new URL('../client.mjs', import.meta.url).href)};
 const label=new URL('./label.json',import.meta.url);
 export function importFresh(url){return import(url)}
 export function ownsTerminal(terminal,pid){return terminal.pid===pid}

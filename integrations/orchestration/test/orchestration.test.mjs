@@ -70,6 +70,43 @@ test('only explicit first-response failure starts fallback, exactly once', () =>
   assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
   assert.equal(result.retainedPrimary.terminal, 'm/t2');
 }));
+test('fallback retains the primary selection failure in its launch receipt', () => fixture(async root => {
+  const failed = { ...record('failed'), startupError: 'p/main high rejected' };
+  const api = client([failed, failed, record('started')]);
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.attempts[0].outcome, 'model-failed');
+  assert.equal(result.attempts[0].detail, failed.startupError);
+  assert.equal(result.attempts[0].thinking, 'high');
+  assert.equal(result.attempts[1].outcome, 'started');
+}));
+test('fallback opens a new space after an early exit closes the primary space', () => fixture(async root => {
+  const api = client();
+  let next = 1;
+  api.launch = async args => {
+    api.calls.push(['launch', args]);
+    if (args.space === 'm/sp1') throw new Error('missing primary space');
+    return { terminal: `m/t${++next}`, tab: `m/tb${next}`, space: next === 2 ? 'm/sp1' : 'm/sp2' };
+  };
+  api.inspect = async (terminal, _lines, screen) => terminal === 'm/t2'
+    ? { ...record(null), state: 'finished', screen: screen ? 'Unknown provider p/main' : undefined }
+    : record('started');
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.fallbackUsed, true);
+  assert.deepEqual(api.calls.filter(call => call[0] === 'launch').map(call => call[1].space), [undefined, undefined]);
+  assert.equal(result.attempts[0].outcome, 'exited');
+  assert.equal(result.attempts[1].space, 'm/sp2');
+}));
+test('an early model exit reports its terminal error with the requested selection', () => fixture(async root => {
+  const api = client();
+  api.inspect = async (_terminal, _lines, screen) => ({ ...record(null), state: 'finished', screen: screen ? 'Unknown provider p/main' : undefined });
+  const result = await new Orchestrator(api, root).create({ ...input, fallbackModel: null });
+  assert.equal(result.outcome, 'exited');
+  assert.ok(result.detail.includes('p/main'));
+  assert.ok(result.detail.includes('high'));
+  assert.ok(result.detail.includes('Unknown provider p/main'));
+}));
 test('unknown launch effect is never retried after reload', () => fixture(async root => {
   const api = client();
   api.launch = async () => { api.calls.push(['launch']); throw new Error('connection lost'); };

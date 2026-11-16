@@ -85,10 +85,24 @@ export class Orchestrator {
       await this.save(file, receipt);
       const target = await this.client.launch({ ...input, model: chosen, thinking, space });
       for (const field of ['terminal', 'tab', 'space']) nonempty(target[field], `launch result ${field}`);
-      receipt = { ...receipt, ...target, outcome: 'pending', detail: 'Waiting for the first successful assistant response', attempts: [...receipt.attempts, { model: chosen, ...target }] };
+      receipt = { ...receipt, ...target, outcome: 'pending', detail: 'Waiting for the first successful assistant response', attempts: [...receipt.attempts, { model: chosen, thinking, ...target }] };
       await this.save(file, receipt);
       update({ ...receipt });
       return target;
+    };
+    const describe = async (agent, target) => {
+      const outcome = startupOutcome(agent);
+      let detail = agent.startupError ?? agent.message;
+      if (outcome === 'exited') {
+        let screen;
+        try { screen = (await this.client.inspect(target.terminal, 20, true)).screen; } catch { /* Exit is already verified; screen retrieval must not hide it. */ }
+        detail = `Pi exited during startup with model ${receipt.model} and thinking ${thinking}. ${detail ?? screen ?? 'Inspect its retained terminal for the launch error.'}`;
+      }
+      return { outcome, pid: agent.pid, session: agent.session, detail };
+    };
+    const recordOutcome = outcome => {
+      receipt = { ...receipt, ...outcome };
+      Object.assign(receipt.attempts.at(-1), outcome);
     };
     const observe = async target => {
       const deadline = Date.now() + this.startupMs;
@@ -96,7 +110,7 @@ export class Orchestrator {
         if (signal?.aborted) return { outcome: 'pending', detail: 'Observation cancelled; the agent is left running. Inspect it before further action.' };
         const agent = await this.client.inspect(target.terminal, 0, false);
         const outcome = startupOutcome(agent);
-        if (outcome !== 'pending') return { outcome, pid: agent.pid, session: agent.session, detail: agent.startupError ?? agent.message };
+        if (outcome !== 'pending') return describe(agent, target);
         await delay(this.pollMs, undefined, { signal }).catch(error => { if (!signal?.aborted) throw error; });
       } while (Date.now() < deadline);
       return { outcome: 'pending', detail: 'Startup observation timed out; the agent is left running. Inspect it before retrying.' };
@@ -105,22 +119,24 @@ export class Orchestrator {
       // The primary opens a space of its own; a fallback joins it there.
       let target = await launch(model);
       let outcome = await observe(target);
-      receipt = { ...receipt, ...outcome };
+      recordOutcome(outcome);
       await this.save(file, receipt);
       if (fallback && fallback !== model && ['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {
         // The user may have retried the primary after its first error. Re-read
         // it before launching a replacement; a recovered agent stays primary.
         const current = await this.client.inspect(target.terminal, 0, false);
-        outcome = { outcome: startupOutcome(current), pid: current.pid, session: current.session, detail: current.startupError ?? current.message };
-        receipt = { ...receipt, ...outcome };
+        outcome = await describe(current, target);
+        recordOutcome(outcome);
         await this.save(file, receipt);
         if (['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {
           const failed = { ...target, pid: outcome.pid, session: outcome.session };
           receipt.retainedPrimary = failed;
-          target = await launch(fallback, target.space);
+          // A fast CLI error can close the primary's last tab and its space.
+          // Only a still-live failed primary provides a stable space to join.
+          target = await launch(fallback, outcome.outcome === 'exited' ? undefined : target.space);
           receipt.fallbackUsed = true;
           outcome = await observe(target);
-          receipt = { ...receipt, ...outcome };
+          recordOutcome(outcome);
           // Never remove a primary automatically. It is user-owned and may be
           // resumed while fallback starts; retaining it also preserves evidence.
           await this.save(file, receipt);

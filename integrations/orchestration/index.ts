@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { importFresh } from './client.mjs';
 
 export default function herdrOrchestration(pi: ExtensionAPI): void {
+  pi.registerFlag('herdr-workflow-model', { type: 'string', description: 'Exact model requested by a Herdr workflow launch' });
+  pi.registerFlag('herdr-workflow-thinking', { type: 'string', description: 'Exact thinking level requested by a Herdr workflow launch' });
+  let selectionError: ((ctx: ExtensionContext) => string | undefined) | undefined;
   let client: InstanceType<typeof import('./client.mjs').AppClient> | undefined;
   let service: InstanceType<typeof import('./orchestration.mjs').Orchestrator> | undefined;
   let ipc: Awaited<ReturnType<typeof import('./ipc.mjs').startAgentIpc>> | undefined;
@@ -36,20 +39,21 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   const initialize = async (ctx: ExtensionContext) => {
     await publishing.catch(() => {});
     await ipc?.stop(); ipc = undefined;
-    client = undefined; service = undefined; inspection = undefined; lastPublication = '';
+    client = undefined; service = undefined; inspection = undefined; selectionError = undefined; lastPublication = '';
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;
     const session = ctx.sessionManager.getSessionId();
     if (session !== ownerSession) { startup = 'pending'; error = undefined; ownerSession = session; }
     const suffix = randomUUID();
     const clientUrl = new URL('./client.mjs', import.meta.url); clientUrl.searchParams.set('load', suffix);
     const serviceUrl = new URL('./orchestration.mjs', import.meta.url); serviceUrl.searchParams.set('load', suffix);
-    const [{ AppClient, ownsTerminal }, { Orchestrator, bindOrigin }] = await Promise.all([importFresh(clientUrl.href), importFresh(serviceUrl.href)]);
+    const [{ AppClient, ownsTerminal, workflowSelectionError }, { Orchestrator, bindOrigin }] = await Promise.all([importFresh(clientUrl.href), importFresh(serviceUrl.href)]);
     const candidate = new AppClient(bindOrigin, process.pid, session);
     const owner = await candidate.terminal();
     // A nested Pi, such as a replicate copy behind a wrapper shell, does not own
     // the terminal it inherited. It stays inactive instead of warning on every publication.
     if (!ownsTerminal(owner, process.pid)) return;
     client = candidate;
+    selectionError = ctx => workflowSelectionError(pi.getFlag('herdr-workflow-model'), pi.getFlag('herdr-workflow-thinking'), ctx.model, pi.getThinkingLevel());
     // /reload must never reopen the fallback window of an already-started agent.
     // Session history also proves success when publishing the label was interrupted.
     if (ctx.sessionManager.getBranch().some(entry => entry.type === 'message' && entry.message.role === 'assistant' && entry.message.stopReason !== 'error' && entry.message.stopReason !== 'aborted')) startup = 'started';
@@ -82,6 +86,10 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       report: (value: unknown) => report(ctx, value),
     });
     service = new Orchestrator(client, path.join(getAgentDir(), 'herdr-orchestration', 'requests'));
+    if (startup !== 'started' && selectionError(ctx)) {
+      startup = 'failed'; error = selectionError(ctx);
+      ctx.ui.notify(error!, 'error');
+    }
     await publish(ctx);
   };
   pi.on('session_start', async (_event, ctx) => { try { await initialize(ctx); } catch (value) { report(ctx, value); } });
@@ -100,6 +108,15 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   };
   pi.on('session_tree', restoreInspection);
   pi.on('session_compact', restoreInspection);
+  pi.on('input', async (_event, ctx) => {
+    if (startup === 'started' || !selectionError) return;
+    const failure = selectionError(ctx);
+    if (!failure) return;
+    startup = 'failed'; error = failure;
+    ctx.ui.notify(failure, 'error');
+    try { await publish(ctx); } catch (value) { report(ctx, value); }
+    return { action: 'handled' };
+  });
   pi.on('model_select', async (_event, ctx) => { try { await publish(ctx); } catch (value) { report(ctx, value); } });
   pi.on('before_agent_start', async (event, ctx) => {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;

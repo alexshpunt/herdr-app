@@ -7,7 +7,7 @@ import { Type } from 'typebox';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export default function fixture(pi: ExtensionAPI) {
-  const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow', 'inspect-work', 'inspect-question'];
+  const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow', 'thinking-success', 'inspect-work', 'inspect-question'];
   pi.registerTool({ name: 'fixture_wait', label: 'Fixture wait', description: 'Wait for inspection.', parameters: Type.Object({}),
     async execute(_id, _args, signal) { await delay(60000, undefined, { signal }); return { content: [{ type: 'text', text: 'Fixture work completed' }], details: {} }; } });
   pi.registerTool({ name: 'fixture_question', label: 'Fixture question', description: 'Ask the fixture question.', parameters: Type.Object({ questions: Type.Array(Type.Object({ prompt: Type.String(), options: Type.Array(Type.Object({ label: Type.String() })) })) }),
@@ -20,7 +20,7 @@ export default function fixture(pi: ExtensionAPI) {
   });
   pi.registerProvider('herdr-fixture', {
     name: 'Herdr live verification fixture', baseUrl: 'http://herdr-fixture.invalid', apiKey: 'fixture', api: 'openai-completions',
-    models: ids.map(id => ({ id, name: `Herdr fixture: ${id}`, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 })),
+    models: ids.map(id => ({ id, name: `Herdr fixture: ${id}`, reasoning: id === 'thinking-success', thinkingLevelMap: id === 'thinking-success' ? { xhigh: 'high' } : undefined, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 })),
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream();
       const output: any = { role: 'assistant', api: model.api, provider: model.provider, model: model.id, content: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: 'stop', timestamp: Date.now() };
