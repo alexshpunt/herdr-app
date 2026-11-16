@@ -22,7 +22,7 @@ chrome, url, output_arg = sys.argv[1:]
 output = Path(output_arg)
 output.mkdir(parents=True, exist_ok=True)
 assert os.environ.get("HERDR_RESEARCH_DISPLAY") == os.environ.get("DISPLAY")
-assert os.environ.get("DISPLAY"), "use a private X display"
+assert os.environ.get("DISPLAY") and os.environ["DISPLAY"] not in {":0", ":0.0"}, "do not use the main display"
 d = display.Display()
 root = d.screen().root
 host = root.create_window(150, 100, 1000, 700, 0, d.screen().root_depth, X.InputOutput, X.CopyFromParent, background_pixel=d.screen().white_pixel)
@@ -30,7 +30,7 @@ host.set_wm_name("Herdr Chrome research host")
 host.map()
 d.sync()
 profile = tempfile.TemporaryDirectory(prefix="herdr-chrome-research-")
-process = subprocess.Popen([chrome, f"--user-data-dir={profile.name}", "--ozone-platform=x11", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=9460", "--window-size=1000,700", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+process = subprocess.Popen([chrome, f"--user-data-dir={profile.name}", "--ozone-platform=x11", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", "--window-size=1000,700", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 ws = None
 serial = 0
 
@@ -49,7 +49,7 @@ def wait_for(fn, label):
 
 
 def target():
-    with urllib.request.urlopen("http://127.0.0.1:9460/json/list", timeout=1) as response:
+    with urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json/list", timeout=1) as response:
         return next((p for p in json.load(response) if p.get("type") == "page" and p.get("url") == url), None)
 
 
@@ -109,6 +109,8 @@ def shot(name):
 
 
 try:
+    active_port = Path(profile.name) / "DevToolsActivePort"
+    debug_port = wait_for(lambda: int(active_port.read_text().splitlines()[0]), "Chrome debugging port not found")
     page = wait_for(target, "Chrome debugging page not found")
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=5, suppress_origin=True)
     child = wait_for(chrome_window, "Chrome X11 window not found")

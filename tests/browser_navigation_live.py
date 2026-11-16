@@ -1,7 +1,8 @@
 """Exercise side buttons in a real Herdr browser on a private X display.
 
 Run an isolated Herdr first, then:
-  DISPLAY=:156 HERDR_APP_HOME=... HC_SESSION=... uv run --with python-xlib \
+  DISPLAY=:156 HERDR_TEST_DISPLAY=:156 HERDR_APP_HOME=... \
+    HC_SESSION=browser-test HERDR_TEST_SESSION=browser-test uv run --with python-xlib \
     python tests/browser_navigation_live.py target/debug/herdr-app SPACE OUTPUT_DIR
 
 Uses XTest input, a local HTTP fixture and page-side load acknowledgements.
@@ -25,7 +26,9 @@ probe = "--probe" in extra
 spa = "--spa" in extra
 output = Path(output_arg)
 output.mkdir(parents=True, exist_ok=True)
-assert os.environ.get("HC_SESSION", "").startswith("lpt1560-"), "use a private test core"
+assert os.environ.get("HERDR_TEST_DISPLAY") == os.environ.get("DISPLAY"), "explicitly select the private test display"
+assert os.environ.get("DISPLAY") and os.environ["DISPLAY"] not in {":0", ":0.0"}, "do not use the main display"
+assert os.environ.get("HERDR_TEST_SESSION") == os.environ.get("HC_SESSION") and os.environ.get("HC_SESSION"), "explicitly select the private test core"
 
 
 class Fixture(http.server.BaseHTTPRequestHandler):
@@ -44,7 +47,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         next_page = {"A": "B", "B": "C", "C": "A"}.get(page, "A")
         html = f"""<!doctype html><title>{page}</title>
 <style>body {{ margin: 0; }} a {{ position: absolute; left: 20px; top: 80px; }}</style>
-<h1>{page}</h1><a href='/{next_page}'>Next</a><p style='margin-top:150px'>Needle</p>
+<h1>{page}</h1><a href='/{next_page}'>Continue</a><p style='margin-top:150px'>A phrase to locate</p>
 <script>addEventListener('pageshow', () => fetch('/seen/{page}', {{method:'POST'}}));</script>"""
         if spa:
             html += """<script>
@@ -75,7 +78,7 @@ url = f"http://127.0.0.1:{server.server_port}/A"
 
 
 def command(*args):
-    return json.loads(subprocess.check_output([app, "do", *args], text=True))
+    return json.loads(subprocess.check_output([app, "do", *args], text=True, timeout=15))
 
 
 def wait_for(predicate, message, timeout=10):
