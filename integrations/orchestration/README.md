@@ -38,6 +38,8 @@ The `pi-agent-herdr` IDE extension uses the synchronous `herdr:bridge` event. It
 
 Read `herdr:<terminal>` before writing to it. The resource extension keeps the observed identity privately and refuses writes after a replacement Pi, during startup, or while the recipient waits for the user. Use `herdr:<terminal>/history` for paging and literal search over the full branch. Repeated timeline reads omit an unchanged reply. See `docs:herdr` in Pi for resource addresses and read budgets.
 
+Codemode timeline entries show the tool name; their scripts remain available in history. An open Pi dialog keeps a timeline in `waiting` even when the agent continues background work. Untitled dialogs show a reminder to answer in Pi.
+
 ## Workflow models
 
 `workflow.models` reads the selected machine's installed Pi SDK and global `enabledModels` settings without starting Pi or loading its extensions. Scope patterns use Pi's resolver against its local model catalog, including `models.json` and models without credentials. With no scope configured, it lists the local catalog. A current live Pi can supplement it with extension-defined models. Project-specific scopes and providers loaded only by extensions need a live session or manual entry.
