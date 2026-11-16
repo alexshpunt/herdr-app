@@ -68,7 +68,7 @@ pub enum Rule {
     /// The project's `origin` remote URL matches this regular expression.
     Remote { remote: String },
     /// The pane's terminal has this label, set by its program in front (a
-    /// label whose JSON value names a `pid` counts while that process is in front).
+    /// label whose JSON value names a `pid` counts while that process owns the terminal).
     Label { label: String },
     /// The project is on this computer (`true`): here, or on a WSL machine
     /// (`editorAuthority` `wsl+…` in machines.json); `false`: elsewhere.
@@ -184,8 +184,11 @@ pub struct Probe {
 /// Where an app would open: the pane's project and terminal.
 pub struct Place<'a> {
     pub local: bool,
+    /// Whether the terminal is still running; false for a mod pane.
+    pub terminal_live: bool,
     /// The terminal's labels (`terminals()`), null for a mod pane.
     pub labels: &'a Value,
+    pub root_pid: Option<u64>,
     pub foreground_pid: Option<u64>,
     /// None until the project's folder was looked at.
     pub probe: Option<&'a Probe>,
@@ -208,8 +211,8 @@ fn matches(pattern: &str, text: &str) -> bool {
 }
 
 /// Whether a label counts: set, and when its JSON value names a `pid`, set by
-/// the process in front of the terminal now.
-fn label_holds(labels: &Value, name: &str, foreground_pid: Option<u64>) -> bool {
+/// the terminal's root process or the process in front now.
+fn label_holds(labels: &Value, name: &str, root_pid: Option<u64>, foreground_pid: Option<u64>) -> bool {
     let Some(value) = labels
         .get(name)
         .and_then(Value::as_str)
@@ -221,7 +224,7 @@ fn label_holds(labels: &Value, name: &str, foreground_pid: Option<u64>) -> bool 
         .ok()
         .and_then(|v| v.get("pid").and_then(Value::as_u64))
     {
-        Some(pid) => foreground_pid == Some(pid),
+        Some(pid) => pid > 0 && (root_pid == Some(pid) || foreground_pid == Some(pid)),
         None => true,
     }
 }
@@ -234,7 +237,8 @@ pub fn available(app: &App, place: &Place) -> bool {
             .probe
             .and_then(|p| p.origin.as_deref())
             .is_some_and(|o| matches(remote, o)),
-        Rule::Label { label } => label_holds(place.labels, label, place.foreground_pid),
+        Rule::Label { label } => place.terminal_live
+            && label_holds(place.labels, label, place.root_pid, place.foreground_pid),
         Rule::Local { local } => place.local == *local,
     })
 }
@@ -482,7 +486,9 @@ mod tests {
         };
         let here = Place {
             local: true,
+            terminal_live: true,
             labels: &labels,
+            root_pid: Some(1),
             foreground_pid: Some(42),
             probe: Some(&probe),
         };
@@ -490,10 +496,24 @@ mod tests {
             shown(&here),
             ["review", "last", "files", "linear", "github"]
         );
+        for foreground_pid in [None, Some(88)] {
+            assert_eq!(
+                shown(&Place { root_pid: Some(42), foreground_pid, ..here }),
+                ["review", "last", "files", "linear", "github"]
+            );
+        }
+        for root_pid in [Some(1), Some(42)] {
+            assert_eq!(
+                shown(&Place { terminal_live: false, root_pid, ..here }),
+                ["files", "linear", "github"]
+            );
+        }
         // The Pi that set the label is no longer in front; nothing looked at yet.
         let none = Place {
             local: false,
+            terminal_live: true,
             labels: &labels,
+            root_pid: Some(1),
             foreground_pid: Some(7),
             probe: None,
         };
@@ -504,7 +524,9 @@ mod tests {
         };
         let game = Place {
             local: true,
+            terminal_live: false,
             labels: &Value::Null,
+            root_pid: None,
             foreground_pid: None,
             probe: Some(&unity),
         };

@@ -113,8 +113,8 @@ Review cleanup is scoped to Plannotator's review ID and Pi session, including
 reviews that reuse a listening port. Unmatched browser requests, such as the
 Plannotator archive, keep their system-browser fallback.
 A mod can start a review of an agent's changes or its last reply in that
-agent's Pi: when the terminal's `herdr.plannotator` label is valid (its `pid`
-is the terminal's `foreground.pid`), run
+agent's Pi: when the live terminal's `herdr.plannotator` label is valid (its `pid`
+is the terminal's root `pid` or `foreground.pid`), run
 `exec(label.node, [label.request, <terminal id on that machine>, "review" | "last", label.hc], { on: machine })`.
 The annotations go back to that Pi session (`docs/FORK.md`).
 
@@ -221,6 +221,10 @@ the highlighted line shows where it will land.
   terminals. For a UNC folder Teleport percent-encodes the UNC path under the
   reporting machine's host; ordinary `file://server/share` is ambiguous with
   SSH and is not treated as local UNC.
+  A live root or foreground Pi can publish `herdr.project` as JSON
+  `{pid, cwd}`. Its nonempty session folder takes precedence over OSC reports
+  and process folders, including for app buttons and their project props.
+  A stale, nested or exited process's label does not change that folder.
   Many shells report their folder at each prompt.
   If starting in an inherited folder fails, new spaces, tabs and splits retry in
   that machine's home. Explicit invalid folders still fail.
