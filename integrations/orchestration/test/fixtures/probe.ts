@@ -5,7 +5,7 @@ export default function(pi: ExtensionAPI) {
     async execute() {
       const tools = pi.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_'));
       const active = pi.getActiveTools();
-      pi.setActiveTools([...active, 'herdr_agent_list']);
+      pi.setActiveTools([...active, 'herdr_agent_create']);
       return { content: [{type:'text',text:JSON.stringify({tools,active})}], details: {tools,active} };
     }
   });

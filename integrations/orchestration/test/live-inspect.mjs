@@ -32,7 +32,7 @@ async function invoke(name, args) {
       if (last?.role === 'toolResult' && last.toolName === name) {
         assert.ok(!last.isError, JSON.stringify(last));
         const text = last.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
-        return { data: JSON.parse(text), chars: text.length };
+        return { data: name === 'herdr_agent_create' ? JSON.parse(text) : text, chars: text.length };
       }
     }
   });
@@ -49,19 +49,21 @@ async function create(model, message = 'Fixture decision: PR #42 merged') {
   assert.equal(result.data.outcome, 'started'); return result.data;
 }
 const done = await create('success');
-await record('default tool result contains decision text without Usage or a screen', async () => {
-  const { data, chars } = await invoke('herdr_agent_inspect', { terminal: done.terminal });
-  assert.equal(data.source, 'pi'); assert.equal(data.inspection.busy, false);
-  assert.ok(data.inspection.events.some(event => event.kind === 'reply' && event.text.includes('PR #42 merged')));
-  assert.ok(!('screen' in data)); assert.ok(Buffer.byteLength(JSON.stringify(data.inspection)) <= 48 * 1024);
+await record('resource read contains the fixture decision', async () => {
+  const { data, chars } = await invoke('read', { path: `herdr:${done.terminal}` });
+  assert.ok(data.includes('PR #42 merged'));
+  assert.ok(chars <= 3500);
+  const repeat = await invoke('read', { path: `herdr:${done.terminal}` });
+  assert.ok(!repeat.data.includes('PR #42 merged'));
   return { terminal: done.terminal, chars, data };
 });
 await record('metadata and full-screen modes remain explicit', async () => {
-  const metadata = await invoke('herdr_agent_inspect', { terminal: done.terminal, screen: false });
-  assert.ok(!('inspection' in metadata.data)); assert.ok(!('screen' in metadata.data));
-  const full = await invoke('herdr_agent_inspect', { terminal: done.terminal, screen: true, lines: 0 });
-  assert.equal(full.data.source, 'screen'); assert.ok(full.data.screen.includes('PR #42 merged'));
-  return { compactChars: reports[0].result.chars, fullChars: full.chars, reduction: 1 - reports[0].result.chars / full.chars };
+  const metadata = app('agent.inspect', { terminal: done.terminal, screen: false });
+  assert.ok(!('inspection' in metadata)); assert.ok(!('screen' in metadata));
+  const full = app('agent.inspect', { terminal: done.terminal, screen: true, lines: 0 });
+  assert.equal(full.source, 'screen'); assert.ok(full.screen.includes('PR #42 merged'));
+  const fullChars = JSON.stringify(full).length;
+  return { compactChars: reports[0].result.chars, fullChars, reduction: 1 - reports[0].result.chars / fullChars };
 });
 await record('old integration fails without reading a terminal screen', async () => {
   const runHc = args => { const result = spawnSync(config.hc, args, { env, encoding: 'utf8', timeout: 15000 }); assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout); };
@@ -78,17 +80,16 @@ await record('old integration fails without reading a terminal screen', async ()
 });
 const long = await create('success', 'Fixture context '.repeat(1000) + 'Final decision: PR #43 merged');
 await record('long reply is bounded and truncation is explicit', async () => {
-  const { data, chars } = await invoke('herdr_agent_inspect', { terminal: long.terminal });
-  const reply = data.inspection.events.find(event => event.kind === 'reply').text;
-  assert.ok(reply.length <= 12000); assert.ok(reply.endsWith('PR #43 merged'));
-  assert.ok(Buffer.byteLength(JSON.stringify(data.inspection)) <= 48 * 1024);
+  const { data, chars } = await invoke('read', { path: `herdr:${long.terminal}`, views: ['budget:500'] });
+  assert.ok(data.includes('Fixture context')); assert.ok(data.includes('PR #43 merged'));
+  assert.ok(chars <= 1000);
   return { chars, data };
 });
 const work = await create('inspect-work');
 await record('current tool is visible during real execution', async () => {
   await waitFor(() => app('agent.inspect', { terminal: work.terminal }).inspection?.events.some(event => event.kind === 'call' && event.tool === 'fixture_wait' && event.state === 'running'));
-  const { data, chars } = await invoke('herdr_agent_inspect', { terminal: work.terminal });
-  assert.equal(data.status, 'working'); assert.ok(data.inspection.events.some(event => event.kind === 'call' && event.tool === 'fixture_wait' && event.state === 'running'));
+  const { data, chars } = await invoke('read', { path: `herdr:${work.terminal}` });
+  assert.ok(data.includes('fixture_wait'));
   app('agent.stop', target(work));
   return { chars, data };
 });
@@ -96,15 +97,16 @@ const failed = await create('late-error');
 app('agent.send', { ...target(failed), message: 'Trigger fixture failure' });
 await record('model error is distinct from no response', async () => {
   await waitFor(() => app('agent.inspect', { terminal: failed.terminal }).inspection?.failed);
-  const { data, chars } = await invoke('herdr_agent_inspect', { terminal: failed.terminal });
-  assert.equal(data.status, 'error'); assert.equal(data.inspection.failed, true); assert.ok(data.inspection.lastError); assert.ok(chars <= 1500);
+  const { data, chars } = await invoke('read', { path: `herdr:${failed.terminal}` });
+  const snapshot = app('agent.inspect', { terminal: failed.terminal }).inspection;
+  assert.ok(data.includes(snapshot.lastError)); assert.ok(chars <= 3500);
   return { chars, data };
 });
 const question = await create('inspect-question');
 await record('pending question is readable but cannot be answered through send', async () => {
   await waitFor(() => app('agent.inspect', { terminal: question.terminal }).inspection?.pendingQuestion);
-  const { data, chars } = await invoke('herdr_agent_inspect', { terminal: question.terminal });
-  assert.equal(data.status, 'blocked'); assert.ok(data.inspection.pendingQuestion.includes('Which release should ship?')); assert.ok(data.inspection.pendingQuestion.includes('Stable')); assert.ok(chars <= 1500);
+  const { data, chars } = await invoke('read', { path: `herdr:${question.terminal}` });
+  assert.ok(data.includes('Which release should ship?')); assert.ok(data.includes('Stable')); assert.ok(chars <= 3500);
   const refused = spawnSync(config.exe, ['do', 'agent.send', JSON.stringify({ ...target(question), message: 'Do not bypass' })], { env, encoding: 'utf8', timeout: 20000 });
   assert.notEqual(refused.status, 0); assert.ok(JSON.parse(refused.stdout).error);
   return { chars, data };

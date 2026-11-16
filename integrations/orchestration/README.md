@@ -4,11 +4,11 @@ Herdr App embeds this extension and installs it on each connected machine. Pi di
 
 Herdr resolves the target machine's Pi npm entrypoint and starts it directly with Node. This preserves the first task's quotes and newlines and lets the core verify Pi's actual PID. An ordinary Pi exit remains finished; core keep-mode restores a shell only after program loss. A standalone binary or shell alias that cannot be resolved safely produces a launch error instead of guessing another command.
 
-The six `herdr_agent_*` tools use Pi's native deferred exposure in the `Herdr` namespace. Discover them through `tool_search`. They manage independent user-owned agents in visible App tabs. Use `replicate` for the calling agent's own subtasks.
+`herdr_agent_create` uses Pi's native deferred exposure in the `Herdr` namespace. Discover it through `tool_search` to start independent user-owned agents in visible App tabs. Use the `pi-agent-herdr` extension's `read`, `search` and `write` on `herdr:` resources to find, inspect and message them. Agent lifecycle belongs to the user in the App's UI or CLI. Use `replicate` for the calling agent's own subtasks.
 
 ## Placement
 
-Each agent that `herdr_agent_create` starts opens in a new space of its own, named after the agent, with one tab of the same name. The space is on the requested `machine`, else on the calling Pi's machine, and starts in the given folder. It does not take focus, so the caller's space and tab bar stay as they were. The tool has no way to put an agent into an existing space. A startup fallback opens as a second tab in its primary's space. Apps opened for the agent (Linear, GitHub, Files, Diff, reviews) open as tabs in its space. `herdr_agent_remove` closes the agent's tab; the space closes with its last tab.
+Each agent that `herdr_agent_create` starts opens in a new space of its own, named after the agent, with one tab of the same name. The space is on the requested `machine`, else on the calling Pi's machine, and starts in the given folder. It does not take focus, so the caller's space and tab bar stay as they were. The tool has no way to put an agent into an existing space. A startup fallback opens as a second tab in its primary's space. Apps opened for the agent (Linear, GitHub, Files, Diff, reviews) open as tabs in its space. The user's `agent.remove` command closes the agent's tab; the space closes with its last tab.
 
 ## Identity and transport
 
@@ -22,17 +22,19 @@ Messages use the target Pi's authenticated local socket and `pi.sendUserMessage(
 
 ## Inspection
 
-Omit `screen` on `herdr_agent_inspect` or `agent.inspect` to read a timeline from the active Pi session branch. It starts at the last assistant text part and includes subsequent reasoning and calls in time order. Up to five calls and three reasoning parts are retained; omitted counts are explicit. Calls report running, failed or done state, without results. A pending user question includes its options. Busy state and errors retain their lifecycle semantics. No model or Usage extension is involved.
+Omit `screen` on `agent.inspect` to read a timeline from the active Pi session branch. It starts at the last assistant text part and includes subsequent reasoning and calls in time order. Up to five calls and three reasoning parts are retained; omitted counts are explicit. Calls report running, failed or done state, without results. A pending user question includes its options. Busy state and errors retain their lifecycle semantics. No model or Usage extension is involved.
 
 Replies preserve newlines and both ends when cut (12,000 characters maximum). Reasoning is bounded to 600 characters, call summaries to 160, and the serialized timeline to 48 KB. The App verifies the same PID/session after reading. An unavailable or old Pi returns an error naming the reason; there is no automatic screen fallback.
 
 `agent.history {terminal, query?, caseSensitive?, before?, limit?}` reads the whole active branch, including user messages and tool results. Each item has a stable zero-based index and timestamp. Paging returns up to 20 items by default, at most 50, before an exclusive index. Text is cut to 4,000 characters with a marker. Literal queries of at most 200 characters return newest matches first with context snippets; matching is case-insensitive unless requested otherwise. Responses stay within 120 KB.
 
-Set `screen: true` for the unmodified terminal screen and optional history (`lines`: 0–400; tool default 40, command default 80). Set `screen: false` for identity/status metadata only. These explicit modes remain available to the CLI and startup observation.
+Set `screen: true` for the unmodified terminal screen and optional history (`lines`: 0–400; command default 80). Set `screen: false` for identity/status metadata only. These explicit modes remain available to the CLI and startup observation.
 
 ## Resource bridge
 
 The `pi-agent-herdr` IDE extension uses the synchronous `herdr:bridge` event. Its request supplies a `provide(api)` callback; an active integration provides `{version: 1, command(name, args)}` during emit. The bridge accepts only `agent.list`, `agent.inspect`, `agent.history` and `agent.send`, using the same authenticated AppClient and origin checks. It provides nothing outside an owned Herdr terminal. Reload Pi after updating the integration.
+
+Read `herdr:<terminal>` before writing to it. The resource extension keeps the observed identity privately and refuses writes after a replacement Pi, during startup, or while the recipient waits for the user. Use `herdr:<terminal>/history` for paging and literal search over the full branch. Repeated timeline reads omit an unchanged reply. See `docs:herdr` in Pi for resource addresses and read budgets.
 
 ## Workflow models
 
@@ -48,9 +50,9 @@ A successful assistant response, including a tool call, permanently changes star
 
 Create saves a write-ahead receipt under the Pi agent directory's `herdr-orchestration/requests`. Reuse a task's stable `requestId` and identical inputs after interruption. A repeated request returns its saved receipt without launching again. Concurrent callers cannot claim the same receipt. An unconfirmed launch is `unknown`; inspect Herdr before taking further action. Do not change the request key to retry it.
 
-Create observes startup for up to 90 seconds. Only a verified first-response failure or early exit permits one configured fallback attempt. A blocked, cancelled, disconnected or timed-out observation leaves the existing agent intact and reports its state. The primary is rechecked before fallback. A recovered primary is not replaced. A fallback joins a live primary's space; after an early exit it opens a new space because the primary's last tab may already have closed. A failed primary stays available for inspection rather than being removed automatically: the user may resume it while fallback starts. Use explicit removal only at the user's request.
+Create observes startup for up to 90 seconds. Only a verified first-response failure or early exit permits one configured fallback attempt. A blocked, cancelled, disconnected or timed-out observation leaves the existing agent intact and reports its state. The primary is rechecked before fallback. A recovered primary is not replaced. A fallback joins a live primary's space; after an early exit it opens a new space because the primary's last tab may already have closed. A failed primary stays available for inspection rather than being removed automatically: the user may resume it while fallback starts. Leave removal to the user in the App's UI or CLI.
 
-Workflow settings open from the toolbar button and dock beside the active-tab workspace, below the global App header. Their compact controls follow the Spaces sidebar style. Primary model, fallback model and thinking level save on selection, without a Refresh button or footer. List returns those persisted profiles alongside agent identities. Create uses the selected profile unless explicit overrides are supplied.
+Workflow settings open from the toolbar button and dock beside the active-tab workspace, below the global App header. Their compact controls follow the Spaces sidebar style. Primary model, fallback model and thinking level save on selection, without a Refresh button or footer. `workflow.get` returns those persisted profiles. Create uses the selected profile unless explicit overrides are supplied.
 
 ## Checks
 
@@ -62,7 +64,7 @@ npm test --prefix integrations/orchestration
 
 The suite covers request receipts, fallback boundaries and identity guards, plus real-Pi deferred registration, native tool error rendering and module refresh on reload. Run integration checks on the build worker. Verify the installed App and reloaded Pi when changing the runtime contract.
 
-For installed-App verification without paid inference, copy `test/fixtures/live-provider.ts` into an isolated test project's `.pi/extensions/`. It registers `herdr-fixture/{controller,success,primary-error,fallback-error,late-error,slow}`. Use a separate `HERDR_APP_HOME`, `HC_SESSION` and `PI_CODING_AGENT_DIR`. The controller's first user message is JSON `{ "name": "herdr_agent_list", "arguments": {} }`; it calls that actual deferred tool and prints its result. Never install the fixture in personal extension settings. Remove the test App, its own core holder and project after verification.
+For installed-App verification without paid inference, copy `test/fixtures/live-provider.ts` into an isolated test project's `.pi/extensions/`. It registers `herdr-fixture/{controller,success,primary-error,fallback-error,late-error,slow}`. Use a separate `HERDR_APP_HOME`, `HC_SESSION` and `PI_CODING_AGENT_DIR`. Load `pi-agent-ide` and `pi-agent-herdr` for resource checks. The controller's first user message is JSON `{ "name": "read", "arguments": { "path": "herdr:" } }`; it calls the actual shared resource tool and prints its result. Never install the fixture in personal extension settings. Remove the test App, its own core holder and project after verification.
 
 ### Workflow UI regression check
 

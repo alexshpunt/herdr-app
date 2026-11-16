@@ -124,21 +124,6 @@ test('blocked startup and cancellation never trigger fallback', () => fixture(as
   await assert.rejects(new Orchestrator(api, root).create({ ...input, requestId: 'cancelled' }, controller.signal), /abort/i);
   assert.equal(api.calls.length, 1);
 }));
-test('send protects blocked agents, self and stale identities', () => fixture(async root => {
-  const api = client([{ ...record('started'), status: 'blocked' }]);
-  const service = new Orchestrator(api, root);
-  await assert.rejects(service.act('send', { terminal: 'm/t2', pid: 22, session: 'child', message: 'hello' }), /blocked/);
-  await assert.rejects(service.act('stop', { terminal: 'm/t1', pid: 12, session: 'caller' }), /own/);
-  await assert.rejects(service.act('remove', { terminal: 'm/t2', pid: 99, session: 'child' }), /changed/);
-  assert.equal(api.calls.length, 0);
-}));
-test('stop preserves the core observation instead of claiming success', () => fixture(async root => {
-  const api = client();
-  api.stop = async () => ({ outcome: 'still_working', key: 'escape' });
-  const result = await new Orchestrator(api, root).act('stop', { terminal: 'm/t2', pid: 22, session: 'child' });
-  assert.equal(result.outcome, 'still_working');
-  assert.equal(result.key, 'escape');
-}));
 test('a recovered primary is rechecked before starting fallback', () => fixture(async root => {
   const api = client([record('failed'), record('started')]);
   const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
@@ -167,11 +152,10 @@ test('fallback does not remove a primary which the user may resume', () => fixtu
   assert.equal(result.retainedPrimary.terminal, 'm/t2');
   assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
 }));
-test('startup and mutation guards read metadata without capturing a starting terminal', () => fixture(async root => {
+test('startup observation reads metadata without capturing a starting terminal', () => fixture(async root => {
   const api = client();
   const inspections = [];
   api.inspect = async (...args) => { inspections.push(args); return record('started'); };
   await new Orchestrator(api, root).create(input);
-  await new Orchestrator(api, root).act('send', { terminal: 'm/t2', pid: 22, session: 'child', message: 'Follow up' });
-  assert.deepEqual(inspections, [['m/t2', 0, false], ['m/t2', 0, false]]);
+  assert.deepEqual(inspections, [['m/t2', 0, false]]);
 }));

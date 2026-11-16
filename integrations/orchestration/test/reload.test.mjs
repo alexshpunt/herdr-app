@@ -17,7 +17,6 @@ export class AppClient {
  async owner(){return this.terminal()}
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
- async list(){return {version:${JSON.stringify(version)},agents:[]}}
  async command(name,args){return {version:${JSON.stringify(version)},name,args}}
 }
 `;
@@ -34,13 +33,6 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   await loader.reload();
   ({session}=await createAgentSession({cwd:root,agentDir:root,resourceLoader:loader,settingsManager:settings,sessionManager:SessionManager.inMemory()}));
   await session.bindExtensions({onError:error=>{throw error}});
-  const request=()=>{
-    session.setActiveToolsByName(['herdr_agent_list']);
-    const tool=session.agent.state.tools.find(tool=>tool.name==='herdr_agent_list');
-    assert.ok(tool,'Pi activated the deferred tool');
-    return tool.execute('reload-probe',{},undefined,undefined);
-  };
-  assert.equal((await request()).structuredContent.version,'first');
   const bridge = () => { let api; bus.emit('herdr:bridge', { provide: value => { api = value; } }); assert.ok(api); return api; };
   assert.equal(bridge().version, 1);
   assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
@@ -70,7 +62,6 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   const history = await requestAgentMessage(route, { action: 'history', pid: route.pid, session: route.session });
   assert.equal(history.outcome, 'history');
   assert.equal(history.items.at(-1).text, 'Started before publication');
-  assert.equal((await request()).structuredContent.version,'second');
   assert.equal((await label()).startup,'started');
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'later quota'}});
   await session.extensionRunner.emit({type:'agent_settled',aborted:false});

@@ -164,16 +164,11 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   pi.on('session_shutdown', async () => { await publishing.catch(() => {}); await ipc?.stop(); ipc = undefined; client = undefined; service = undefined; });
 
   const namespace = { name: 'Herdr', description: 'Manage the user’s independent agents in Herdr App', instructions: 'Start agents only for tasks the user explicitly asked to run independently. Use replicate for your own subtasks. Keep user-owned agents running after your task ends.' };
-  const target = {
-    terminal: Type.String({ description: 'Machine-qualified terminal ID returned by list or inspect.' }),
-    pid: Type.Integer({ minimum: 1, description: 'Current Pi PID returned by inspect; reject replaced processes.' }),
-    session: Type.String({ minLength: 1, description: 'Current Pi session returned by inspect.' }),
-  };
   const outputSchema = Type.Object({}, { additionalProperties: true });
-  function register<T extends TSchema>(name: string, description: string, parameters: T, mutate: boolean, execute: (args: Static<T>, signal?: AbortSignal, update?: (data: unknown) => void) => Promise<unknown>) {
+  function register<T extends TSchema>(name: string, description: string, parameters: T, execute: (args: Static<T>, signal?: AbortSignal, update?: (data: unknown) => void) => Promise<unknown>) {
     pi.registerTool({
       name, label: name.replaceAll('_', ' '), description, parameters, outputSchema,
-      exposure: 'deferred', namespace, executionMode: mutate ? 'sequential' : 'parallel',
+      exposure: 'deferred', namespace, executionMode: 'sequential',
       renderCall(args, theme) {
         const identity = (args as Record<string, unknown>).name ?? (args as Record<string, unknown>).terminal ?? '';
         return new Text(theme.fg('toolTitle', `${name.replace('herdr_agent_', 'Herdr ')}${identity ? ` · ${stripVTControlCharacters(String(identity))}` : ''}`), 0, 0);
@@ -182,48 +177,26 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         if (context.isError && (!result.details || typeof result.details !== 'object' || Object.keys(result.details).length === 0)) return new Text(theme.fg('error', result.content.filter(item => item.type === 'text').map(item => stripVTControlCharacters(item.text)).join('\n')), 0, 0);
         const data = (result.details ?? {}) as Record<string, any>;
         const clean = (value: unknown) => stripVTControlCharacters(String(value ?? ''));
-        let lines: string[];
-        if (Array.isArray(data.agents)) {
-          const agents = options.expanded ? data.agents : data.agents.slice(0, 8);
-          lines = [`${data.agents.length} Pi agent${data.agents.length === 1 ? '' : 's'}`, ...agents.map((agent: Record<string, unknown>) => `${clean(agent.name || agent.terminal)} · ${clean(agent.terminal)} · ${clean(agent.status || agent.state)}`)];
-          if (agents.length < data.agents.length) lines.push('Expand to show the remaining agents.');
-        } else {
-          lines = [clean(data.outcome ?? data.status ?? data.state ?? 'Applied') + (data.model ? ` · ${clean(data.model)}` : '')];
-          if (data.terminal) lines.push(clean(data.terminal));
-          if (!data.inspection && (data.detail || data.message || data.error || data.startupError)) lines.push(clean(data.detail ?? data.error ?? data.startupError ?? data.message));
-          if (data.inspection) {
-            const facts = data.inspection;
-            if (facts.pendingQuestion) lines.push(`Question: ${clean(facts.pendingQuestion)}`);
-            if (facts.lastError) lines.push(`Error: ${clean(facts.lastError)}`);
-            for (const event of facts.events ?? []) lines.push(event.kind === 'call' ? `${clean(event.tool)} · ${clean(event.summary)} (${clean(event.state)})` : clean(event.text));
-          }
-          if (data.retainedPrimary?.terminal) lines.push(`Primary retained: ${clean(data.retainedPrimary.terminal)}`);
-          if (options.expanded) {
-            if (data.pid) lines.push(`Pi PID ${clean(data.pid)} · session ${clean(data.session)}`);
-            if (data.space) lines.push(`Space ${clean(data.space)}`);
-            if (data.screen) lines.push(clean(data.screen));
-          }
+        const lines = [clean(data.outcome ?? data.status ?? data.state ?? 'Applied') + (data.model ? ` · ${clean(data.model)}` : '')];
+        if (data.terminal) lines.push(clean(data.terminal));
+        if (data.detail || data.message || data.error || data.startupError) lines.push(clean(data.detail ?? data.error ?? data.startupError ?? data.message));
+        if (data.retainedPrimary?.terminal) lines.push(`Primary retained: ${clean(data.retainedPrimary.terminal)}`);
+        if (options.expanded) {
+          if (data.pid) lines.push(`Pi PID ${clean(data.pid)} · session ${clean(data.session)}`);
+          if (data.space) lines.push(`Space ${clean(data.space)}`);
         }
         return new Text(theme.fg(context.isError ? 'error' : 'toolOutput', lines.join('\n')), 0, 0);
       },
-      annotations: { readOnlyHint: !mutate, destructiveHint: name.endsWith('_remove') || name.endsWith('_stop'), openWorldHint: true, idempotentHint: !mutate || name.endsWith('_create') },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
       async execute(_call, args, signal, onUpdate) {
         if (!client || !service) throw new Error('Herdr agent context is unavailable. Run this Pi as the foreground process of a Herdr App terminal and reload Pi.');
         const data = await execute(args, signal, value => onUpdate?.({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value }));
         const outcome = data && typeof data === 'object' && 'outcome' in data ? data.outcome : undefined;
         const isError = ['unknown', 'model-failed', 'exited', 'still_working', 'unconfirmed'].includes(String(outcome));
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, name === 'herdr_agent_inspect' ? 0 : 2) }], details: data, structuredContent: JSON.parse(JSON.stringify(data)), isError };
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], details: data, structuredContent: JSON.parse(JSON.stringify(data)), isError };
       },
     });
   }
-  register('herdr_agent_list', 'Use herdr_agent_list to find the user’s Pi agents, their stable Herdr identities and configured workflow profiles.', Type.Object({
-    space: Type.Optional(Type.String({ description: 'Exact space ID. Omit to list agents across spaces.' })),
-    machine: Type.Optional(Type.String({ description: 'Configured Herdr machine. Omit to list across machines.' })),
-  }), false, async args => { await client!.context(); return client!.list(args); });
-  register('herdr_agent_inspect', 'Use herdr_agent_inspect to read one agent’s current identity, progress, last reply, question and error before acting on it.', Type.Object({
-    terminal: target.terminal, lines: Type.Optional(Type.Integer({ minimum: 0, maximum: 400, default: 40, description: 'Lines of history above the screen when screen is true.' })),
-    screen: Type.Optional(Type.Boolean({ description: 'Omit for compact session facts. Set true for the full terminal screen, or false for identity and status only.' })),
-  }), false, async args => { await client!.context(); return client!.inspect(args.terminal, args.lines, args.screen); });
   register('herdr_agent_create', 'Use herdr_agent_create to start an independent task for the user in a new Herdr space of its own. Use replicate for your own subtasks. The first message is submitted at launch; fallback is limited to startup before the first successful assistant response.', Type.Object({
     requestId: Type.String({ minLength: 1, description: 'Stable unique task key, such as its issue ID. Reuse the same key and inputs after interruption; do not choose a new key to retry an unknown launch.' }),
     name: Type.String({ minLength: 1, description: 'Visible agent name; it also names the agent’s new space and tab.' }),
@@ -234,8 +207,6 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     model: Type.Optional(Type.String({ minLength: 1, description: 'Explicit provider/model override. Default the profile’s primary model.' })),
     fallbackModel: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: 'Startup-only provider/model override. Null disables fallback; omitted uses the profile.' })),
     thinking: Type.Optional(Type.Union(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map(value => Type.Literal(value)), { description: 'Thinking override. Default the profile’s level.' })),
-  }), true, (args, signal, update) => service!.create(args, signal, update));
-  register('herdr_agent_send', 'Use herdr_agent_send to submit a follow-up message to an agent the user asked you to contact. Read its current identity first; do not bypass a blocked user question.', Type.Object({ ...target, message: Type.String({ minLength: 1 }) }), true, args => service!.act('send', args));
-  register('herdr_agent_stop', 'Use herdr_agent_stop to interrupt an agent at the user’s request without closing its tab or killing its terminal.', Type.Object(target), true, args => service!.act('stop', args));
-  register('herdr_agent_remove', 'Use herdr_agent_remove to close a dedicated agent tab, and its space once nothing else is left there, and end its terminal at the user’s request. Keep the user’s other agents and panes intact.', Type.Object(target), true, args => service!.act('remove', args));
+  }), (args, signal, update) => service!.create(args, signal, update));
+
 }

@@ -150,14 +150,4 @@ export class Orchestrator {
     await this.save(file, receipt);
     return receipt;
   }
-  async act(action, input) {
-    const origin = await this.client.context();
-    if (input.terminal === origin.terminal) throw new Error('Do not manage this Pi through its own Herdr agent tool');
-    const agent = await this.client.inspect(input.terminal, 0, false);
-    if (!input.pid || !input.session || agent.pid !== input.pid || agent.session !== input.session) throw new Error('The agent identity changed or is unavailable; inspect it and use its current PID and session');
-    if (action === 'send' && agent.status === 'blocked') throw new Error('The agent is blocked on a user question; let the user answer it instead of bypassing the prompt');
-    if (action === 'send' && agent.startup !== 'started') throw new Error('The agent has not completed startup; give its first message through create and inspect its startup state');
-    const observed = await this.client[action](input);
-    return { action, terminal: input.terminal, pid: input.pid, session: input.session, outcome: action === 'send' ? 'submitted' : 'unconfirmed', ...observed };
-  }
 }
