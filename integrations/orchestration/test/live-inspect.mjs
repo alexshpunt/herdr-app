@@ -62,7 +62,8 @@ await record('metadata and full-screen modes remain explicit', async () => {
   assert.ok(!('inspection' in metadata)); assert.ok(!('screen' in metadata));
   const full = app('agent.inspect', { terminal: done.terminal, screen: true, lines: 0 });
   assert.equal(full.source, 'screen'); assert.ok(full.screen.includes('PR #42 merged'));
-  return { compactChars: reports[0].result.chars, fullChars: JSON.stringify(full).length, reduction: 1 - reports[0].result.chars / full.chars };
+  const fullChars = JSON.stringify(full).length;
+  return { compactChars: reports[0].result.chars, fullChars, reduction: 1 - reports[0].result.chars / fullChars };
 });
 await record('old integration fails without reading a terminal screen', async () => {
   const runHc = args => { const result = spawnSync(config.hc, args, { env, encoding: 'utf8', timeout: 15000 }); assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout); };
