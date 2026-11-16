@@ -11,10 +11,10 @@ import { promisify } from 'node:util';
 // A workflow must either launch its saved selection exactly or fail startup.
 export function workflowSelectionError(requestedModel, requestedThinking, model, thinking) {
   if (requestedModel && (!model || `${model.provider}/${model.id}` !== requestedModel)) {
-    return `Requested ${requestedModel}; resolved ${model ? `${model.provider}/${model.id}` : 'none'}. Select a different model.`;
+    return `Workflow model ${requestedModel} is unavailable on this machine (Pi selected ${model ? `${model.provider}/${model.id}` : 'no model'}). Choose an installed provider/model or configure a startup fallback.`;
   }
   if (requestedThinking && requestedThinking !== thinking) {
-    return `Requested level ${requestedThinking} for ${requestedModel ?? `${model?.provider}/${model?.id}`}; resolved ${thinking}. Select a different level.`;
+    return `Workflow thinking ${requestedThinking} is unavailable for ${requestedModel ?? `${model?.provider}/${model?.id}`} on this machine (Pi supports ${thinking} for this selection). Choose another level or configure a startup fallback.`;
   }
 }
 const execute = promisify(execFile);
