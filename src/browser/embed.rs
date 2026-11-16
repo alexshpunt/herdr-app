@@ -886,6 +886,17 @@ mod win {
         search.found
     }
 
+    // Chromium uses WS_MAXIMIZE to suppress resize edges. Redirected windows
+    // (WPF) instead turn the next WM_SIZE into a maximized client layout,
+    // including its internal frame, so they must not receive that hint.
+    fn embedded_style(style: u32, ex_style: u32, menu: bool) -> u32 {
+        let frameless = style & !(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_MAXIMIZE);
+        if menu { frameless | WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS }
+        else {
+            let maximize = if ex_style & WS_EX_NOREDIRECTIONBITMAP != 0 { WS_MAXIMIZE } else { 0 };
+            frameless | WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | maximize
+        }
+    }
     /// Move the program's top-level window into a new container in `host`.
     /// A window with a Win32 menu bar (Unity) keeps it: a child window cannot
     /// have one, so it stays a captionless popup inside the container.
@@ -912,12 +923,7 @@ mod win {
         let reparent = move || unsafe {
             let (hwnd, container) = (window as HWND, parent as HWND);
             if IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 { ShowWindow(hwnd, SW_RESTORE); }
-            // A borderless child, or popup with a menu bar. WS_MAXIMIZE makes
-            // Chromium treat its edges as a maximized window's: no resize
-            // borders to drag.
-            let frameless = style as u32 & !(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_MAXIMIZE);
-            let child_style = if menu { frameless | WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS }
-                else { frameless | WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_MAXIMIZE };
+            let child_style = embedded_style(style as u32, ex_style as u32, menu);
             SetWindowLongPtrW(hwnd, GWL_STYLE, child_style as isize);
             let child_ex = ex_style as u32 & !(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_NOPARENTNOTIFY | WS_EX_TOPMOST);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, child_ex as isize);
