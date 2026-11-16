@@ -12,9 +12,9 @@ const installer = source.match(/const INSTALLER: &str = r###"([\s\S]*?)"###;/)?.
 assert.ok(installer, 'The bundled installer must have a readable script');
 const files = [['package.json', '{"pi":{"extensions":["./index.ts"]}}'], ['index.ts', 'export default function extension() {}']];
 const marker = '.herdr-managed.json';
-const scriptFor = runtime => installer.replace('__HERDR_FILES_BASE64__', Buffer.from(JSON.stringify(runtime)).toString('base64'));
-function run(root, runtime = files) {
-  const script = scriptFor(runtime);
+const scriptFor = (runtime, features = { workflow: true, usage: true }) => installer.replace('__HERDR_FILES_BASE64__', Buffer.from(JSON.stringify(runtime)).toString('base64')).replace('__HERDR_FEATURES_JSON__', JSON.stringify(features));
+function run(root, runtime = files, features) {
+  const script = scriptFor(runtime, features);
   const result = spawnSync(process.execPath, ['--input-type=commonjs', '-'], {
     input: script, encoding: 'utf8', timeout: 30000,
     env: { ...process.env, PI_CODING_AGENT_DIR: root },
@@ -32,6 +32,25 @@ test('installs every embedded runtime file with its exact source', () => fixture
   const result = run(root, runtime);
   assert.equal(result.status, 0, result.stderr);
   for (const [name, content] of runtime) assert.equal(await readFile(path.join(root, 'extensions', 'herdr-orchestration', name), 'utf8'), content);
+}));
+test('propagates both switches without reinstalling resources and excludes disabled usage history', () => fixture(async root => {
+  const featurePath = path.join(root, 'herdr-features.json');
+  const read = async () => JSON.parse(await readFile(featurePath, 'utf8'));
+  assert.equal(run(root).status, 0);
+  assert.deepEqual(await read(), { version: 1, workflow: true, usage: true, usageSince: 0 });
+  const off = run(root, files, { workflow: false, usage: false });
+  assert.equal(off.status, 0, off.stderr);
+  assert.equal(off.receipt.changed, false);
+  assert.equal((await read()).workflow, false);
+  assert.equal((await read()).usage, false);
+  const before = Date.now();
+  assert.equal(run(root, files, { workflow: false, usage: true }).status, 0);
+  const enabled = await read();
+  assert.equal(enabled.workflow, false);
+  assert.equal(enabled.usage, true);
+  assert.ok(enabled.usageSince >= before);
+  assert.equal(run(root).status, 0);
+  assert.equal((await read()).usageSince, enabled.usageSince);
 }));
 test('installs bundled resources without modifying Pi settings or other extensions', () => fixture(async root => {
   await mkdir(path.join(root, 'extensions', 'personal'), { recursive: true });
