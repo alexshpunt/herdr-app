@@ -20,13 +20,29 @@ Local `hc` verifies and labels the requesting terminal. The App publishes a priv
 
 Follow-up messages use the target Pi's authenticated local socket and `pi.sendUserMessage`, reached through `machine.exec`. They never type into terminal input: an exited or replaced Pi cannot turn a task message into a shell command. Socket credentials stay private in core labels and never enter tool results or the prompt.
 
+## Inspection
+
+Omit `screen` on `herdr_agent_inspect` or `agent.inspect` to read compact session facts: busy state, current tool names, the last assistant reply, a pending question and the latest error. The target Pi provides these through its authenticated local socket, independently of Usage. No model is called. Question inspection is read-only; it never answers the question or relaxes the blocked-message guard.
+
+Snapshots use the active session branch on load and reload, then Pi lifecycle events. Text is whitespace-normalized and bounded; `truncated` identifies shortened fields. The App verifies the same PID/session after reading. `source: "pi"` distinguishes session facts from `source: "screen-fallback"` when the integration is old, offline or unavailable. A fallback includes its reason and a bounded terminal excerpt, not an empty successful snapshot.
+
+Set `screen: true` to request the unmodified terminal screen and optional history (`lines`: 0–400; tool default 40, command default 80). Set `screen: false` for identity/status metadata only. A truncated snapshot or fallback includes guidance to request the full screen.
+
+## Workflow models
+
+`workflow.models` reads the selected machine's installed Pi SDK and global `enabledModels` settings without starting Pi or loading its extensions. Scope patterns use Pi's resolver against its local model catalog, including `models.json` and models without credentials. With no scope configured, it lists the local catalog. A current live Pi can supplement it with extension-defined models. Project-specific scopes and providers loaded only by extensions need a live session or manual entry.
+
+The App caches snapshots for 30 seconds and refreshes them off the UI thread. The reply includes `loading`, scope diagnostics and lookup errors. Looking up a catalog does not refresh credentials or fetch network model metadata. A catalog error leaves both pickers available: enter an exact `provider/model` in their search to select it. Every thinking level can be saved for any model; availability is checked at launch.
+
 ## Startup and receipts
+
+Workflow launches pass `--herdr-workflow-model` and `--herdr-workflow-thinking` alongside Pi's normal model and thinking flags. The extension checks the actual selection before the first request. A substituted model or clamped thinking level publishes a startup failure and blocks that request. The startup fallback applies once, with the same requested thinking level. Launch receipts keep each attempt's model, thinking level, outcome and error, including the primary error after a successful fallback. An early Pi exit includes its retained terminal error.
 
 A successful assistant response, including a tool call, permanently changes startup to `started`. Reload preserves that boundary. A first-response error changes startup to `failed` only after Pi settles, allowing Pi's own automatic retries first. Later model errors never reopen startup fallback.
 
 Create saves a write-ahead receipt under the Pi agent directory's `herdr-orchestration/requests`. Reuse a task's stable `requestId` and identical inputs after interruption. A repeated request returns its saved receipt without launching again. Concurrent callers cannot claim the same receipt. An unconfirmed launch is `unknown`; inspect Herdr before taking further action. Do not change the request key to retry it.
 
-Create observes startup for up to 90 seconds. Only a verified first-response failure or early exit permits one configured fallback attempt. A blocked, cancelled, disconnected or timed-out observation leaves the existing agent intact and reports its state. The primary is rechecked before fallback. A recovered primary is not replaced. A failed primary stays available for inspection rather than being removed automatically: the user may resume it while fallback starts. Use explicit removal only at the user's request.
+Create observes startup for up to 90 seconds. Only a verified first-response failure or early exit permits one configured fallback attempt. A blocked, cancelled, disconnected or timed-out observation leaves the existing agent intact and reports its state. The primary is rechecked before fallback. A recovered primary is not replaced. A fallback joins a live primary's space; after an early exit it opens a new space because the primary's last tab may already have closed. A failed primary stays available for inspection rather than being removed automatically: the user may resume it while fallback starts. Use explicit removal only at the user's request.
 
 Workflow settings open from the toolbar button and dock beside the active-tab workspace, below the global App header. Their compact controls follow the Spaces sidebar style. Primary model, fallback model and thinking level save on selection, without a Refresh button or footer. List returns those persisted profiles alongside agent identities. Create uses the selected profile unless explicit overrides are supplied.
 
@@ -44,12 +60,12 @@ For installed-App verification without paid inference, copy `test/fixtures/live-
 
 ### Workflow UI regression check
 
-In the installed App, open Workflow for a machine with a live Pi catalog:
+In an isolated installed App, open Workflow for a machine with scoped models configured and no running Pi:
 
 1. Use the toolbar button to open and close Workflow. Confirm the terminal workspace narrows beside the dock and regains its width on close. The global header, its actions and window controls keep their width above the dock; the dock aligns with the workspace's top and bottom.
 2. Open a primary model picker. Confirm model names and IDs are visible, then scroll to the last choice. Its scrollbar stays visible while the list overflows.
-3. Search for a model by name or ID. Confirm filtering, an empty result, and clearing the search all update the visible list.
-4. Select a different model and thinking level. Close and reopen Workflow, then restart only the App and confirm both choices persist. Restore the original profile afterward.
+3. Confirm every scoped model appears in both pickers. Search by name or ID, then enter an uncatalogued `provider/model` and select it. Repeat manual selection with the catalog unavailable.
+4. Click every thinking level for each profile, including an uncatalogued model. Close and reopen Workflow, then restart only the test App and confirm the choices persist.
 5. Open a fallback picker. Confirm the no-fallback choice and model choices are visible.
 6. Reduce the window height until the profiles no longer fit. Confirm the body scrollbar appears and stays visible, then scroll to the final field. The header remains visible; there is no footer. Scroll an open picker independently of the body.
 

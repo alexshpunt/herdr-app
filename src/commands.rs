@@ -97,13 +97,13 @@ pub const COMMANDS: &[Command] = &[
     // The app.
     // User-owned Pi agents and workflow choices.
     cmd("agent.list", &[opt("space"), opt("machine")], "List Pi agents in the running app, optionally in an exact space or on one machine (empty string: this computer). Returns stable terminal, space and tab ids, current PID and Pi session, and startup state."),
-    cmd("agent.inspect", &[req("terminal"), opt("lines"), opt("screen")], "Inspect an exact terminal address: current agent identity and status, plus its screen and up to 400 lines of history (default 80). Set screen false for metadata only, without waiting for terminal output."),
+    cmd("agent.inspect", &[req("terminal"), opt("lines"), opt("screen")], "Inspect an exact terminal address: compact Pi session facts, current identity, progress, last reply, question and error. Set screen true for the full terminal screen and 0–400 history lines (default 80), or false for metadata only. Unavailable session facts return a bounded screen fallback."),
     cmd("agent.send", &[req("terminal"), req("pid"), req("session"), req("message")], "Send a message to the inspected Pi agent. Rejects changed identities, agents still starting, and blocked user questions; never forces input."),
     cmd("agent.stop", &[req("terminal"), req("pid"), req("session")], "Interrupt the inspected Pi agent with its stop key. Does not kill it or escalate; returns the observed outcome."),
     cmd("agent.remove", &[req("terminal"), req("pid"), req("session")], "End the inspected Pi agent and remove its dedicated single-pane tab. Rejects changed identities and tabs with sibling panes."),
     cmd("workflow.get", &[], "Read the persisted Features and Bugs workflow profiles, including their primary model, startup-only fallback model, and thinking level."),
     cmd("workflow.set", &[req("profile"), req("model"), opt("fallbackModel"), opt("thinking")], "Update one workflow profile atomically. Models use provider/model ids; omit fallbackModel to keep it, or pass null to disable it. Existing agents keep their model."),
-    cmd("workflow.models", &[opt("machine")], "Read live Pi model pickers for one configured machine (default: the selected space's; empty string: this computer). Reports missing or stale catalogs instead of fabricating model availability, plus extension installation status."),
+    cmd("workflow.models", &[opt("machine")], "Read Pi's configured model scope on one machine without a running Pi (default: the selected space's; empty string: this computer). Returns a cached snapshot with loading, diagnostics and errors, supplemented by current live Pi catalogs, plus extension installation status. Model selection does not prove launch availability."),
     cmd("workflow.open", &[], "Toggle the right side panel with the Workflow settings section. Layouts without a side panel toggle a Workflow dock instead."),
     cmd("app.help", &[], "Toggle the keys dialog."),
     cmd("app.welcome", &[], "Show the welcome again."),

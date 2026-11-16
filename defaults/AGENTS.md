@@ -787,8 +787,9 @@ The main ones:
 - Agents: `agent.next`, `agent.prev`, `agent.focus {terminal}`.
   `agent.list {space?, machine?}` lists Pi agents with stable terminal, space and tab ids,
   current PID/session and startup state. Use exact ids, not display names.
-  `agent.inspect {terminal, lines?, screen?}` reads status, identity and screen (0–400 history lines, default 80).
-  Set `screen: false` for metadata only, without waiting for terminal output.
+  `agent.inspect {terminal, lines?, screen?}` reads compact Pi session facts and current identity without Usage.
+  Set `screen: true` for the full terminal screen (0–400 history lines, default 80), or `screen: false` for metadata only.
+  Unavailable session facts return a bounded screen fallback; truncated output names the full-screen option.
   `agent.send {terminal, pid, session, message}` sends to the inspected Pi, rejecting startup,
   changed identities and blocked user questions. Never force a response to a user's question.
   `agent.stop {terminal, pid, session}` interrupts with the stop key, without killing or escalating.
@@ -796,15 +797,18 @@ The main ones:
   tabs with sibling panes are rejected. Inspect again after an unknown outcome before retrying.
 - Workflow: `workflow.get` reads the persisted profile table; `workflow.set {profile, model, fallbackModel?, thinking?}`
   changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
-  `workflow.models {machine?}` reads the live Pi model pickers for one machine (default: the selected space's;
-  empty string: this computer) and the extension installation status. A missing catalog is an explicit error,
-  not evidence that no models exist. Its settings are the Workflow section of the right side panel; `workflow.open`
+  `workflow.models {machine?}` reads Pi's global `enabledModels` scope on one machine (default: the selected
+  space's; empty string: this computer), without a running Pi. It returns a cached snapshot with `loading`,
+  diagnostics and errors, supplemented by current live Pi catalogs, and extension installation status.
+  Scope resolution includes configured models without credentials; selection does not prove launch availability.
+  The pickers also accept a manual `provider/model` id when the catalog is unavailable. Its settings are the Workflow section of the right side panel; `workflow.open`
   toggles that panel, or a Workflow dock beside the active-tab workspace in layouts without one.
-  Primary, fallback and thinking selections save automatically.
+  Primary, fallback and all six thinking levels save automatically, independently of model capabilities.
   The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
   an agent that produced a successful assistant response never switches models automatically.
   The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
-  Start or reload Pi there to publish its model picker; existing Pi processes need a reload after updates.
+  Existing Pi processes need a reload after extension updates. Workflow launches reject a substituted model or
+  clamped thinking level as a startup failure; the configured startup fallback may then run once.
 - Layout: `layout.switch {name?}`, `layout.toggle {id}`, `layout.show {id}`, `layout.hide {id}`,
   `layout.resize {id, px | weight}`, `layout.select {stack, child}`, `layout.set {layout}`
   (personal tree edits; on shipped layouts only click/look fields change),

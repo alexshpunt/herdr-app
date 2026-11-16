@@ -7,6 +7,16 @@ import { homedir, release } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+// Pi normally clamps unsupported thinking and may fuzzy-resolve model ids.
+// A workflow must either launch its saved selection exactly or fail startup.
+export function workflowSelectionError(requestedModel, requestedThinking, model, thinking) {
+  if (requestedModel && (!model || `${model.provider}/${model.id}` !== requestedModel)) {
+    return `Workflow model ${requestedModel} is unavailable on this machine (Pi selected ${model ? `${model.provider}/${model.id}` : 'no model'}). Choose an installed provider/model or configure a startup fallback.`;
+  }
+  if (requestedThinking && requestedThinking !== thinking) {
+    return `Workflow thinking ${requestedThinking} is unavailable for ${requestedModel ?? `${model?.provider}/${model?.id}`} on this machine (Pi supports ${thinking} for this selection). Choose another level or configure a startup fallback.`;
+  }
+}
 const execute = promisify(execFile);
 const wsl = process.platform === 'linux' && /microsoft/i.test(release());
 // Keep imports native; Pi's TypeScript loader otherwise caches dependencies on /reload.
@@ -163,7 +173,7 @@ export class AppClient {
     const [agents, workflow] = await Promise.all([this.command('agent.list', args), this.workflow()]);
     return { ...agents, workflow };
   }
-  async inspect(terminal, lines = 40, screen = true) { return this.command('agent.inspect', { terminal, lines, screen }); }
+  async inspect(terminal, lines = 40, screen) { return this.command('agent.inspect', { terminal, lines, screen }); }
   async send(input) { return this.command('agent.send', input); }
   async stop(input) { return this.command('agent.stop', input); }
   async remove(input) {
@@ -173,7 +183,7 @@ export class AppClient {
   // Every agent gets a space of its own, named after it, so it does not crowd
   // the caller's tab bar. Only a startup fallback joins its primary's space.
   async launch(input) {
-    const common = { folder: input.folder, argv: ['pi', '--model', input.model, '--thinking', input.thinking], task: input.message, focus: false };
+    const common = { folder: input.folder, argv: ['pi', '--model', input.model, '--thinking', input.thinking, '--herdr-workflow-model', input.model, '--herdr-workflow-thinking', input.thinking], task: input.message, focus: false };
     if (input.space) {
       const result = await this.command('tab.new', { ...common, space: input.space, name: input.name });
       return { ...result, space: result.space || input.space };

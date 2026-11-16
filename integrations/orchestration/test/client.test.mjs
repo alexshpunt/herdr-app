@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AppClient, ownsTerminal, requestViaMailbox, resolveHc } from '../client.mjs';
+import { AppClient, ownsTerminal, requestViaMailbox, resolveHc, workflowSelectionError } from '../client.mjs';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+test('workflow startup refuses a silently substituted model or thinking level', () => {
+  const selected = { provider: 'p', id: 'model' };
+  assert.equal(workflowSelectionError('p/model', 'high', selected, 'high'), undefined);
+  for (const [model, level] of [[selected, 'off'], [{ provider: 'p', id: 'different' }, 'high'], [undefined, 'high']]) {
+    const error = workflowSelectionError('p/model', 'high', model, level);
+    assert.equal(typeof error, 'string');
+    assert.ok(error.includes('p/model'));
+  }
+  assert.equal(workflowSelectionError(undefined, undefined, selected, 'off'), undefined);
+});
 const route = { version: 1, app: 'app-a', epoch: 'epoch-a', mailbox: 'herdr.orchestration.t1' };
 const identity = { pid: 12, session: 'session-a', terminal: 't1' };
 function fixture({ restart = false, accepted = false, conflicts = 0, unknown = false } = {}) {
@@ -62,7 +72,7 @@ test('each agent opens in a new space named after it; a fallback joins its given
   app.command = async (name, args) => { calls.push([name, args]); return name === 'tab.new' ? { terminal: 'laptop/t3', tab: 'laptop/tb3' } : { space: 'laptop/sp2', tab: 'laptop/tb2', terminal: 'laptop/t2' }; };
   const input = { name: 'LPT-1 task', folder: '/repo', model: 'p/main', thinking: 'high', message: 'Implement LPT-1' };
   assert.equal((await app.launch(input)).space, 'laptop/sp2');
-  assert.deepEqual(calls[0], ['space.new', { folder: '/repo', argv: ['pi', '--model', 'p/main', '--thinking', 'high'], task: 'Implement LPT-1', focus: false, name: 'LPT-1 task', tab: 'LPT-1 task', machine: 'laptop' }]);
+  assert.deepEqual(calls[0], ['space.new', { folder: '/repo', argv: ['pi', '--model', 'p/main', '--thinking', 'high', '--herdr-workflow-model', 'p/main', '--herdr-workflow-thinking', 'high'], task: 'Implement LPT-1', focus: false, name: 'LPT-1 task', tab: 'LPT-1 task', machine: 'laptop' }]);
   await app.launch({ ...input, machine: '' });
   assert.equal(calls[1][1].machine, '', 'an explicit empty machine selects the App\u2019s own computer');
   assert.equal((await app.launch({ ...input, space: 'laptop/sp2' })).space, 'laptop/sp2');

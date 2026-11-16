@@ -1,10 +1,11 @@
-//! User-owned workflow profiles and live Pi model catalogs.
+//! User-owned workflow profiles and machine-scoped Pi model catalogs.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 static WRITES: Mutex<()> = Mutex::new(());
 
@@ -165,6 +166,61 @@ pub fn set(args: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())
 }
 
+#[derive(Default)]
+struct Catalog {
+    value: Option<Value>,
+    at: Option<Instant>,
+    refreshing: bool,
+}
+static CATALOGS: OnceLock<Mutex<BTreeMap<Option<String>, Catalog>>> = OnceLock::new();
+
+/// Return a cached snapshot immediately; remote execution never blocks the UI.
+pub fn models<'a>(core: Arc<crate::hc::Core>, records: impl IntoIterator<Item = &'a Value>, machine: Option<&str>) -> Value {
+    let key = machine.map(str::to_owned);
+    let cache = CATALOGS.get_or_init(Mutex::default);
+    let mut entries = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entry = entries.entry(key.clone()).or_default();
+    let refresh = !entry.refreshing && entry.at.is_none_or(|at| at.elapsed() >= Duration::from_secs(30));
+    let snapshot = entry.value.clone().unwrap_or_else(|| json!({"models":[], "source":"pi-settings"}));
+    let loading = entry.value.is_none();
+    if refresh { entry.refreshing = true; }
+    drop(entries);
+    if refresh {
+        let failed_key = key.clone();
+        if let Err(error) = std::thread::Builder::new().name("pi-model-catalog".into()).spawn(move || {
+            let value = crate::pi_install::model_catalog(&core, key.as_deref())
+                .unwrap_or_else(|error| json!({"models":[], "source":"pi-settings", "error":error}));
+            let mut entries = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let entry = entries.entry(key).or_default();
+            entry.value = Some(value);
+            entry.at = Some(Instant::now());
+            entry.refreshing = false;
+        }) {
+            let mut entries = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let entry = entries.entry(failed_key).or_default();
+            entry.value = Some(json!({"models":[], "error":format!("Cannot start Pi model lookup: {error}")}));
+            entry.at = Some(Instant::now());
+            entry.refreshing = false;
+        }
+    }
+    let mut result = merge_catalogs(snapshot, catalog(records, machine));
+    result["loading"] = json!(loading);
+    result
+}
+
+fn merge_catalogs(mut settings: Value, live: Value) -> Value {
+    let mut models = BTreeMap::<String, Value>::new();
+    for model in settings["models"].as_array().into_iter().flatten().chain(live["models"].as_array().into_iter().flatten()) {
+        if let Some(id) = model["id"].as_str().filter(|id| model_id(id)) {
+            models.entry(id.to_owned()).or_insert_with(|| model.clone());
+        }
+    }
+    settings["models"] = json!(models.into_values().collect::<Vec<_>>());
+    settings["machine"] = live["machine"].clone();
+    settings["sessions"] = live["sessions"].clone();
+    if live["sessions"].as_u64().unwrap_or(0) > 0 { settings["source"] = json!("pi-settings+live-pi"); }
+    settings
+}
 /// Only the terminal's root or foreground Pi may publish its picker. Old labels
 /// survive shell recovery, so labels alone never prove current availability.
 pub fn catalog<'a>(records: impl IntoIterator<Item = &'a Value>, machine: Option<&str>) -> Value {

@@ -2,6 +2,24 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { startAgentIpc, requestAgentMessage } from '../ipc.mjs';
 
+test('authenticated inspection reads a blocked agent without submitting or using the message ledger', async () => {
+  let submitted = 0, inspected = 0;
+  const ipc = await startAgentIpc({ pid: 7, session: 'session', validate: async () => { throw new Error('blocked'); }, submit: () => submitted++, inspect: async () => { inspected++; return { busy: true, pendingQuestion: 'fixture-question' }; } });
+  const request = { action: 'inspect', pid: 7, session: 'session' };
+  try {
+    assert.ok((await requestAgentMessage({ ...ipc, token: 'wrong' }, request)).error);
+    assert.ok((await requestAgentMessage(ipc, { ...request, session: 'stale' })).error);
+    assert.equal(inspected, 0);
+    for (let i = 0; i < 2; i++) {
+      const result = await requestAgentMessage(ipc, request);
+      assert.equal(result.outcome, 'inspected');
+      assert.equal(result.snapshot.pendingQuestion, 'fixture-question');
+    }
+    assert.equal(inspected, 2);
+    assert.equal(submitted, 0);
+  } finally { await ipc.stop(); }
+});
+
 test('native Pi IPC refuses stale identity and submits one exact followup', async () => {
   const submitted = [];
   const ipc = await startAgentIpc({ pid: 7, session: 'session', validate: async () => {}, submit: message => submitted.push(message) });

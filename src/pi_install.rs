@@ -31,6 +31,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../integrations/orchestration/ipc.mjs"),
     ),
     (
+        "inspect.mjs",
+        include_str!("../integrations/orchestration/inspect.mjs"),
+    ),
+    (
         "request.mjs",
         include_str!("../integrations/orchestration/request.mjs"),
     ),
@@ -378,6 +382,31 @@ fn install_on(core: &Core, on: Option<&str>) -> Result<Value, String> {
         "__HERDR_FILES_BASE64__",
         &base64::engine::general_purpose::STANDARD.encode(files),
     );
+    receipt(&run_script(core, on, &script)?)
+}
+
+/// Read Pi's global scope without installing resources or starting a Pi session.
+pub fn model_catalog(core: &Core, on: Option<&str>) -> Result<Value, String> {
+    let discovery = INSTALLER
+        .split_once("// BEGIN_PI_RUNTIME_DISCOVERY\n")
+        .and_then(|(_, rest)| rest.split_once("// END_PI_RUNTIME_DISCOVERY"))
+        .map(|(source, _)| source)
+        .ok_or("The bundled Pi runtime discovery is missing")?;
+    let script = include_str!("../scripts/pi-catalog.cjs").replace("__HERDR_DISCOVERY__", discovery);
+    let result = run_script(core, on, &script)?;
+    if result["timed_out"] == true || result["code"].as_i64() != Some(0) {
+        return Err(format!("Pi model lookup failed (exit {}); check Node.js and Pi on this machine", result["code"]));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(result["stdout"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
+    let output = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let value: Value = output.lines().rev().find_map(|line| line.strip_prefix("herdr-pi-models:"))
+        .ok_or("Pi model lookup returned no confirmation")
+        .and_then(|line| serde_json::from_str(line).map_err(|_| "Pi model lookup returned invalid JSON"))?;
+    if !value["models"].is_array() { return Err("Pi model lookup returned no models array".into()); }
+    Ok(value)
+}
+
+fn run_script(core: &Core, on: Option<&str>, script: &str) -> Result<Value, String> {
     let input = base64::engine::general_purpose::STANDARD.encode(script);
     let result = execute_with(|argv| {
         core.call_timeout(
@@ -395,7 +424,7 @@ fn install_on(core: &Core, on: Option<&str>) -> Result<Value, String> {
         })
     })
     .map_err(ExecFailure::message)?;
-    receipt(&result)
+    Ok(result)
 }
 
 // Retry PATH discovery only when Node was not started. A timeout, disconnect or
