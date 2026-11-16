@@ -3,7 +3,12 @@ import { stripVTControlCharacters } from 'node:util';
 
 const clean = text => stripVTControlCharacters(String(text ?? '')).replace(/\s+/gu, ' ').trim();
 const textOf = message => (message?.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n');
-const clip = (text, limit) => text.length <= limit ? text : `${text.slice(0, Math.ceil((limit - 3) / 2))} … ${text.slice(-Math.floor((limit - 3) / 2))}`;
+const clip = (text, limit) => {
+  if (text.length <= limit) return text;
+  const head = text.slice(0, Math.ceil((limit - 3) / 2)).replace(/[\uD800-\uDBFF]$/u, '');
+  const tail = text.slice(-Math.floor((limit - 3) / 2)).replace(/^[\uDC00-\uDFFF]/u, '');
+  return `${head} … ${tail}`;
+};
 
 export function createInspection(ctx) {
   let lastResponse, lastError, pendingQuestion, failed = false;

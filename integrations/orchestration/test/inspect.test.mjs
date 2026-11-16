@@ -41,4 +41,9 @@ test('inspection bounds serialized output and flags truncated decision text', ()
   assert.ok(snapshot.truncated.includes('lastResponse'));
   assert.ok(snapshot.truncated.includes('pendingQuestion'));
   assert.ok(!JSON.stringify(snapshot).includes('thinking'));
+  inspection.event({ type: 'message_end', message: assistant('💡'.repeat(500) + 'PR #43 merged') });
+  const unicode = inspection.snapshot();
+  assert.ok(unicode.lastResponse.isWellFormed());
+  assert.ok(unicode.lastResponse.endsWith('PR #43 merged'));
+  assert.ok(JSON.stringify(unicode).length <= 850);
 });

@@ -494,7 +494,7 @@ List Pi agents in the running app, optionally in an exact space or on one machin
 
 ## `agent.inspect`
 
-Inspect an exact terminal address: current agent identity and status, plus its screen and up to 400 lines of history (default 80). Set screen false for metadata only, without waiting for terminal output.
+Inspect an exact terminal address: compact Pi session facts, current identity, progress, last reply, question and error. Set screen true for the full terminal screen and 0–400 history lines (default 80), or false for metadata only. Unavailable session facts return a bounded screen fallback.
 
 | Argument | Required |
 |---|---|
