@@ -38,7 +38,6 @@ test('installed Pi resolves all scoped models without a live Pi or provider cred
   assert.equal(catalog.error, undefined);
   assert.deepEqual(catalog.models.map(model => model.id).sort(), ['herdr-catalog/first', 'herdr-catalog/second']);
   assert.equal(catalog.source, 'pi-settings');
-  assert.equal(catalog.error, undefined);
   assert.equal(await readFile(path.join(root, 'settings.json'), 'utf8'), settings);
   assert.deepEqual(await readdir(root), before);
 }));

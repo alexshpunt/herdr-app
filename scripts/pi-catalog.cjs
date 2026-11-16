@@ -34,7 +34,13 @@ async function catalog() {
   if (errors.length) throw new Error(errors.map(item => `${item.path ?? item.scope}: ${item.error.message}`).join('; '));
   const patterns = settings.getGlobalSettings().enabledModels;
   const models = await sdk.ModelRuntime.create({
-    credentials: sdk.AuthStorage.inMemory(), modelsPath: path.join(agent, 'models.json'),
+    // Only local model metadata is needed, not credential contents or mutations.
+    credentials: {
+      read: async () => undefined, list: async () => [],
+      modify: async () => { throw new Error('Catalog lookup cannot modify credentials'); },
+      delete: async () => { throw new Error('Catalog lookup cannot delete credentials'); },
+    },
+    modelsPath: path.join(agent, 'models.json'),
     allowModelNetwork: false, refreshOnCreate: false,
   });
   if (models.getError()) throw new Error(models.getError());
