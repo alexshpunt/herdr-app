@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{IntoElement, Render, TestAppContext, VisualTestContext};
+use gpui::{AppContext as _, IntoElement, Render, TestAppContext, VisualTestContext};
 use std::ops::Deref;
 use gpui_shell::{ShellRoot, ShellRuntime, policy::Policy};
 use std::{cell::Cell, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::Instant};
@@ -29,6 +29,69 @@ impl Render for Mounted {
     fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         self.0.clone()
     }
+}
+
+#[gpui::test]
+fn native_states_remain_callable_after_repeated_mod_reload(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let source = |revision| format!(r#"
+import {{ View, div }} from "gpui-kit";
+import {{ NativeAppState, NativeApp }} from "herdr-browser";
+import {{ note }} from "fixture";
+export default class extends View {{
+  init(_props, cx) {{
+    this.app = null;
+    cx.spawn(async (cx) => {{
+      await Promise.resolve();
+      this.app = NativeAppState("reload-test");
+      cx.notify();
+    }});
+  }}
+  render() {{
+    if (!this.app) return div();
+    note({revision}, this.app.shown(), this.app.error() === null);
+    return NativeApp(this.app).size_full();
+  }}
+}}"#);
+    let fixture = Fixture::new(&source(0));
+    let notes = Rc::new(RefCell::new(Vec::new()));
+    let calls = notes.clone();
+    gpui_shell::policy::set_default(Policy::new().with_host_module(
+        HostModule::new("fixture").function("note", move |a| {
+            calls.borrow_mut().push((a.number(0)? as usize, a.boolean(1)?, a.boolean(2)?));
+            Ok(HostValue::Null)
+        })
+    ).unwrap());
+    let runtime = ShellRuntime::new_isolated_with_components(crate::browser::components()).unwrap();
+    let window = cx.add_window(|window, cx| Mounted(runtime.try_load(&fixture.0, window, cx).unwrap()));
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx)).unwrap();
+    for revision in [0, 0, 1, 1, 2, 2] {
+        std::fs::write(fixture.0.join("main.js"), source(revision)).unwrap();
+        window.update(cx, |host, window, cx| runtime.reload_now(&host.0, window, cx).unwrap()).unwrap();
+        // Another mod may enter the VM before this replacement gets a frame.
+        // Its teardown must not own the first mod's queued init continuations.
+        let other = Fixture::new(r#"import { View, div } from 'gpui-kit';
+            export default class extends View { render() { return div(); } }"#);
+        window.update(cx, |_, window, cx| {
+            let other_root = runtime.try_load(&other.0, window, cx).unwrap();
+            runtime.close_now(&other_root, Instant::now() + Duration::from_millis(250), window, cx);
+        }).unwrap();
+        cx.run_until_parked();
+        notes.borrow_mut().clear();
+        let root = window.update(cx, |host, _, _| host.0.clone()).unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            runtime.refresh(&root, cx).unwrap();
+            window.draw(cx).clear(cx);
+        }).unwrap();
+        window.update(cx, |host, _, cx| {
+            let view = host.0.read(cx).content().clone().downcast::<gpui_shell::ScriptView>().unwrap();
+            assert_eq!(view.read(cx).build_error(), None);
+        }).unwrap();
+        assert_eq!(notes.borrow().last(), Some(&(revision, false, true)));
+    }
+    window.update(cx, |_, window, _| window.remove_window()).unwrap();
+    cx.run_until_parked();
 }
 
 #[gpui::test]
