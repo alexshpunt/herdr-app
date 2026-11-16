@@ -52,8 +52,8 @@ const done = await create('success');
 await record('default tool result contains decision text without Usage or a screen', async () => {
   const { data, chars } = await invoke('herdr_agent_inspect', { terminal: done.terminal });
   assert.equal(data.source, 'pi'); assert.equal(data.inspection.busy, false);
-  assert.ok(data.inspection.lastResponse.includes('PR #42 merged'));
-  assert.ok(!('screen' in data)); assert.ok(chars <= 1500, String(chars));
+  assert.ok(data.inspection.events.some(event => event.kind === 'reply' && event.text.includes('PR #42 merged')));
+  assert.ok(!('screen' in data)); assert.ok(Buffer.byteLength(JSON.stringify(data.inspection)) <= 48 * 1024);
   return { terminal: done.terminal, chars, data };
 });
 await record('metadata and full-screen modes remain explicit', async () => {
@@ -63,28 +63,32 @@ await record('metadata and full-screen modes remain explicit', async () => {
   assert.equal(full.data.source, 'screen'); assert.ok(full.data.screen.includes('PR #42 merged'));
   return { compactChars: reports[0].result.chars, fullChars: full.chars, reduction: 1 - reports[0].result.chars / full.chars };
 });
-await record('old integration falls back to a bounded excerpt', async () => {
+await record('old integration fails without reading a terminal screen', async () => {
   const runHc = args => { const result = spawnSync(config.hc, args, { env, encoding: 'utf8', timeout: 15000 }); assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout); };
   const id = done.terminal.split('/').at(-1);
   const original = runHc(['get', id, '--json']).labels['herdr.pi'];
   try {
     runHc(['label', id, `herdr.pi=${JSON.stringify({ ...JSON.parse(original), inspect: 0 })}`, '--json']);
-    const { data, chars } = await invoke('herdr_agent_inspect', { terminal: done.terminal });
-    assert.equal(data.source, 'screen-fallback'); assert.ok(data.fallbackReason); assert.ok(chars <= 1500); assert.ok(!('inspection' in data));
-    return { chars, data };
+    const refused = spawnSync(config.exe, ['do', 'agent.inspect', JSON.stringify({ terminal: done.terminal })], { env, encoding: 'utf8', timeout: 20000 });
+    assert.notEqual(refused.status, 0);
+    const data = JSON.parse(refused.stdout);
+    assert.ok(data.error); assert.ok(!('screen' in data));
+    return data;
   } finally { runHc(['label', id, `herdr.pi=${original}`, '--json']); }
 });
-const long = await create('success', 'Fixture context '.repeat(500) + 'Final decision: PR #43 merged');
+const long = await create('success', 'Fixture context '.repeat(1000) + 'Final decision: PR #43 merged');
 await record('long reply is bounded and truncation is explicit', async () => {
   const { data, chars } = await invoke('herdr_agent_inspect', { terminal: long.terminal });
-  assert.ok(data.inspection.truncated.includes('lastResponse')); assert.ok(data.inspection.lastResponse.endsWith('PR #43 merged')); assert.ok(chars <= 1500);
+  const reply = data.inspection.events.find(event => event.kind === 'reply').text;
+  assert.ok(reply.length <= 12000); assert.ok(reply.endsWith('PR #43 merged'));
+  assert.ok(Buffer.byteLength(JSON.stringify(data.inspection)) <= 48 * 1024);
   return { chars, data };
 });
 const work = await create('inspect-work');
 await record('current tool is visible during real execution', async () => {
-  await waitFor(() => app('agent.inspect', { terminal: work.terminal }).inspection?.currentTools.includes('fixture_wait'));
+  await waitFor(() => app('agent.inspect', { terminal: work.terminal }).inspection?.events.some(event => event.kind === 'call' && event.tool === 'fixture_wait' && event.state === 'running'));
   const { data, chars } = await invoke('herdr_agent_inspect', { terminal: work.terminal });
-  assert.equal(data.status, 'working'); assert.ok(data.inspection.currentTools.includes('fixture_wait')); assert.ok(chars <= 1500);
+  assert.equal(data.status, 'working'); assert.ok(data.inspection.events.some(event => event.kind === 'call' && event.tool === 'fixture_wait' && event.state === 'running'));
   app('agent.stop', target(work));
   return { chars, data };
 });

@@ -18,6 +18,7 @@ export class AppClient {
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async list(){return {version:${JSON.stringify(version)},agents:[]}}
+ async command(name,args){return {version:${JSON.stringify(version)},name,args}}
 }
 `;
 test('real Pi reload refreshes module code and never reopens the startup fallback boundary',{timeout:30000},async()=>{
@@ -40,6 +41,10 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
     return tool.execute('reload-probe',{},undefined,undefined);
   };
   assert.equal((await request()).structuredContent.version,'first');
+  const bridge = () => { let api; bus.emit('herdr:bridge', { provide: value => { api = value; } }); assert.ok(api); return api; };
+  assert.equal(bridge().version, 1);
+  assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
+  assert.throws(() => bridge().command('agent.remove', {}));
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
   const snapshot = async () => {
@@ -59,7 +64,12 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   session.sessionManager.appendMessage({ role:'assistant', content:[{type:'text',text:'Started before publication'}], api:'openai-completions', provider:'fixture', model:'fixture', stopReason:'stop', timestamp:Date.now(), usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}} });
   await writeFile(path.join(root,'label.json'),JSON.stringify({...(await label()),startup:'pending'}));
   await session.reload();
-  assert.equal((await snapshot()).snapshot.lastResponse, 'Started before publication');
+  assert.equal((await snapshot()).snapshot.events[0].text, 'Started before publication');
+  assert.equal((await bridge().command('agent.inspect', { terminal: 'm/t2' })).version, 'second');
+  const route = await label();
+  const history = await requestAgentMessage(route, { action: 'history', pid: route.pid, session: route.session });
+  assert.equal(history.outcome, 'history');
+  assert.equal(history.items.at(-1).text, 'Started before publication');
   assert.equal((await request()).structuredContent.version,'second');
   assert.equal((await label()).startup,'started');
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'later quota'}});

@@ -20,6 +20,24 @@ test('authenticated inspection reads a blocked agent without submitting or using
   } finally { await ipc.stop(); }
 });
 
+test('history authenticates and validates read-only requests even while sending is blocked', async () => {
+  const seen = [];
+  const ipc = await startAgentIpc({ pid: 7, session: 'session', validate: async () => { throw new Error('blocked'); }, submit: () => assert.fail('history submitted a message'), history: params => { seen.push(params); return { items: [{ index: 2, text: 'fixture' }] }; } });
+  const request = { action: 'history', pid: 7, session: 'session', before: 3, limit: 1 };
+  try {
+    assert.ok((await requestAgentMessage({ ...ipc, token: 'wrong' }, request)).error);
+    assert.equal(seen.length, 0);
+    const result = await requestAgentMessage(ipc, request);
+    assert.equal(result.outcome, 'history');
+    assert.equal(result.items[0].index, 2);
+    assert.equal(seen[0].before, 3);
+    for (const invalid of [{ query: 'x'.repeat(201) }, { query: 2 }, { before: -1 }, { before: 1.5 }, { limit: 0 }, { limit: 51 }, { caseSensitive: 'yes' }]) {
+      assert.ok((await requestAgentMessage(ipc, { ...request, ...invalid })).error);
+    }
+    assert.equal(seen.length, 1);
+  } finally { await ipc.stop(); }
+});
+
 test('native Pi IPC refuses stale identity and submits one exact followup', async () => {
   const submitted = [];
   const ipc = await startAgentIpc({ pid: 7, session: 'session', validate: async () => {}, submit: message => submitted.push(message) });

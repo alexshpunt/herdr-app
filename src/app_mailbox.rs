@@ -183,6 +183,7 @@ fn valid_wire(wire: &Value) -> bool {
                 "workflow.get"
                     | "agent.list"
                     | "agent.inspect"
+                    | "agent.history"
                     | "agent.send"
                     | "agent.stop"
                     | "agent.remove"
@@ -326,6 +327,8 @@ mod tests {
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"-_.".contains(&c)));
         assert!(valid_wire(&json!({"ls":true})));
+        assert!(valid_wire(&json!({"do":"agent.history","args":{"terminal":"remote/t1"}})));
+        assert!(!targets_caller(&json!({"do":"agent.history","args":{"terminal":"remote/t1"}}), "remote/t1"));
         assert!(valid_wire(&json!({"do":"space.new","args":{}})));
         for wire in [
             json!({"shot":"secret"}),

@@ -23,16 +23,18 @@ async function main([terminal, rawPid, session, hc = process.env.HC_BIN || 'hc']
   let envelope;
   try { envelope = JSON.parse(input); } catch { throw new Error('Invalid Pi follow-up message'); }
   const inspecting = envelope.action === 'inspect';
-  if (!inspecting && (typeof envelope.message !== 'string' || !envelope.message.trim())) throw new Error('The Pi follow-up message is empty');
+  const history = envelope.action === 'history';
+  if (envelope.action !== undefined && !inspecting && !history) throw new Error('Unsupported Pi request action');
+  if (!inspecting && !history && (typeof envelope.message !== 'string' || !envelope.message.trim())) throw new Error('The Pi follow-up message is empty');
   let record;
   try { record = JSON.parse(execFileSync(hc, ['get', terminal, '--json'], { encoding: 'utf8', timeout: 5000, windowsHide: true })); }
   catch { throw new Error('Cannot verify the target Pi; no message was submitted'); }
   const route = reachable(record, pid, session);
   if (!route) throw new Error('The Pi identity or message route changed; inspect the agent and reload Pi');
   let result;
-  try { result = await requestAgentMessage(route, inspecting ? { action: 'inspect', pid, session } : { id: randomUUID(), pid, session, message: envelope.message }); }
+  try { result = await requestAgentMessage(route, inspecting ? { action: 'inspect', pid, session } : history ? { ...envelope, pid, session } : { id: randomUUID(), pid, session, message: envelope.message }); }
   catch { throw new Error('Pi message delivery was not confirmed; inspect the agent before resending'); }
-  if (result?.outcome !== (inspecting ? 'inspected' : 'submitted')) throw new Error(result?.error || 'The Pi session did not confirm the request');
+  if (result?.outcome !== (inspecting ? 'inspected' : history ? 'history' : 'submitted')) throw new Error(result?.error || 'The Pi session did not confirm the request');
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
