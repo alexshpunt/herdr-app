@@ -4301,7 +4301,7 @@ impl AppWindow {
         let removing = name == "agent.remove";
         let validation = validation.and_then(|()| {
             if removing { crate::agents::require_dedicated(placement.as_ref())?; }
-            if !matches!(name, "agent.inspect" | "agent.history") { self.require_document(address.split_once('/').map(|(m, _)| m)) }
+            if !matches!(name.as_str(), "agent.inspect" | "agent.history") { self.require_document(address.split_once('/').map(|(m, _)| m)) }
             else { Ok(()) }
         });
         if let Err(error) = validation {
