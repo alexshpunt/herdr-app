@@ -55,5 +55,5 @@ async function catalog() {
   ])).values()];
   return { models: choices, source: 'pi-settings', diagnostics: scope.diagnostics };
 }
-catalog().catch(error => ({ models: [], source: 'pi-settings', error: `Cannot read Pi models: ${error.message}. You can still enter provider/model manually.` }))
+catalog().catch(error => ({ models: [], source: 'pi-settings', error: `Catalog lookup failed: ${error.message}. Manual model entry remains available.` }))
   .then(result => process.stdout.write('\nherdr-pi-models:' + JSON.stringify(result) + '\n'));

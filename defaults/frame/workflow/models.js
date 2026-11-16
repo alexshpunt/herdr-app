@@ -6,7 +6,7 @@ export function modelChoices(catalog, query = "", fallback = false) {
   const id = query.trim();
   const manual = /^[A-Za-z0-9._:@+-]+\/[A-Za-z0-9._:/@+-]+$/.test(id)
     && !(catalog?.models ?? []).some(model => model.id.toLowerCase() === q)
-    ? [{ id, name: `Use ${id}`, manual: true }] : [];
+    ? [{ id, name: `Select this model: ${id}`, manual: true }] : [];
   return [...(fallback && (!q || "no fallback".includes(q)) ? [{ id: null, name: "No fallback" }] : []), ...choices, ...manual];
 }
 

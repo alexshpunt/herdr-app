@@ -96,7 +96,7 @@ export class Orchestrator {
       if (outcome === 'exited') {
         let screen;
         try { screen = (await this.client.inspect(target.terminal, 20, true)).screen; } catch { /* Exit is already verified; screen retrieval must not hide it. */ }
-        detail = `Pi exited during startup with model ${receipt.model} and thinking ${thinking}. ${detail ?? screen ?? 'Inspect its retained terminal for the launch error.'}`;
+        detail = `Launch ended: ${receipt.model}, ${thinking}. ${detail ?? screen ?? 'Read the terminal.'}`;
       }
       return { outcome, pid: agent.pid, session: agent.session, detail };
     };
