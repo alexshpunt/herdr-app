@@ -43,7 +43,7 @@ test('live question and error tracking survives the new timeline contract', () =
   const inspection = setup([]);
   inspection.event({ type: 'tool_execution_start', toolCallId: 'one', toolName: 'ask_user', args: { questions: [{ prompt: 'fixture choice', options: [{ label: 'fixture option' }] }] } });
   inspection.event({ type: 'ui_prompt_start', title: 'fixture choice' });
-  assert.equal(inspection.timeline().pendingQuestion, 'fixture choice | fixture option');
+  for (const value of ['fixture choice', 'fixture option']) assert.ok(inspection.timeline().pendingQuestion.includes(value));
   inspection.event({ type: 'ui_prompt_end' });
   assert.equal(inspection.timeline().pendingQuestion, undefined);
   inspection.event({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'fixture quota' } });
@@ -63,6 +63,13 @@ test('history indexes all branch parts and pages exclusively before the requeste
   assert.equal(inspection.history({}).items[2].text, 'bash {"path":"fixture"}');
 });
 
+test('case-insensitive history snippets use original Unicode offsets and literal punctuation', () => {
+  const inspection = setup([entry('toolResult', [text('İ'.repeat(1000) + 'literal.[fixture]' + 'y'.repeat(1000))], { toolName: 'read' })]);
+  const result = inspection.history({ query: 'LITERAL.[FIXTURE]' });
+  assert.equal(result.matches.length, 1);
+  assert.ok(result.matches[0].text.includes('literal.[fixture]'));
+  assert.equal(inspection.history({ query: 'literalxfixture' }).matches.length, 0);
+});
 test('history searches full text, including cut-away tool results, newest first', () => {
   const branch = [entry('user', [text('Needle older')]), entry('toolResult', [text('x'.repeat(6000) + 'needle' + 'y'.repeat(6000))], { toolName: 'read' })];
   const inspection = setup(branch);

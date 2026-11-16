@@ -126,10 +126,11 @@ export function createInspection(ctx) {
       } else {
         key = 'matches';
         selected = [];
-        const needle = caseSensitive ? query : query.toLowerCase();
+        // Match on the original string: Unicode lowercasing can change its length.
+        const needle = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), caseSensitive ? 'u' : 'iu');
         for (let i = eligible.length - 1; i >= 0 && selected.length < limit; i--) {
           const item = eligible[i];
-          const position = (caseSensitive ? item.text : item.text.toLowerCase()).indexOf(needle);
+          const position = needle.exec(item.text)?.index ?? -1;
           if (position < 0) continue;
           selected.push({ ...item, text: item.text.slice(Math.max(0, position - 200), position + query.length + 200).toWellFormed() });
         }

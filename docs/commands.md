@@ -494,13 +494,25 @@ List Pi agents in the running app, optionally in an exact space or on one machin
 
 ## `agent.inspect`
 
-Inspect an exact terminal address: compact Pi session facts, current identity, progress, last reply, question and error. Set screen true for the full terminal screen and 0–400 history lines (default 80), or false for metadata only. Unavailable session facts return a bounded screen fallback.
+Inspect an exact terminal address: Pi timeline, current identity, question and error. Set screen true for the full terminal screen and 0–400 history lines (default 80), or false for metadata only. An unavailable Pi returns an error; reload its integration.
 
 | Argument | Required |
 |---|---|
 | `terminal` | yes |
 | `lines` | no |
 | `screen` | no |
+
+## `agent.history`
+
+Read the current Pi session branch. Page before an exclusive item index (default end), limit 1–50 (default 20). Query searches literal text, at most 200 characters, newest matches first; caseSensitive defaults to false.
+
+| Argument | Required |
+|---|---|
+| `terminal` | yes |
+| `query` | no |
+| `caseSensitive` | no |
+| `before` | no |
+| `limit` | no |
 
 ## `agent.send`
 
