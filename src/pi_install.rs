@@ -31,6 +31,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../integrations/orchestration/ipc.mjs"),
     ),
     (
+        "inspect.mjs",
+        include_str!("../integrations/orchestration/inspect.mjs"),
+    ),
+    (
         "request.mjs",
         include_str!("../integrations/orchestration/request.mjs"),
     ),

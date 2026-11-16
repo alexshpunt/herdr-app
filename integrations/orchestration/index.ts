@@ -11,6 +11,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   let client: InstanceType<typeof import('./client.mjs').AppClient> | undefined;
   let service: InstanceType<typeof import('./orchestration.mjs').Orchestrator> | undefined;
   let ipc: Awaited<ReturnType<typeof import('./ipc.mjs').startAgentIpc>> | undefined;
+  let inspection: ReturnType<typeof import('./inspect.mjs').createInspection> | undefined;
   let startup: 'pending' | 'started' | 'failed' = 'pending';
   let error: string | undefined;
   let ownerSession: string | undefined;
@@ -23,7 +24,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       const available = ctx.scopedModels.length ? ctx.scopedModels.map(item => item.model) : ctx.modelRegistry.getAvailable();
       const models = [...new Map(available.map(model => [`${model.provider}/${model.id}`, { id: `${model.provider}/${model.id}`, name: model.name }])).values()];
       const hc = client.hc;
-      const route = ipc ? { socket: ipc.socket, token: ipc.token, node: process.execPath, request: fileURLToPath(new URL('./request.mjs', import.meta.url)), hc } : {};
+      const route = ipc ? { inspect: 1, socket: ipc.socket, token: ipc.token, node: process.execPath, request: fileURLToPath(new URL('./request.mjs', import.meta.url)), hc } : {};
       const label = { version: 1, pid: process.pid, session: ctx.sessionManager.getSessionId(), models, startup, ...route, ...(error ? { error } : {}) };
       const serialized = JSON.stringify(label);
       if (serialized === lastPublication) return;
@@ -35,7 +36,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   const initialize = async (ctx: ExtensionContext) => {
     await publishing.catch(() => {});
     await ipc?.stop(); ipc = undefined;
-    client = undefined; service = undefined; lastPublication = '';
+    client = undefined; service = undefined; inspection = undefined; lastPublication = '';
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;
     const session = ctx.sessionManager.getSessionId();
     if (session !== ownerSession) { startup = 'pending'; error = undefined; ownerSession = session; }
@@ -59,6 +60,12 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     const ipcUrl = new URL('./ipc.mjs', import.meta.url); ipcUrl.searchParams.set('load', suffix);
     const { startAgentIpc } = await importFresh(ipcUrl.href) as typeof import('./ipc.mjs');
     const currentClient = candidate;
+    const inspectUrl = new URL('./inspect.mjs', import.meta.url); inspectUrl.searchParams.set('load', suffix);
+    const { createInspection } = await importFresh(inspectUrl.href) as typeof import('./inspect.mjs');
+    inspection = createInspection(ctx);
+    const currentSession = () => {
+      if (ownerSession !== session || ctx.sessionManager.getSessionId() !== session) throw new Error('The Pi session changed; inspect the agent again');
+    };
     ipc = await startAgentIpc({ pid: process.pid, session,
       validate: async () => {
         const current = await currentClient.owner();
@@ -67,6 +74,10 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         const status = typeof current.status === 'object' ? current.status : current.report;
         if (current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
       },
+      inspect: async () => {
+        await currentClient.owner(); currentSession();
+        return inspection!.snapshot();
+      },
       submit: (message: string) => pi.sendUserMessage(message, { deliverAs: 'followUp' }),
       report: (value: unknown) => report(ctx, value),
     });
@@ -74,6 +85,16 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     await publish(ctx);
   };
   pi.on('session_start', async (_event, ctx) => { try { await initialize(ctx); } catch (value) { report(ctx, value); } });
+  for (const type of ['before_agent_start', 'message_end', 'tool_execution_start', 'tool_execution_end', 'ui_prompt_start', 'ui_prompt_end', 'agent_settled'] as const) {
+    pi.on(type, async event => { inspection?.event(event); });
+  }
+  for (const type of ['session_tree', 'session_compact'] as const) {
+    pi.on(type, async (_event, ctx) => {
+      if (!inspection) return;
+      const { createInspection } = await importFresh(new URL('./inspect.mjs', import.meta.url).href) as typeof import('./inspect.mjs');
+      inspection = createInspection(ctx);
+    });
+  }
   pi.on('model_select', async (_event, ctx) => { try { await publish(ctx); } catch (value) { report(ctx, value); } });
   pi.on('before_agent_start', async (event, ctx) => {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;
@@ -133,6 +154,14 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
           lines = [clean(data.outcome ?? data.status ?? data.state ?? 'Applied') + (data.model ? ` · ${clean(data.model)}` : '')];
           if (data.terminal) lines.push(clean(data.terminal));
           if (data.detail || data.message || data.error || data.startupError) lines.push(clean(data.detail ?? data.error ?? data.startupError ?? data.message));
+          if (data.inspection) {
+            const facts = data.inspection;
+            if (facts.currentTools?.length) lines.push(`Tools: ${facts.currentTools.map(clean).join(', ')}`);
+            if (facts.pendingQuestion) lines.push(`Question: ${clean(facts.pendingQuestion)}`);
+            if (facts.lastError) lines.push(`Error: ${clean(facts.lastError)}`);
+            if (facts.lastResponse) lines.push(clean(facts.lastResponse));
+            if (facts.truncated?.length) lines.push('Truncated; request screen: true for terminal details.');
+          }
           if (data.retainedPrimary?.terminal) lines.push(`Primary retained: ${clean(data.retainedPrimary.terminal)}`);
           if (options.expanded) {
             if (data.pid) lines.push(`Pi PID ${clean(data.pid)} · session ${clean(data.session)}`);
@@ -148,7 +177,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         const data = await execute(args, signal, value => onUpdate?.({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value }));
         const outcome = data && typeof data === 'object' && 'outcome' in data ? data.outcome : undefined;
         const isError = ['unknown', 'model-failed', 'exited', 'still_working', 'unconfirmed'].includes(String(outcome));
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], details: data, structuredContent: JSON.parse(JSON.stringify(data)), isError };
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, name === 'herdr_agent_inspect' ? 0 : 2) }], details: data, structuredContent: JSON.parse(JSON.stringify(data)), isError };
       },
     });
   }
@@ -156,9 +185,9 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     space: Type.Optional(Type.String({ description: 'Exact space ID. Omit to list agents across spaces.' })),
     machine: Type.Optional(Type.String({ description: 'Configured Herdr machine. Omit to list across machines.' })),
   }), false, async args => { await client!.context(); return client!.list(args); });
-  register('herdr_agent_inspect', 'Use herdr_agent_inspect to read one agent’s state, current PID and session, startup outcome and screen before acting on it.', Type.Object({
-    terminal: target.terminal, lines: Type.Optional(Type.Integer({ minimum: 0, maximum: 400, default: 40, description: 'Lines of history above the screen.' })),
-    screen: Type.Optional(Type.Boolean({ default: true, description: 'Set false for identity and status only, without waiting for terminal output.' })),
+  register('herdr_agent_inspect', 'Use herdr_agent_inspect to read one agent’s current identity, progress, last reply, question and error before acting on it.', Type.Object({
+    terminal: target.terminal, lines: Type.Optional(Type.Integer({ minimum: 0, maximum: 400, default: 40, description: 'Lines of history above the screen when screen is true.' })),
+    screen: Type.Optional(Type.Boolean({ description: 'Omit for compact session facts. Set true for the full terminal screen, or false for identity and status only.' })),
   }), false, async args => { await client!.context(); return client!.inspect(args.terminal, args.lines, args.screen); });
   register('herdr_agent_create', 'Use herdr_agent_create to start an independent task for the user in a new Herdr space of its own. Use replicate for your own subtasks. The first message is submitted at launch; fallback is limited to startup before the first successful assistant response.', Type.Object({
     requestId: Type.String({ minLength: 1, description: 'Stable unique task key, such as its issue ID. Reuse the same key and inputs after interruption; do not choose a new key to retry an unknown launch.' }),

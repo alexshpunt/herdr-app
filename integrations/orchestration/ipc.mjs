@@ -9,7 +9,7 @@ import path from 'node:path';
 export const MESSAGE_LIMIT = 256 * 1024;
 const timeout = 10000;
 
-export async function startAgentIpc({ pid, session, validate, submit, report = (_error) => {} }) {
+export async function startAgentIpc({ pid, session, validate, submit, inspect, report = (_error) => {} }) {
   const token = randomBytes(32).toString('hex');
   const directory = process.platform === 'win32' ? undefined : await mkdtemp(path.join(tmpdir(), 'herdr-agent-'));
   const socket = directory ? path.join(directory, 'agent.sock') : `\\\\.\\pipe\\herdr-agent-${pid}-${token}`;
@@ -34,6 +34,16 @@ export async function startAgentIpc({ pid, session, validate, submit, report = (
       if (request?.token !== token || request.pid !== pid || request.session !== session) {
         send({ error: 'The Pi message identity changed; inspect the agent again' }); return;
       }
+      if (request.action === 'inspect') {
+        try {
+          if (!inspect || stopped) throw new Error('Pi inspection is unavailable; reload Pi');
+          const snapshot = await inspect();
+          if (stopped) throw new Error('Pi reloaded during inspection; inspect again');
+          send({ outcome: 'inspected', snapshot });
+        } catch (error) { send({ error: error instanceof Error ? error.message : String(error) }); }
+        return;
+      }
+      if (request.action !== undefined) { send({ error: 'Unsupported Pi request action' }); return; }
       if (typeof request.id !== 'string' || !request.id || request.id.length > 128 || typeof request.message !== 'string' || !request.message.trim()) {
         send({ error: 'A message request needs an ID and non-empty text' }); return;
       }

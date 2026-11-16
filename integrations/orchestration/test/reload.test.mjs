@@ -23,7 +23,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
  const prior=new Map(['HC_TERMINAL_ID','HC_TERMINAL_SOCKET'].map(key=>[key,process.env[key]]));
  let session;
  try {
-  for(const file of ['index.ts','orchestration.mjs','ipc.mjs']) await copyFile(path.join(here,'..',file),path.join(root,file));
+  for(const file of ['index.ts','orchestration.mjs','ipc.mjs','inspect.mjs']) await copyFile(path.join(here,'..',file),path.join(root,file));
   await writeFile(path.join(root,'client.mjs'),clientModule('first'));
   process.env.HC_TERMINAL_ID='fixture';process.env.HC_TERMINAL_SOCKET='fixture';
   const bus=createEventBus(),settings=SettingsManager.inMemory();
