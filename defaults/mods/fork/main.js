@@ -81,7 +81,18 @@ export default class ForkApp extends View {
    */
   async start(cx) {
     const folder = this.folder;
-    const description = this.app ? null : forkLaunch(env);
+    const fresh = !this.app;
+    const description = fresh ? forkLaunch(env) : null;
+    const app = this.app ?? NativeAppState(`fork\n${folder}`);
+    this.app = app;
+    cx.notify();
+    // Let the state take a kept window after this initialization commits,
+    // including in a hidden pane. No launch lease or preparation is needed.
+    if (fresh) await cx.sleep(0);
+    if (app.shown()) {
+      if (fresh) app.open(description);
+      return;
+    }
     const id = `${props()?.pane ?? ""}/${Math.random()}`;
     // The state starts when its element first renders: an app in a pane no
     // one sees takes its turn once it shows.
@@ -106,13 +117,8 @@ export default class ForkApp extends View {
         renew();
         await cx.sleep(200);
       }
-      let app = this.app;
-      if (app) app.reopen();
-      else {
-        app = NativeAppState(`fork\n${folder}`);
-        app.open(description);
-        this.app = app;
-      }
+      if (fresh) app.open(description);
+      else app.reopen();
       cx.notify();
       const until = Date.now() + START_WAIT;
       while (!app.shown() && !app.error() && Date.now() < until) {

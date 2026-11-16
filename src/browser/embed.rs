@@ -244,7 +244,7 @@ impl NativeApp {
 /// Open the program's window on first use. Runs between App updates on Windows.
 fn start(state: &State, window: &mut Window, cx: &mut App) {
     #[cfg(windows)]
-    win::start(state, window, cx);
+    win::start(state, window, cx, true);
     #[cfg(not(windows))]
     {
         let _ = (window, cx);
@@ -309,7 +309,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
     registry.register_state(StateDescriptor::new(
         "NativeAppState", "HerdrNativeAppState",
         vec![ArgumentDescriptor::new("key", ArgumentSchema::String)],
-        |args, window, _| {
+        |args, window, cx| {
             let ComponentArgument::String(key) = &args[0] else { unreachable!() };
             let state = Rc::new(RefCell::new(NativeApp {
                 window: window.window_handle().window_id(), key: key.clone(), description: None,
@@ -319,6 +319,18 @@ pub(super) fn register(registry: &mut ComponentRegistry) {
                 #[cfg(windows)] opening: false,
             }));
             APPS.with_borrow_mut(|apps| apps.push(Rc::downgrade(&state)));
+            // A failed candidate init must not take the live copy's window.
+            // Defer the handoff until the update commits, without retaining
+            // a candidate state that reload rolled back.
+            #[cfg(windows)]
+            {
+                let weak = Rc::downgrade(&state);
+                window.defer(cx, move |window, cx| {
+                    if let Some(state) = weak.upgrade() { win::start(&state, window, cx, false); }
+                });
+            }
+            #[cfg(not(windows))]
+            let _ = cx;
             Ok(Box::new(state))
         },
     ).with_documentation("A program's own window shown in this pane (Windows), started from the launch description `open` gives. `key` names what the window shows: a restarted mod, or another pane with the same key, takes that window over. Closing the pane closes the window.")
@@ -501,15 +513,16 @@ mod win {
         ORPHANS.with_borrow_mut(|o| o.push((key.to_owned(), embedded, Instant::now() + ORPHAN_GRACE)));
     }
 
-    pub(super) fn start(state: &State, window: &mut Window, cx: &mut App) {
+    // Hidden states can reclaim windows, but only a rendered element may
+    // launch a new program. Construction and materialization share the handoff.
+    pub(super) fn start(state: &State, window: &mut Window, cx: &mut App, launch_new: bool) {
         let (generation, key, description) = {
-            let mut app = state.borrow_mut();
+            let app = state.borrow();
             if app.embedded.is_some() || app.opening || app.error.is_some() || app.closed { return; }
-            // The mod has not described its launch yet.
-            let Some(description) = app.description.clone() else { return };
-            app.opening = true;
-            (app.generation, app.key.clone(), description)
+            (app.generation, app.key.clone(), app.description.clone())
         };
+        let saved = kept(state, &key);
+        if saved.is_none() && (!launch_new || description.is_none()) { return; }
         if !QUIT_HOOKED.get() {
             QUIT_HOOKED.set(true);
             // Quitting Herdr closes every adopted window as its own close
@@ -539,14 +552,10 @@ mod win {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get() as HWND,
             _ => { fail(state, "No Win32 host window".into()); return; }
         };
-        let launch = match description.launch() {
-            Ok(launch) => launch,
-            Err(error) => { fail(state, format!("{error:#}")); return; }
-        };
         // A pane whose mod restarted (a mod reload, a layout change) gets the
         // window its earlier copy still holds for the same key: VS Code
         // would only bring that window forward instead of opening another.
-        if let Some((embedded, origin)) = kept(state, &key) {
+        if let Some((embedded, origin)) = saved {
             let embedded = moved_to(embedded, host);
             let child = embedded.child as usize;
             show(state, embedded, origin);
@@ -557,6 +566,12 @@ mod win {
             }).detach();
             return;
         }
+        // Only a new window needs a launch or an executable on disk.
+        let launch = match description.expect("a new window has a launch").launch() {
+            Ok(launch) => launch,
+            Err(error) => { fail(state, format!("{error:#}")); return; }
+        };
+        state.borrow_mut().opening = true;
         let weak = Rc::downgrade(state);
         window.spawn(cx, async move |cx| {
             // A program that opens a target once (Unity): one start per key,
