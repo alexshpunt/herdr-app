@@ -18,8 +18,8 @@ from Xlib import X, XK, display
 from Xlib.ext import xtest
 import websocket
 
-chrome, url, output = sys.argv[1:]
-output = Path(output)
+chrome, url, output_arg = sys.argv[1:]
+output = Path(output_arg)
 output.mkdir(parents=True, exist_ok=True)
 assert os.environ.get("HERDR_RESEARCH_DISPLAY") == os.environ.get("DISPLAY")
 assert os.environ.get("DISPLAY"), "use a private X display"
@@ -55,6 +55,7 @@ def target():
 
 def call(method, params=None):
     global serial
+    assert ws is not None, "debugging connection not established"
     serial += 1
     ws.send(json.dumps({"id": serial, "method": method, "params": params or {}}))
     while True:
