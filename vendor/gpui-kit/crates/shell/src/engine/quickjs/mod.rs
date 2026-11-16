@@ -2399,7 +2399,9 @@ impl ShellRuntime {
         );
         let initialized = self.initialize(&object, None);
         let nested = self.flush_pending_nested_views(window, cx);
-        if let Err(error) = initialized.and(nested) {
+        // Async init must finish its promise wave under this instance's owner.
+        let init_jobs = scheduler::drain_jobs_transactionally(self, window, cx);
+        if let Err(error) = initialized.and(nested).and(init_jobs) {
             if let Some(application) = application {
                 self.release_application_generation(&application, cx);
             }
@@ -3011,7 +3013,10 @@ impl ShellRuntime {
         };
         let initialized = self.initialize(&object, None);
         let nested = self.flush_pending_nested_views(window, cx);
-        if let Err(error) = initialized.and(nested) {
+        // Do not leave this replacement's init jobs for another mod to drain:
+        // retained state created there would belong to that mod's generation.
+        let init_jobs = scheduler::drain_jobs_transactionally(self, window, cx);
+        if let Err(error) = initialized.and(nested).and(init_jobs) {
             if let Some(application) = application {
                 self.release_application_generation(&application, cx);
             }
