@@ -787,8 +787,9 @@ The main ones:
 - Agents: `agent.next`, `agent.prev`, `agent.focus {terminal}`.
   `agent.list {space?, machine?}` lists Pi agents with stable terminal, space and tab ids,
   current PID/session and startup state. Use exact ids, not display names.
-  `agent.inspect {terminal, lines?, screen?}` reads status, identity and screen (0–400 history lines, default 80).
-  Set `screen: false` for metadata only, without waiting for terminal output.
+  `agent.inspect {terminal, lines?, screen?}` reads compact Pi session facts and current identity without Usage.
+  Set `screen: true` for the full terminal screen (0–400 history lines, default 80), or `screen: false` for metadata only.
+  Unavailable session facts return a bounded screen fallback; truncated output names the full-screen option.
   `agent.send {terminal, pid, session, message}` sends to the inspected Pi, rejecting startup,
   changed identities and blocked user questions. Never force a response to a user's question.
   `agent.stop {terminal, pid, session}` interrupts with the stop key, without killing or escalating.
