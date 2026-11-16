@@ -20,6 +20,17 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   let ownerSession: string | undefined;
   let publishing = Promise.resolve();
   let lastPublication = '';
+  pi.events.on('herdr:bridge', (request: unknown) => {
+    if (!client || !request || typeof request !== 'object') return;
+    const provide = (request as { provide?: unknown }).provide;
+    if (typeof provide !== 'function') return;
+    const current = client;
+    provide({ version: 1, command(name: string, args: Record<string, unknown>) {
+      if (!['agent.list', 'agent.inspect', 'agent.history', 'agent.send'].includes(name)) throw new Error('Unsupported Herdr bridge command');
+      if (client !== current) throw new Error('Herdr bridge changed; reload or retry the read');
+      return current.command(name, args);
+    } });
+  });
   const report = (ctx: ExtensionContext, value: unknown) => ctx.ui.notify(`Herdr agents: ${value instanceof Error ? value.message : String(value)}`, 'warning');
   const publish = (ctx: ExtensionContext) => {
     publishing = publishing.catch(() => {}).then(async () => {
@@ -76,13 +87,17 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         if (ownerSession !== session || ctx.sessionManager.getSessionId() !== session) throw new Error('The Pi session changed; inspect the agent again');
         if (startup !== 'started') throw new Error('The Pi agent has not completed startup');
         const status = typeof current.status === 'object' ? current.status : current.report;
-        if (inspection?.snapshot().pendingQuestion || current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
+        if (inspection?.timeline().pendingQuestion || current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
       },
       inspect: async () => {
         await currentClient.owner(); currentSession();
-        return inspection!.snapshot();
+        return inspection!.timeline();
       },
-      submit: (message: string) => pi.sendUserMessage(message, { deliverAs: 'followUp' }),
+      history: async (params: Parameters<NonNullable<typeof inspection>['history']>[0]) => {
+        await currentClient.owner(); currentSession();
+        return inspection!.history(params);
+      },
+      submit: (message: string) => pi.sendUserMessage(message, { deliverAs: 'steer' }),
       report: (value: unknown) => report(ctx, value),
     });
     service = new Orchestrator(client, path.join(getAgentDir(), 'herdr-orchestration', 'requests'));
@@ -178,11 +193,9 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
           if (!data.inspection && (data.detail || data.message || data.error || data.startupError)) lines.push(clean(data.detail ?? data.error ?? data.startupError ?? data.message));
           if (data.inspection) {
             const facts = data.inspection;
-            if (facts.currentTools?.length) lines.push(`Tools: ${facts.currentTools.map(clean).join(', ')}`);
             if (facts.pendingQuestion) lines.push(`Question: ${clean(facts.pendingQuestion)}`);
             if (facts.lastError) lines.push(`Error: ${clean(facts.lastError)}`);
-            if (facts.lastResponse) lines.push(clean(facts.lastResponse));
-            if (facts.truncated?.length) lines.push('Truncated; request screen: true for terminal details.');
+            for (const event of facts.events ?? []) lines.push(event.kind === 'call' ? `${clean(event.tool)} · ${clean(event.summary)} (${clean(event.state)})` : clean(event.text));
           }
           if (data.retainedPrimary?.terminal) lines.push(`Primary retained: ${clean(data.retainedPrimary.terminal)}`);
           if (options.expanded) {

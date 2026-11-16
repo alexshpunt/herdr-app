@@ -2979,7 +2979,7 @@ impl AppWindow {
     /// Runs a command for the person (keys, clicks, menus, mods): a missing
     /// name is asked for.
     fn run(&mut self, name: &str, args: Value, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(name, "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove") {
+        if matches!(name, "agent.inspect" | "agent.history" | "agent.send" | "agent.stop" | "agent.remove") {
             self.agent_request(name.into(), args, None, window, cx);
             return;
         }
@@ -3241,7 +3241,7 @@ impl AppWindow {
                 }
             }
             "agent.list" => { self.answer(self.agent_list(a)); return; }
-            "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove" => {
+            "agent.inspect" | "agent.history" | "agent.send" | "agent.stop" | "agent.remove" => {
                 self.agent_request(name.into(), a.clone(), None, window, cx);
                 return;
             }
@@ -4301,7 +4301,7 @@ impl AppWindow {
         let removing = name == "agent.remove";
         let validation = validation.and_then(|()| {
             if removing { crate::agents::require_dedicated(placement.as_ref())?; }
-            if name != "agent.inspect" { self.require_document(address.split_once('/').map(|(m, _)| m)) }
+            if !matches!(name.as_str(), "agent.inspect" | "agent.history") { self.require_document(address.split_once('/').map(|(m, _)| m)) }
             else { Ok(()) }
         });
         if let Err(error) = validation {
@@ -4417,7 +4417,7 @@ impl AppWindow {
                 }
                 if let Some(name) = cmd["do"].as_str() {
                     let args = cmd.get("args").cloned().unwrap_or(Value::Null);
-                    if matches!(name, "agent.inspect" | "agent.send" | "agent.stop" | "agent.remove") {
+                    if matches!(name, "agent.inspect" | "agent.history" | "agent.send" | "agent.stop" | "agent.remove") {
                         self.agent_request(name.into(), args, Some(reply), window, cx);
                         return;
                     }

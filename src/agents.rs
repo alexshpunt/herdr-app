@@ -176,32 +176,55 @@ fn screen_mode(args: &Value) -> Result<Option<bool>, String> {
         _ => Err("screen must be a boolean".into()),
     }
 }
-fn pi_snapshot(core: &Core, address: &str, record: &Value) -> Result<Value, String> {
+fn pi_read(core: &Core, address: &str, record: &Value, envelope: Value) -> Result<Value, String> {
     if !current_pi(record) || pi_label(record).is_none_or(|label| label["inspect"] != 1) {
-        return Err("session-unavailable".into());
+        return Err("The Pi integration is unavailable; reload this Pi".into());
     }
-    let mut params = exec_params(address, record, json!({"action":"inspect"}))?;
+    let mut params = exec_params(address, record, envelope)?;
     params["timeout"] = json!(5);
     let observed = core
         .call_timeout("machine.exec", params, std::time::Duration::from_secs(7))
-        .map_err(|_| "session-unavailable")?;
+        .map_err(|error| format!("Pi session unavailable: {error:#}"))?;
     if observed["code"] != 0 || observed["timed_out"] == true {
-        return Err("session-unavailable".into());
+        let reason = base64::engine::general_purpose::STANDARD
+            .decode(observed["stderr"].as_str().unwrap_or_default()).unwrap_or_default();
+        return Err(format!("Pi session unavailable: {}", String::from_utf8_lossy(&reason).chars().take(1000).collect::<String>()));
     }
     let output = base64::engine::general_purpose::STANDARD
         .decode(observed["stdout"].as_str().unwrap_or_default())
-        .map_err(|_| "invalid-session-reply")?;
-    let confirmation: Value =
-        serde_json::from_slice(&output).map_err(|_| "invalid-session-reply")?;
+        .map_err(|_| "Invalid Pi session reply")?;
+    if output.len() > 128 * 1024 { return Err("Pi session reply exceeds its transport bound".into()); }
+    let confirmation: Value = serde_json::from_slice(&output).map_err(|_| "Invalid Pi session reply")?;
+    if let Some(error) = confirmation["error"].as_str() { return Err(error.into()); }
+    Ok(confirmation)
+}
+fn pi_snapshot(core: &Core, address: &str, record: &Value) -> Result<Value, String> {
+    let confirmation = pi_read(core, address, record, json!({"action":"inspect"}))?;
     let snapshot = &confirmation["snapshot"];
     if confirmation["outcome"] != "inspected"
-        || !snapshot.is_object()
         || !snapshot["busy"].is_boolean()
-        || snapshot.to_string().chars().count() > 850
+        || !snapshot["events"].is_array()
+        || snapshot.to_string().len() > 48 * 1024
     {
-        return Err("invalid-session-reply".into());
+        return Err("Invalid Pi timeline reply; reload this Pi".into());
     }
     Ok(snapshot.clone())
+}
+fn history_envelope(args: &Value) -> Result<Value, String> {
+    let mut envelope = json!({"action":"history"});
+    for key in ["query", "caseSensitive", "before", "limit"] {
+        let Some(value) = args.get(key) else { continue };
+        let valid = match key {
+            "query" => value.as_str().is_some_and(|s| s.encode_utf16().count() <= 200),
+            "caseSensitive" => value.is_boolean(),
+            "before" => value.as_u64().is_some_and(|n| n <= 9_007_199_254_740_991),
+            "limit" => value.as_u64().is_some_and(|n| (1..=50).contains(&n)),
+            _ => unreachable!(),
+        };
+        if !valid { return Err(format!("Invalid agent.history {key}")); }
+        envelope[key] = value.clone();
+    }
+    Ok(envelope)
 }
 fn verify_inspected(core: &Core, address: &str, previous: &Value) -> Result<(), String> {
     let current = core
@@ -217,34 +240,7 @@ fn verify_inspected(core: &Core, address: &str, previous: &Value) -> Result<(), 
     }
     Ok(())
 }
-fn compact_screen(text: &str) -> (String, bool) {
-    let normalized = text
-        .lines()
-        .map(|line| {
-            line.chars()
-                .map(|ch| {
-                    if "─━═│┃║".contains(ch) {
-                        ' '
-                    } else {
-                        ch
-                    }
-                })
-                .collect::<String>()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let count = normalized.chars().count();
-    (
-        normalized.chars().skip(count.saturating_sub(650)).collect(),
-        count > 650,
-    )
-}
-/// Runs on a worker. Re-read immediately before a mutation rather than trusting
-/// the window's event cache, which may describe a previous process in the pane.
+/// Runs on a worker. Re-read before mutations rather than trusting the window cache.
 pub fn request(
     core: &Core,
     action: &str,
@@ -280,55 +276,35 @@ pub fn request(
         if mode == Some(false) {
             return Ok(result);
         }
-        let fallback = if mode.is_none() {
-            match pi_snapshot(core, address, &record) {
-                Ok(snapshot) => {
-                    verify_inspected(core, address, &record)?;
-                    result["status"] = json!(if snapshot["pendingQuestion"].is_string() {
-                        "blocked"
-                    } else if snapshot["busy"] == true {
-                        "working"
-                    } else if snapshot["failed"] == true {
-                        "error"
-                    } else if snapshot["lastResponse"].is_string() {
-                        "done"
-                    } else {
-                        "idle"
-                    });
-                    result["source"] = json!("pi");
-                    if snapshot["truncated"].is_array() {
-                        result["detail"] = json!("Use screen: true for terminal details.");
-                    }
-                    result["inspection"] = snapshot;
-                    return Ok(result);
-                }
-                Err(reason) => Some(reason),
-            }
-        } else {
-            None
-        };
-        let read = core
-            .call(
-                "terminal.read",
-                json!({"terminal":address,"lines":if mode.is_none() { 0 } else { lines }}),
-            )
+        if mode.is_none() {
+            let snapshot = pi_snapshot(core, address, &record)?;
+            verify_inspected(core, address, &record)?;
+            result["status"] = json!(if snapshot["pendingQuestion"].is_string() { "blocked" } else if snapshot["busy"] == true { "working" } else if snapshot["failed"] == true { "error" } else { "idle" });
+            result["source"] = json!("pi");
+            result["inspection"] = snapshot;
+            return Ok(result);
+        }
+        let read = core.call("terminal.read", json!({"terminal":address,"lines":lines}))
             .map_err(|e| format!("Cannot read {address}: {e:#}"))?;
         verify_inspected(core, address, &record)?;
-        if let Some(reason) = fallback {
-            let (screen, truncated) = compact_screen(read["text"].as_str().unwrap_or_default());
-            result["source"] = json!("screen-fallback");
-            result["fallbackReason"] = json!(reason);
-            result["screen"] = json!(screen);
-            result["screenTruncated"] = json!(truncated);
-            result["detail"] =
-                json!("Session facts unavailable. Use screen: true for the full terminal screen.");
-        } else {
-            result["source"] = json!("screen");
-            result["screen"] = read["text"].clone();
-            result["screenComplete"] = read["complete"].clone();
-            result["screenHow"] = read["how"].clone();
-            result["screenWhy"] = read["why"].clone();
+        result["source"] = json!("screen");
+        result["screen"] = read["text"].clone();
+        result["screenComplete"] = read["complete"].clone();
+        result["screenHow"] = read["how"].clone();
+        result["screenWhy"] = read["why"].clone();
+        return Ok(result);
+    }
+    if action == "agent.history" {
+        let envelope = history_envelope(args)?;
+        let confirmation = pi_read(core, address, &record, envelope.clone())?;
+        let key = if envelope.get("query").is_some() { "matches" } else { "items" };
+        if confirmation["outcome"] != "history" || !confirmation[key].is_array() || confirmation[key].to_string().len() > 120 * 1024 {
+            return Err("Invalid Pi history reply".into());
         }
+        verify_inspected(core, address, &record)?;
+        let label = pi_label(&record).ok_or("Pi identity unavailable")?;
+        let mut result = json!({"terminal":address,"pid":label["pid"],"session":label["session"]});
+        result[key] = confirmation[key].clone();
         return Ok(result);
     }
     validate_identity(&record, args)?;
@@ -422,17 +398,17 @@ mod tests {
         assert_eq!(model.tab("tb1").unwrap().root.panes().len(), 2);
     }
 
+
     #[test]
-    fn screen_fallback_is_bounded_unicode_text_not_padded_chrome() {
-        assert_eq!(
-            compact_screen("────\n   Ready    ║   choose stable  \n\n"),
-            ("Ready choose stable".into(), false)
-        );
-        let (screen, truncated) =
-            compact_screen(&format!("{}Final decision", "Русский ".repeat(500)));
-        assert!(truncated);
-        assert_eq!(screen.chars().count(), 650);
-        assert!(screen.ends_with("Final decision"));
+    fn history_validates_query_and_paging_without_identity_arguments() {
+        assert_eq!(history_envelope(&json!({"terminal":"t1"})).unwrap(), json!({"action":"history"}));
+        let args = json!({"query":"fixture", "before":12, "limit":3, "caseSensitive":true});
+        let mut expected = args.clone();
+        expected["action"] = json!("history");
+        assert_eq!(history_envelope(&args).unwrap(), expected);
+        for args in [json!({"query":"x".repeat(201)}), json!({"query":null}), json!({"before":-1}), json!({"before":1.5}), json!({"limit":0}), json!({"limit":51}), json!({"caseSensitive":"true"})] {
+            assert!(history_envelope(&args).is_err());
+        }
     }
 
     #[test]

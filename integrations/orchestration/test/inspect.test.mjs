@@ -2,50 +2,82 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createInspection } from '../inspect.mjs';
 
-const assistant = text => ({ role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop' });
-test('inspection restores the last reply and reports work, questions and errors without Usage', () => {
-  let idle = true;
-  const inspection = createInspection({ isIdle: () => idle, sessionManager: { getBranch: () => [{ type: 'message', message: assistant('Merged PR #42') }] } });
-  assert.equal(inspection.snapshot().lastResponse, 'Merged PR #42');
-  assert.equal(inspection.snapshot().busy, false);
-  idle = false;
-  inspection.event({ type: 'tool_execution_start', toolCallId: 'one', toolName: 'ask_user', args: { questions: [{ prompt: 'Which release?', options: [{ label: 'Stable' }] }] } });
-  inspection.event({ type: 'ui_prompt_start', kind: 'custom' });
-  const question = inspection.snapshot();
-  assert.equal(question.busy, true);
-  assert.deepEqual(question.currentTools, ['ask_user']);
-  assert.ok(question.pendingQuestion.includes('Which release?'));
-  assert.ok(question.pendingQuestion.includes('Stable'));
-  inspection.event({ type: 'ui_prompt_start', kind: 'select', title: 'Which release?' });
-  assert.equal(inspection.snapshot().pendingQuestion.split('Which release?').length, 2);
-  inspection.event({ type: 'ui_prompt_end' });
-  inspection.event({ type: 'tool_execution_end', toolCallId: 'one', isError: true, result: { content: [{ type: 'text', text: 'fixture-error' }] } });
-  const failed = inspection.snapshot();
-  assert.equal(failed.pendingQuestion, undefined);
-  assert.deepEqual(failed.currentTools, []);
-  assert.equal(failed.lastError, 'fixture-error');
-  inspection.event({ type: 'before_agent_start' });
-  assert.equal(inspection.snapshot().lastError, undefined);
-  inspection.event({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'fixture-quota' } });
-  assert.equal(inspection.snapshot().lastError, 'fixture-quota');
-  assert.equal(inspection.snapshot().failed, true);
-  inspection.event({ type: 'message_end', message: assistant('Recovered') });
-  assert.equal(inspection.snapshot().failed, false);
+const entry = (role, content, extra = {}, at = '2026-01-01T00:00:00Z') => ({ type: 'message', timestamp: at, message: { role, content, ...extra } });
+const text = value => ({ type: 'text', text: value });
+const call = (id, args = { command: 'echo fixture\nsecond line' }) => ({ type: 'toolCall', id, name: 'bash', arguments: args });
+const setup = branch => createInspection({ isIdle: () => true, sessionManager: { getBranch: () => branch } });
+
+test('timeline starts at the last reply part and preserves subsequent steps in order', () => {
+  const branch = [entry('assistant', [text('old'), call('old')]), entry('assistant', [{ type: 'thinking', thinking: 'before reply' }, text('latest\nreply'), { type: 'thinking', thinking: 'next step' }, call('failed'), call('running'), call('done')]), entry('toolResult', [text('fixture failure')], { toolCallId: 'failed', isError: true })];
+  const inspection = setup(branch);
+  inspection.event({ type: 'tool_execution_start', toolCallId: 'running', toolName: 'bash', args: {} });
+  const result = inspection.timeline();
+  assert.deepEqual(result.events.map(event => event.kind), ['reply', 'reasoning', 'call', 'call', 'call']);
+  assert.equal(result.events[0].text, 'latest\nreply');
+  assert.equal(result.events[1].text, 'next step');
+  assert.deepEqual(result.events.slice(2).map(event => event.state), ['failed', 'running', 'done']);
+  assert.equal(result.events[2].summary, 'echo fixture');
+  assert.equal(result.events[0].at, branch[1].timestamp);
+  assert.equal(result.lastError, 'fixture failure');
 });
 
-test('inspection bounds serialized output and flags truncated decision text', () => {
-  const inspection = createInspection({ isIdle: () => true, sessionManager: { getBranch: () => [] } });
-  inspection.event({ type: 'message_end', message: assistant('Opening '.repeat(300) + 'PR #42 merged') });
-  inspection.event({ type: 'ui_prompt_start', title: 'Question '.repeat(300) });
-  const snapshot = inspection.snapshot();
-  assert.ok(JSON.stringify(snapshot).length <= 850);
-  assert.ok(snapshot.lastResponse.endsWith('PR #42 merged'));
-  assert.ok(snapshot.truncated.includes('lastResponse'));
-  assert.ok(snapshot.truncated.includes('pendingQuestion'));
-  assert.ok(!JSON.stringify(snapshot).includes('thinking'));
-  inspection.event({ type: 'message_end', message: assistant('💡'.repeat(500) + 'PR #43 merged') });
-  const unicode = inspection.snapshot();
-  assert.ok(unicode.lastResponse.isWellFormed());
-  assert.ok(unicode.lastResponse.endsWith('PR #43 merged'));
-  assert.ok(JSON.stringify(unicode).length <= 850);
+test('timeline without a reply keeps only the newest five calls and three reasoning parts', () => {
+  const parts = Array.from({ length: 9 }, (_, i) => [{ type: 'thinking', thinking: `reason ${i}` }, call(String(i), { path: `file-${i}` })]).flat();
+  const result = setup([entry('assistant', parts)]).timeline();
+  assert.deepEqual(result.omitted, { calls: 4, reasoning: 6 });
+  assert.equal(result.events.length, 8);
+  assert.deepEqual(result.events.filter(event => event.kind === 'call').map(event => event.summary), ['file-4', 'file-5', 'file-6', 'file-7', 'file-8']);
+});
+
+test('timeline bounds escaped unicode transport while retaining both ends of a reply', () => {
+  const result = setup([entry('assistant', [text('opening ' + '\u0000💡'.repeat(15000) + ' final result'), { type: 'thinking', thinking: 'x'.repeat(1000) }, call('one', { query: 'y'.repeat(1000) })])]).timeline();
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 48 * 1024);
+  const reply = result.events[0].text;
+  assert.ok(reply.length <= 12000 && reply.isWellFormed());
+  assert.ok(reply.startsWith('opening ') && reply.endsWith(' final result'));
+  assert.ok(result.events[1].text.length <= 600);
+  assert.ok(result.events[2].summary.length <= 160);
+});
+
+test('live question and error tracking survives the new timeline contract', () => {
+  const inspection = setup([]);
+  inspection.event({ type: 'tool_execution_start', toolCallId: 'one', toolName: 'ask_user', args: { questions: [{ prompt: 'fixture choice', options: [{ label: 'fixture option' }] }] } });
+  inspection.event({ type: 'ui_prompt_start', title: 'fixture choice' });
+  for (const value of ['fixture choice', 'fixture option']) assert.ok(inspection.timeline().pendingQuestion.includes(value));
+  inspection.event({ type: 'ui_prompt_end' });
+  assert.equal(inspection.timeline().pendingQuestion, undefined);
+  inspection.event({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'fixture quota' } });
+  assert.equal(inspection.timeline().failed, true);
+  assert.equal(inspection.timeline().lastError, 'fixture quota');
+  inspection.event({ type: 'before_agent_start' });
+  assert.equal(inspection.timeline().failed, false);
+  assert.equal(inspection.timeline().lastError, undefined);
+});
+
+test('history indexes all branch parts and pages exclusively before the requested index', () => {
+  const branch = [entry('user', [text('request')]), entry('assistant', [{ type: 'thinking', thinking: 'plan' }, call('one', { path: 'fixture' }), text('reply')]), entry('toolResult', [text('result')], { toolName: 'bash', toolCallId: 'one' })];
+  const inspection = setup(branch);
+  assert.deepEqual(inspection.history({}).items.map(item => [item.index, item.kind]), [[0, 'user'], [1, 'reasoning'], [2, 'call'], [3, 'reply'], [4, 'result']]);
+  assert.deepEqual(inspection.history({ before: 4, limit: 2 }).items.map(item => item.index), [2, 3]);
+  assert.equal(inspection.history({ before: 0 }).items.length, 0);
+  assert.equal(inspection.history({}).items[2].text, 'bash {"path":"fixture"}');
+});
+
+test('case-insensitive history snippets use original Unicode offsets and literal punctuation', () => {
+  const inspection = setup([entry('toolResult', [text('İ'.repeat(1000) + 'literal.[fixture]' + 'y'.repeat(1000))], { toolName: 'read' })]);
+  const result = inspection.history({ query: 'LITERAL.[FIXTURE]' });
+  assert.equal(result.matches.length, 1);
+  assert.ok(result.matches[0].text.includes('literal.[fixture]'));
+  assert.equal(inspection.history({ query: 'literalxfixture' }).matches.length, 0);
+});
+test('history searches full text, including cut-away tool results, newest first', () => {
+  const branch = [entry('user', [text('Needle older')]), entry('toolResult', [text('x'.repeat(6000) + 'needle' + 'y'.repeat(6000))], { toolName: 'read' })];
+  const inspection = setup(branch);
+  const result = inspection.history({ query: 'NEEDLE' });
+  assert.deepEqual(result.matches.map(item => item.index), [1, 0]);
+  assert.ok(result.matches[0].text.includes('needle'));
+  assert.ok(result.matches[0].text.length <= 430);
+  assert.equal(inspection.history({ query: 'NEEDLE', caseSensitive: true }).matches.length, 0);
+  assert.ok(inspection.history({}).items[1].text.length <= 4000);
+  assert.ok(Buffer.byteLength(JSON.stringify(inspection.history({ limit: 50 }))) <= 120 * 1024);
 });

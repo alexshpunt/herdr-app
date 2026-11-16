@@ -17,7 +17,7 @@ use uds_windows::{UnixListener, UnixStream};
 fn request_timeout(cmd: &Value) -> Duration {
     let seconds = match cmd["do"].as_str() {
         Some("space.new" | "tab.new" | "pane.split" | "terminal.open") => 90,
-        Some("agent.inspect" | "agent.send" | "agent.stop" | "agent.remove") => 30,
+        Some("agent.inspect" | "agent.history" | "agent.send" | "agent.stop" | "agent.remove") => 30,
         _ if cmd.get("shot").is_some() => 30,
         _ => 5,
     };

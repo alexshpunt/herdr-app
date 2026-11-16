@@ -1,6 +1,7 @@
 // Local Pi IPC, following the Herdr Plannotator pipe transport. Messages reach
 // Pi's API, never terminal input which could otherwise race into a shell.
 import net from 'node:net';
+import { validateHistoryParams } from './inspect.mjs';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,7 +10,7 @@ import path from 'node:path';
 export const MESSAGE_LIMIT = 256 * 1024;
 const timeout = 10000;
 
-export async function startAgentIpc({ pid, session, validate, submit, inspect, report = (_error) => {} }) {
+export async function startAgentIpc({ pid, session, validate, submit, inspect, history, report = (_error) => {} }) {
   const token = randomBytes(32).toString('hex');
   const directory = process.platform === 'win32' ? undefined : await mkdtemp(path.join(tmpdir(), 'herdr-agent-'));
   const socket = directory ? path.join(directory, 'agent.sock') : `\\\\.\\pipe\\herdr-agent-${pid}-${token}`;
@@ -34,12 +35,14 @@ export async function startAgentIpc({ pid, session, validate, submit, inspect, r
       if (request?.token !== token || request.pid !== pid || request.session !== session) {
         send({ error: 'The Pi message identity changed; inspect the agent again' }); return;
       }
-      if (request.action === 'inspect') {
+      if (request.action === 'inspect' || request.action === 'history') {
         try {
-          if (!inspect || stopped) throw new Error('Pi inspection is unavailable; reload Pi');
-          const snapshot = await inspect();
+          const readingHistory = request.action === 'history';
+          const read = readingHistory ? history : inspect;
+          if (!read || stopped) throw new Error('Pi inspection is unavailable; reload Pi');
+          const result = await (readingHistory ? read(validateHistoryParams(request)) : read());
           if (stopped) throw new Error('Pi reloaded during inspection; inspect again');
-          send({ outcome: 'inspected', snapshot });
+          send(readingHistory ? { outcome: 'history', ...result } : { outcome: 'inspected', snapshot: result });
         } catch (error) { send({ error: error instanceof Error ? error.message : String(error) }); }
         return;
       }

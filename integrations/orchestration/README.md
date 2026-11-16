@@ -18,15 +18,21 @@ The App accepts a catalog only while the terminal is live and the label PID matc
 
 Local `hc` verifies and labels the requesting terminal. The App publishes a private `herdr.app` route before launch. Requests travel back to that originating App through a bounded, versioned core document and a small label trigger, not an executable on the Pi machine. This works over the App's existing local/SSH connections, including machines unknown to the calling Pi's core. Requests are claimed with compare-and-set before dispatch; accepted or uncertain mutations are never replayed. App restarts change the route epoch. Missing routes require updating the App and reloading Pi.
 
-Follow-up messages use the target Pi's authenticated local socket and `pi.sendUserMessage`, reached through `machine.exec`. They never type into terminal input: an exited or replaced Pi cannot turn a task message into a shell command. Socket credentials stay private in core labels and never enter tool results or the prompt.
+Messages use the target Pi's authenticated local socket and `pi.sendUserMessage(message, { deliverAs: 'steer' })`, reached through `machine.exec`. A working Pi receives them after its current tools and before its next model request; an idle Pi starts a turn immediately. They never type into terminal input: an exited or replaced Pi cannot turn a task message into a shell command. Socket credentials stay private in core labels and never enter tool results or the prompt.
 
 ## Inspection
 
-Omit `screen` on `herdr_agent_inspect` or `agent.inspect` to read compact session facts: busy state, current tool names, the last assistant reply, a pending question and the latest error. The target Pi provides these through its authenticated local socket, independently of Usage. No model is called. Question inspection is read-only; it never answers the question or relaxes the blocked-message guard.
+Omit `screen` on `herdr_agent_inspect` or `agent.inspect` to read a timeline from the active Pi session branch. It starts at the last assistant text part and includes subsequent reasoning and calls in time order. Up to five calls and three reasoning parts are retained; omitted counts are explicit. Calls report running, failed or done state, without results. A pending user question includes its options. Busy state and errors retain their lifecycle semantics. No model or Usage extension is involved.
 
-Snapshots use the active session branch on load and reload, then Pi lifecycle events. Text is whitespace-normalized and bounded; `truncated` identifies shortened fields. The App verifies the same PID/session after reading. `source: "pi"` distinguishes session facts from `source: "screen-fallback"` when the integration is old, offline or unavailable. A fallback includes its reason and a bounded terminal excerpt, not an empty successful snapshot.
+Replies preserve newlines and both ends when cut (12,000 characters maximum). Reasoning is bounded to 600 characters, call summaries to 160, and the serialized timeline to 48 KB. The App verifies the same PID/session after reading. An unavailable or old Pi returns an error naming the reason; there is no automatic screen fallback.
 
-Set `screen: true` to request the unmodified terminal screen and optional history (`lines`: 0–400; tool default 40, command default 80). Set `screen: false` for identity/status metadata only. A truncated snapshot or fallback includes guidance to request the full screen.
+`agent.history {terminal, query?, caseSensitive?, before?, limit?}` reads the whole active branch, including user messages and tool results. Each item has a stable zero-based index and timestamp. Paging returns up to 20 items by default, at most 50, before an exclusive index. Text is cut to 4,000 characters with a marker. Literal queries of at most 200 characters return newest matches first with context snippets; matching is case-insensitive unless requested otherwise. Responses stay within 120 KB.
+
+Set `screen: true` for the unmodified terminal screen and optional history (`lines`: 0–400; tool default 40, command default 80). Set `screen: false` for identity/status metadata only. These explicit modes remain available to the CLI and startup observation.
+
+## Resource bridge
+
+The `pi-agent-herdr` IDE extension uses the synchronous `herdr:bridge` event. Its request supplies a `provide(api)` callback; an active integration provides `{version: 1, command(name, args)}` during emit. The bridge accepts only `agent.list`, `agent.inspect`, `agent.history` and `agent.send`, using the same authenticated AppClient and origin checks. It provides nothing outside an owned Herdr terminal. Reload Pi after updating the integration.
 
 ## Workflow models
 
