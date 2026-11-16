@@ -21,6 +21,15 @@ test('timeline starts at the last reply part and preserves subsequent steps in o
   assert.equal(result.lastError, 'fixture failure');
 });
 
+test('timeline identifies codemode calls without including their script', () => {
+  const inspection = setup([entry('assistant', [
+    { type: 'toolCall', id: 'script', name: 'codemode', arguments: { code: 'await tools.read({path: "fixture-private-script"});' } },
+    call('shell', { command: 'fixture-shell-command' }),
+  ])]);
+  const events = inspection.timeline().events;
+  assert.deepEqual(events.map(event => [event.tool, event.summary]), [['codemode', ''], ['bash', 'fixture-shell-command']]);
+  assert.equal(inspection.history({}).items[0].text.includes('fixture-private-script'), true);
+});
 test('timeline without a reply keeps only the newest five calls and three reasoning parts', () => {
   const parts = Array.from({ length: 9 }, (_, i) => [{ type: 'thinking', thinking: `reason ${i}` }, call(String(i), { path: `file-${i}` })]).flat();
   const result = setup([entry('assistant', parts)]).timeline();
