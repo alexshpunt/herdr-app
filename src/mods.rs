@@ -369,10 +369,33 @@ impl Hint {
 /// How a mod shows in the side panel: under `title`, sorted by `order`.
 #[derive(Deserialize, Default, Clone, Debug, PartialEq)]
 pub struct Section {
+    /// Optional app-owned integration required to show this section.
+    #[serde(default)]
+    pub feature: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub order: i32,
+}
+
+impl Section {
+    pub fn enabled(&self, person: &crate::settings::Person) -> bool {
+        match self.feature.as_deref() {
+            Some("workflow") => person.workflow_enabled,
+            Some("usage") => person.usage_enabled,
+            _ => true,
+        }
+    }
+}
+
+#[test]
+fn only_workflow_and_usage_sections_follow_integration_switches() {
+    let person = crate::settings::Person { workflow_enabled: false, usage_enabled: true, ..Default::default() };
+    for (feature, expected) in [("workflow", false), ("usage", true), ("personal", true)] {
+        let section: Section = serde_json::from_value(json!({ "feature": feature })).unwrap();
+        assert_eq!(section.enabled(&person), expected);
+    }
+    assert!(Section::default().enabled(&person));
 }
 
 #[derive(Clone)]

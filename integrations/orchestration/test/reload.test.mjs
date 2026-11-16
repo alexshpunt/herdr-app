@@ -65,7 +65,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal((await label()).startup,'started');
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'later quota'}});
   await session.extensionRunner.emit({type:'agent_settled',aborted:false});
-    const featurePath = path.join(root, 'herdr-features.json');
+  const featurePath = path.join(root, 'herdr-features.json');
   await writeFile(featurePath, JSON.stringify({ version: 1, workflow: false, usage: true, usageSince: 0 }));
   await session.reload();
   assert.deepEqual(session.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')), []);
@@ -79,7 +79,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   await session.reload();
   assert.deepEqual(session.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name), ['herdr_agent_create']);
   assert.equal(bridge().version, 1);
-assert.equal((await label()).startup,'started');
+  assert.equal((await label()).startup,'started');
  } finally {
   if(session){await session.extensionRunner.emit({type:'session_shutdown',reason:'quit'});session.dispose()}
   for(const [key,value] of prior){if(value===undefined)delete process.env[key];else process.env[key]=value}

@@ -4,10 +4,18 @@ import { Text } from '@earendil-works/pi-tui';
 import { stripVTControlCharacters } from 'node:util';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { importFresh } from './client.mjs';
 
 export default function herdrOrchestration(pi: ExtensionAPI): void {
+  // Read on every reload, not through a cached helper module.
+  try {
+    const features = JSON.parse(readFileSync(path.join(getAgentDir(), 'herdr-features.json'), 'utf8'));
+    if (features.version !== 1 || features.workflow !== true) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
+  }
   pi.registerFlag('herdr-workflow-model', { type: 'string', description: 'Exact model requested by a Herdr workflow launch' });
   pi.registerFlag('herdr-workflow-thinking', { type: 'string', description: 'Exact thinking level requested by a Herdr workflow launch' });
   let selectionError: ((ctx: ExtensionContext) => string | undefined) | undefined;

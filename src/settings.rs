@@ -389,6 +389,12 @@ pub struct Person {
     /// Anonymous usage data (telemetry.rs). On unless set to false.
     #[serde(skip_serializing_if = "is_true")]
     pub telemetry: bool,
+    /// Workflow tools, prompt context, and panel across connected machines.
+    #[serde(skip_serializing_if = "is_true")]
+    pub workflow_enabled: bool,
+    /// Local token and cost recording and its panel; existing records are kept.
+    #[serde(skip_serializing_if = "is_true")]
+    pub usage_enabled: bool,
     /// Allow terminal programs (including remote ones) to copy text locally.
     #[serde(skip_serializing_if = "is_true")]
     pub clipboard_write: bool,
@@ -456,6 +462,8 @@ impl Default for Person {
             font_ligatures: false,
             ui_font: None,
             telemetry: true,
+            workflow_enabled: true,
+            usage_enabled: true,
             clipboard_write: true,
             pane_scrollbars: true,
             minimum_contrast: 1.0,
@@ -472,6 +480,8 @@ impl Default for Person {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub workflow_enabled: bool,
+    pub usage_enabled: bool,
     pub font_family: String,
     pub font_size: f32,
     pub font_ligatures: bool,
@@ -522,6 +532,8 @@ impl Default for Sounds {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            workflow_enabled: true,
+            usage_enabled: true,
             font_family: DEFAULT_FONT.into(),
             font_size: 14.0,
             font_ligatures: false,
@@ -559,6 +571,8 @@ impl Settings {
             None => (DEFAULT_LIGHT.to_owned(), DEFAULT_DARK.to_owned()),
         };
         Settings {
+            workflow_enabled: person.workflow_enabled,
+            usage_enabled: person.usage_enabled,
             // The layout's own, else the person's, else Herdr's.
             font_family: look.font.clone().or(person.font.clone()).unwrap_or(d.font_family),
             font_size: look.font_size.or(person.font_size).unwrap_or(d.font_size),
@@ -960,11 +974,26 @@ mod tests {
         assert_eq!(Settings::compose(&person, &win98.look, true).theme, "ink");
     }
 
+    #[test]
+    fn integration_switches_default_on_and_round_trip_independently() {
+        let defaults: Person = serde_json::from_str("{}").unwrap();
+        assert!(defaults.workflow_enabled && defaults.usage_enabled);
+        for (workflow, usage) in [(false, true), (true, false), (false, false), (true, true)] {
+            let person: Person = serde_json::from_value(serde_json::json!({
+                "workflow_enabled": workflow, "usage_enabled": usage
+            })).unwrap();
+            let restored: Person = serde_json::from_value(serde_json::to_value(&person).unwrap()).unwrap();
+            let effective = Settings::compose(&restored, &crate::layout::Look::default(), true);
+            assert_eq!(effective.workflow_enabled, workflow);
+            assert_eq!(effective.usage_enabled, usage);
+        }
+    }
+
     /// The guide agents read (written to the home folder) explains every
     /// settings.json key.
     #[test]
     fn the_guide_explains_every_setting() {
-        let all = Person { core: Some(String::new()), font: Some(String::new()), font_size: Some(1.0), ui_font: Some(String::new()), telemetry: false, clipboard_write: false, appearance: Appearance::Light, theme: Some(crate::layout::ThemeChoice::One(String::new())), colors: [("text".into(), String::new())].into(), ..Person::default() };
+        let all = Person { core: Some(String::new()), font: Some(String::new()), font_size: Some(1.0), ui_font: Some(String::new()), telemetry: false, workflow_enabled: false, usage_enabled: false, clipboard_write: false, appearance: Appearance::Light, theme: Some(crate::layout::ThemeChoice::One(String::new())), colors: [("text".into(), String::new())].into(), ..Person::default() };
         let keys: Vec<String> = serde_json::to_value(&all).unwrap().as_object().unwrap().keys().cloned().collect();
         let guide = include_str!("../defaults/AGENTS.md");
         let section = guide.split("## The person").nth(1).and_then(|s| s.split("\n## ").next()).unwrap_or_default();
