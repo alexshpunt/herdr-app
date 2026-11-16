@@ -16,11 +16,12 @@ import sys
 import threading
 import time
 
-from Xlib import X, display
+from Xlib import X, XK, display
 from Xlib.ext import xtest
 
 app, space, output, *extra = sys.argv[1:]
-mod = extra[0] if extra else "linear-browser"
+mod = next((arg for arg in extra if not arg.startswith("--")), "linear-browser")
+probe = "--probe" in extra
 output = Path(output)
 output.mkdir(parents=True, exist_ok=True)
 assert os.environ.get("HC_SESSION", "").startswith("lpt1560-"), "use a private test core"
@@ -116,6 +117,34 @@ try:
     for button, page in [(8, "B"), (8, "A"), (8, "A"), (9, "B"), (9, "C"), (9, "C"), (4, "C"), (5, "C"), (1, "C")]:
         click(x + size.width // 2, y + size.height // 2, button)
         expect(page)
+    if probe:
+        def key(symbol, mods=()):
+            codes = [d.keysym_to_keycode(XK.string_to_keysym(m)) for m in mods]
+            code = d.keysym_to_keycode(XK.string_to_keysym(symbol))
+            for modifier in codes:
+                xtest.fake_input(d, X.KeyPress, modifier)
+            xtest.fake_input(d, X.KeyPress, code)
+            xtest.fake_input(d, X.KeyRelease, code)
+            for modifier in reversed(codes):
+                xtest.fake_input(d, X.KeyRelease, modifier)
+            d.sync()
+            time.sleep(0.7)
+
+        def capture(name):
+            subprocess.run(["import", "-window", "root", str(output / f"{name}.png")], check=True)
+
+        key("Left", ["Alt_L"])
+        capture("alt-left")
+        key("Right", ["Alt_L"])
+        capture("alt-right")
+        click(x + size.width // 2, y + size.height // 2, 3)
+        capture("context-menu")
+        key("Escape")
+        key("f", ["Control_L"])
+        capture("find")
+        key("Escape")
+        key("F12")
+        capture("devtools")
     subprocess.run(["import", "-window", "root", str(output / "passed.png")], check=True)
     print("PASS: side buttons navigate exactly one history entry; boundaries and ordinary input stay put", flush=True)
 except BaseException:
