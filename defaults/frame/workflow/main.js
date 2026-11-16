@@ -27,7 +27,7 @@ export default class Workflow extends View {
     this.handle = cx.focus_handle();
     // A side panel section leaves the keyboard where it is; the dock takes it.
     if (this.docked()) this.handle.focus();
-    this.input = InputState.new({ placeholder: "Search models" });
+    this.input = InputState.new({ placeholder: "Search or enter provider/model" });
     this.input.on("change", (_e, cx) => { this.query = this.input.value(); this.at = 0; cx.notify(); });
     this.input.on("submit", (_e, cx) => {
       const choice = this.choices()[this.at];
@@ -118,7 +118,7 @@ export default class Workflow extends View {
     const value = profile[field];
     const open = this.picking?.profile === profile.id && this.picking?.field === field;
     const available = thinking || !value || this.catalog?.models?.some(model => model.id === value);
-    const enabled = !this.loading && !this.saving && (thinking || fallback || (this.catalog?.models?.length ?? 0) > 0);
+    const enabled = !this.loading && !this.saving;
     const name = thinking
       ? thinkingLevels.find(level => level.id === value)?.name ?? value
       : currentModelLabel(this.catalog, value, fallback);
@@ -142,7 +142,7 @@ export default class Workflow extends View {
           .child(div().flex_1().min_w(0).truncate().text_size(12).child(name))
           .child(svg(icon(open ? "chevron-right" : "chevron-down")).size(11).flex_none())))
       .when(Boolean(value && !available && this.catalog), el => el.child(div().pl(64).text_size(10).text_color(t.dim)
-        .child("Not in this machine's Pi picker")))
+        .child("Not in this catalog; checked when the agent starts")))
       .when(open, el => el.child(this.modelPicker(t)));
   }
 
@@ -156,7 +156,7 @@ export default class Workflow extends View {
         .child(Input.new(this.input).h(22).text_size(11.5).text_color(t.foreground))))
       .child(div().h(Math.min(180, Math.max(32, choices.length * rowHeight + 6))).flex_none().relative()
         .child(v_flex().id("wf-model-list").absolute().inset_0().overflow_y_scroll().p(3).pr(10)
-          .when(choices.length === 0, el => el.child(div().p(5).text_size(11).line_height("15px").text_color(t.dim).child("No matching models")))
+          .when(choices.length === 0, el => el.child(div().p(5).text_size(11).line_height("15px").text_color(t.dim).child("No matches. Enter provider/model to use it.")))
           .children(choices.map((choice, index) => v_flex().id(`wf-model-${index}`).h(rowHeight).flex_none().px(6).py(3).gap(1).justify_center().rounded(3).min_w(0)
             .when(index === this.at, el => el.bg(t.hover))
             .cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.choose(choice, cx))
@@ -170,7 +170,7 @@ export default class Workflow extends View {
     const enabled = !this.saving;
     return v_flex().w_full().min_w(0).gap(4)
       .child(h_flex().w_full().min_w(0).gap(8).items_center()
-        .child(div().w(56).flex_none().text_size(11).text_color(t.dim).tooltip("Machine providing the live Pi model catalog").child("Models"))
+        .child(div().w(56).flex_none().text_size(11).text_color(t.dim).tooltip("Machine providing Pi settings and models").child("Models"))
         .child(h_flex().id("wf-machine").flex_1().min_w(0).h(26).px(7).gap(6).items_center().rounded(4).border_1().border_color(t.border)
           .bg(t.raised).text_size(12).text_color(enabled ? t.foreground : t.dim)
           .when(enabled, el => el.cursor_pointer().hover(s => s.bg(t.hover))
@@ -198,6 +198,8 @@ export default class Workflow extends View {
       .child(this.machineField(t))
       .when(Boolean(this.error), el => el.child(div().text_size(11).line_height("16px").text_color(t.foreground).child(this.error)))
       .when(Boolean(this.catalog?.error), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(this.catalog.error)))
+      .when(Boolean(this.catalog?.loading), el => el.child(div().text_size(10.5).text_color(t.dim).child("Reading Pi models…")))
+      .when(Boolean(this.catalog?.diagnostics?.length), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(this.catalog.diagnostics.map(item => item.message).join("\n"))))
       .when(Boolean(installationError), el => el.child(div().text_size(10.5).line_height("15px").text_color(t.muted).child(`Extension installation failed: ${installationError}`)))
       .when(this.loading, el => el.child(div().text_size(11).text_color(t.dim).child("Loading profiles…")))
       .children((this.config?.profiles ?? []).map(profile => v_flex().w_full().min_w(0).gap(6)

@@ -3221,7 +3221,7 @@ impl AppWindow {
                     Some(machine) => Some(machine),
                     None => self.model.active_space().and_then(|s| s.machine.as_deref()),
                 };
-                let mut catalog = crate::workflow::catalog(self.live.values(), machine);
+                let mut catalog = crate::workflow::models(self.core.clone(), self.live.values(), machine);
                 catalog["installation"] = crate::pi_install::status(machine);
                 self.reply = Some(catalog);
                 return;

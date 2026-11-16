@@ -5,13 +5,13 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { appendFileSync } from 'node:fs';
 
 export default function fixture(pi: ExtensionAPI) {
-  const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow'];
+  const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow', 'thinking-success'];
   pi.on('before_agent_start', async () => {
     pi.setActiveTools([...new Set([...pi.getActiveTools(), ...pi.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name)])]);
   });
   pi.registerProvider('herdr-fixture', {
     name: 'Herdr live verification fixture', baseUrl: 'http://herdr-fixture.invalid', apiKey: 'fixture', api: 'openai-completions',
-    models: ids.map(id => ({ id, name: `Herdr fixture: ${id}`, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 })),
+    models: ids.map(id => ({ id, name: `Herdr fixture: ${id}`, reasoning: id === 'thinking-success', thinkingLevelMap: id === 'thinking-success' ? { xhigh: 'high' } : undefined, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 })),
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream();
       const output: any = { role: 'assistant', api: model.api, provider: model.provider, model: model.id, content: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: 'stop', timestamp: Date.now() };

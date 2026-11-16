@@ -796,15 +796,18 @@ The main ones:
   tabs with sibling panes are rejected. Inspect again after an unknown outcome before retrying.
 - Workflow: `workflow.get` reads the persisted profile table; `workflow.set {profile, model, fallbackModel?, thinking?}`
   changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
-  `workflow.models {machine?}` reads the live Pi model pickers for one machine (default: the selected space's;
-  empty string: this computer) and the extension installation status. A missing catalog is an explicit error,
-  not evidence that no models exist. Its settings are the Workflow section of the right side panel; `workflow.open`
+  `workflow.models {machine?}` reads Pi's global `enabledModels` scope on one machine (default: the selected
+  space's; empty string: this computer), without a running Pi. It returns a cached snapshot with `loading`,
+  diagnostics and errors, supplemented by current live Pi catalogs, and extension installation status.
+  Scope resolution includes configured models without credentials; selection does not prove launch availability.
+  The pickers also accept a manual `provider/model` id when the catalog is unavailable. Its settings are the Workflow section of the right side panel; `workflow.open`
   toggles that panel, or a Workflow dock beside the active-tab workspace in layouts without one.
-  Primary, fallback and thinking selections save automatically.
+  Primary, fallback and all six thinking levels save automatically, independently of model capabilities.
   The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
   an agent that produced a successful assistant response never switches models automatically.
   The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
-  Start or reload Pi there to publish its model picker; existing Pi processes need a reload after updates.
+  Existing Pi processes need a reload after extension updates. Workflow launches reject a substituted model or
+  clamped thinking level as a startup failure; the configured startup fallback may then run once.
 - Layout: `layout.switch {name?}`, `layout.toggle {id}`, `layout.show {id}`, `layout.hide {id}`,
   `layout.resize {id, px | weight}`, `layout.select {stack, child}`, `layout.set {layout}`
   (personal tree edits; on shipped layouts only click/look fields change),
