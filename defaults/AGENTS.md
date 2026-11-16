@@ -68,7 +68,11 @@ state: open another target with a new state. Herdr adopts the window, crops
 its frame and gives it back to the desktop closed when the pane closes.
 `key` names what the window shows: a restarted copy of the mod takes its
 earlier copy's window back, and a second pane with the same key takes the
-window over. `status()`, `error()`, `shown()`, `reopen()` and `focus()`
+window over. The constructor schedules reclaim after the current App update,
+without waiting for `open` or a visible frame or resolving the executable.
+After creating the state, `await cx.sleep(0)` before checking `shown()`.
+Keep calling `open` to supply the launch for a later `reopen` or `run`.
+`status()`, `error()`, `shown()`, `reopen()` and `focus()`
 follow and control it; `origin()` says how the shown window came (`"new"`,
 `"restart"` or `"pane"`); `embeddedAt()` when Herdr adopted it
 (milliseconds since 1970); `run(args)` runs the program again with `args`,
