@@ -131,7 +131,9 @@ export class Orchestrator {
         if (['model-failed', 'exited'].includes(outcome.outcome) && !signal?.aborted) {
           const failed = { ...target, pid: outcome.pid, session: outcome.session };
           receipt.retainedPrimary = failed;
-          target = await launch(fallback, target.space);
+          // A fast CLI error can close the primary's last tab and its space.
+          // Only a still-live failed primary provides a stable space to join.
+          target = await launch(fallback, outcome.outcome === 'exited' ? undefined : target.space);
           receipt.fallbackUsed = true;
           outcome = await observe(target);
           recordOutcome(outcome);

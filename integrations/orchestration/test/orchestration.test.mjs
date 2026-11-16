@@ -80,6 +80,24 @@ test('fallback retains the primary selection failure in its launch receipt', () 
   assert.equal(result.attempts[0].thinking, 'high');
   assert.equal(result.attempts[1].outcome, 'started');
 }));
+test('fallback opens a new space after an early exit closes the primary space', () => fixture(async root => {
+  const api = client();
+  let next = 1;
+  api.launch = async args => {
+    api.calls.push(['launch', args]);
+    if (args.space === 'm/sp1') throw new Error('missing primary space');
+    return { terminal: `m/t${++next}`, tab: `m/tb${next}`, space: next === 2 ? 'm/sp1' : 'm/sp2' };
+  };
+  api.inspect = async (terminal, _lines, screen) => terminal === 'm/t2'
+    ? { ...record(null), state: 'finished', screen: screen ? 'Unknown provider p/main' : undefined }
+    : record('started');
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.fallbackUsed, true);
+  assert.deepEqual(api.calls.filter(call => call[0] === 'launch').map(call => call[1].space), [undefined, undefined]);
+  assert.equal(result.attempts[0].outcome, 'exited');
+  assert.equal(result.attempts[1].space, 'm/sp2');
+}));
 test('an early model exit reports its terminal error with the requested selection', () => fixture(async root => {
   const api = client();
   api.inspect = async (_terminal, _lines, screen) => ({ ...record(null), state: 'finished', screen: screen ? 'Unknown provider p/main' : undefined });
