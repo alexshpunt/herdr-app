@@ -100,7 +100,6 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   };
   pi.on('session_tree', restoreInspection);
   pi.on('session_compact', restoreInspection);
-  pi.on('session_switch', async (_event, ctx) => { try { await initialize(ctx); } catch (value) { report(ctx, value); } });
   pi.on('model_select', async (_event, ctx) => { try { await publish(ctx); } catch (value) { report(ctx, value); } });
   pi.on('before_agent_start', async (event, ctx) => {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;

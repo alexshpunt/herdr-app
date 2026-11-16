@@ -4,6 +4,7 @@ import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requestAgentMessage } from '../ipc.mjs';
 import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const clientModule=version=>`import {readFile,writeFile} from 'node:fs/promises';
@@ -40,9 +41,16 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal((await request()).structuredContent.version,'first');
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
+  const snapshot = async () => {
+    const route = await label();
+    return requestAgentMessage(route, { action: 'inspect', pid: route.pid, session: route.session });
+  };
+  assert.equal((await label()).inspect, 1);
+  assert.equal((await snapshot()).snapshot.busy, false);
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'quota'}});
   await session.extensionRunner.emit({type:'agent_settled',aborted:false});
   assert.equal((await label()).startup,'failed');
+  assert.equal((await snapshot()).snapshot.lastError, 'quota');
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'toolUse',content:[]}});
   assert.equal((await label()).startup,'started');
   await writeFile(path.join(root,'client.mjs'),clientModule('second'));
@@ -50,6 +58,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   session.sessionManager.appendMessage({ role:'assistant', content:[{type:'text',text:'Started before publication'}], api:'openai-completions', provider:'fixture', model:'fixture', stopReason:'stop', timestamp:Date.now(), usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}} });
   await writeFile(path.join(root,'label.json'),JSON.stringify({...(await label()),startup:'pending'}));
   await session.reload();
+  assert.equal((await snapshot()).snapshot.lastResponse, 'Started before publication');
   assert.equal((await request()).structuredContent.version,'second');
   assert.equal((await label()).startup,'started');
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'later quota'}});

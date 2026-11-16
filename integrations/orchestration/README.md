@@ -27,6 +27,7 @@ Omit `screen` on `herdr_agent_inspect` or `agent.inspect` to read compact sessio
 Snapshots use the active session branch on load and reload, then Pi lifecycle events. Text is whitespace-normalized and bounded; `truncated` identifies shortened fields. The App verifies the same PID/session after reading. `source: "pi"` distinguishes session facts from `source: "screen-fallback"` when the integration is old, offline or unavailable. A fallback includes its reason and a bounded terminal excerpt, not an empty successful snapshot.
 
 Set `screen: true` to request the unmodified terminal screen and optional history (`lines`: 0–400; tool default 40, command default 80). Set `screen: false` for identity/status metadata only. A truncated snapshot or fallback includes guidance to request the full screen.
+
 ## Startup and receipts
 
 A successful assistant response, including a tool call, permanently changes startup to `started`. Reload preserves that boundary. A first-response error changes startup to `failed` only after Pi settles, allowing Pi's own automatic retries first. Later model errors never reopen startup fallback.
