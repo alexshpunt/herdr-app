@@ -70,6 +70,25 @@ test('only explicit first-response failure starts fallback, exactly once', () =>
   assert.equal(api.calls.filter(c => c[0] === 'remove').length, 0);
   assert.equal(result.retainedPrimary.terminal, 'm/t2');
 }));
+test('fallback retains the primary selection failure in its launch receipt', () => fixture(async root => {
+  const failed = { ...record('failed'), startupError: 'p/main high rejected' };
+  const api = client([failed, failed, record('started')]);
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input);
+  assert.equal(result.outcome, 'started');
+  assert.equal(result.attempts[0].outcome, 'model-failed');
+  assert.equal(result.attempts[0].detail, failed.startupError);
+  assert.equal(result.attempts[0].thinking, 'high');
+  assert.equal(result.attempts[1].outcome, 'started');
+}));
+test('an early model exit reports its terminal error with the requested selection', () => fixture(async root => {
+  const api = client();
+  api.inspect = async (_terminal, _lines, screen) => ({ ...record(null), state: 'finished', screen: screen ? 'Unknown provider p/main' : undefined });
+  const result = await new Orchestrator(api, root).create({ ...input, fallbackModel: null });
+  assert.equal(result.outcome, 'exited');
+  assert.ok(result.detail.includes('p/main'));
+  assert.ok(result.detail.includes('high'));
+  assert.ok(result.detail.includes('Unknown provider p/main'));
+}));
 test('unknown launch effect is never retried after reload', () => fixture(async root => {
   const api = client();
   api.launch = async () => { api.calls.push(['launch']); throw new Error('connection lost'); };

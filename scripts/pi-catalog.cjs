@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { createRequire } = require('node:module');
 __HERDR_DISCOVERY__
 
 async function catalog() {
@@ -33,8 +34,10 @@ async function catalog() {
   const errors = settings.drainErrors();
   if (errors.length) throw new Error(errors.map(item => `${item.path ?? item.scope}: ${item.error.message}`).join('; '));
   const patterns = settings.getGlobalSettings().enabledModels;
+  const fromPi = createRequire(path.join(directory, 'package.json'));
+  const { InMemoryCredentialStore } = await import(pathToFileURL(fromPi.resolve('@earendil-works/pi-ai')).href);
   const models = await sdk.ModelRuntime.create({
-    authPath: path.join(agent, 'auth.json'), modelsPath: path.join(agent, 'models.json'),
+    credentials: new InMemoryCredentialStore(), modelsPath: path.join(agent, 'models.json'),
     allowModelNetwork: false, refreshOnCreate: false,
   });
   if (models.getError()) throw new Error(models.getError());

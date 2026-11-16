@@ -20,7 +20,15 @@ Local `hc` verifies and labels the requesting terminal. The App publishes a priv
 
 Follow-up messages use the target Pi's authenticated local socket and `pi.sendUserMessage`, reached through `machine.exec`. They never type into terminal input: an exited or replaced Pi cannot turn a task message into a shell command. Socket credentials stay private in core labels and never enter tool results or the prompt.
 
+## Workflow models
+
+`workflow.models` reads the selected machine's installed Pi SDK and global `enabledModels` settings without starting Pi or loading its extensions. Scope patterns use Pi's resolver against its local model catalog, including `models.json` and models without credentials. With no scope configured, it lists the local catalog. A current live Pi can supplement it with extension-defined models. Project-specific scopes and providers loaded only by extensions need a live session or manual entry.
+
+The App caches snapshots for 30 seconds and refreshes them off the UI thread. The reply includes `loading`, scope diagnostics and lookup errors. Looking up a catalog does not refresh credentials or fetch network model metadata. A catalog error leaves both pickers available: enter an exact `provider/model` in their search to select it. Every thinking level can be saved for any model; availability is checked at launch.
+
 ## Startup and receipts
+
+Workflow launches pass `--herdr-workflow-model` and `--herdr-workflow-thinking` alongside Pi's normal model and thinking flags. The extension checks the actual selection before the first request. A substituted model or clamped thinking level publishes a startup failure and blocks that request. The startup fallback applies once, with the same requested thinking level. Launch receipts keep each attempt's model, thinking level, outcome and error, including the primary error after a successful fallback. An early Pi exit includes its retained terminal error.
 
 A successful assistant response, including a tool call, permanently changes startup to `started`. Reload preserves that boundary. A first-response error changes startup to `failed` only after Pi settles, allowing Pi's own automatic retries first. Later model errors never reopen startup fallback.
 
@@ -44,12 +52,12 @@ For installed-App verification without paid inference, copy `test/fixtures/live-
 
 ### Workflow UI regression check
 
-In the installed App, open Workflow for a machine with a live Pi catalog:
+In an isolated installed App, open Workflow for a machine with scoped models configured and no running Pi:
 
 1. Use the toolbar button to open and close Workflow. Confirm the terminal workspace narrows beside the dock and regains its width on close. The global header, its actions and window controls keep their width above the dock; the dock aligns with the workspace's top and bottom.
 2. Open a primary model picker. Confirm model names and IDs are visible, then scroll to the last choice. Its scrollbar stays visible while the list overflows.
-3. Search for a model by name or ID. Confirm filtering, an empty result, and clearing the search all update the visible list.
-4. Select a different model and thinking level. Close and reopen Workflow, then restart only the App and confirm both choices persist. Restore the original profile afterward.
+3. Confirm every scoped model appears in both pickers. Search by name or ID, then enter an uncatalogued `provider/model` and select it. Repeat manual selection with the catalog unavailable.
+4. Click every thinking level for each profile, including an uncatalogued model. Close and reopen Workflow, then restart only the test App and confirm the choices persist.
 5. Open a fallback picker. Confirm the no-fallback choice and model choices are visible.
 6. Reduce the window height until the profiles no longer fit. Confirm the body scrollbar appears and stays visible, then scroll to the final field. The header remains visible; there is no footer. Scroll an open picker independently of the body.
 
