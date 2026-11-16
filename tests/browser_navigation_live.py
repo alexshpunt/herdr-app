@@ -19,10 +19,10 @@ import time
 from Xlib import X, XK, display
 from Xlib.ext import xtest
 
-app, space, output, *extra = sys.argv[1:]
+app, space, output_arg, *extra = sys.argv[1:]
 mod = next((arg for arg in extra if not arg.startswith("--")), "linear-browser")
 probe = "--probe" in extra
-output = Path(output)
+output = Path(output_arg)
 output.mkdir(parents=True, exist_ok=True)
 assert os.environ.get("HC_SESSION", "").startswith("lpt1560-"), "use a private test core"
 
@@ -118,6 +118,9 @@ try:
         click(x + size.width // 2, y + size.height // 2, button)
         expect(page)
     if probe:
+        child.set_input_focus(X.RevertToParent, X.CurrentTime)
+        d.sync()
+
         def key(symbol, mods=()):
             codes = [d.keysym_to_keycode(XK.string_to_keysym(m)) for m in mods]
             code = d.keysym_to_keycode(XK.string_to_keysym(symbol))
@@ -138,13 +141,16 @@ try:
         key("Right", ["Alt_L"])
         capture("alt-right")
         click(x + size.width // 2, y + size.height // 2, 3)
+        time.sleep(0.7)
         capture("context-menu")
         key("Escape")
         key("f", ["Control_L"])
         capture("find")
         key("Escape")
         key("F12")
-        capture("devtools")
+        capture("devtools-f12")
+        key("i", ["Control_L", "Shift_L"])
+        capture("devtools-ctrl-shift-i")
     subprocess.run(["import", "-window", "root", str(output / "passed.png")], check=True)
     print("PASS: side buttons navigate exactly one history entry; boundaries and ordinary input stay put", flush=True)
 except BaseException:
