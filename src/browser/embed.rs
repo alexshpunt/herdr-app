@@ -897,6 +897,38 @@ mod win {
             frameless | WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | maximize
         }
     }
+
+    #[cfg(test)]
+    mod style_tests {
+        use super::*;
+
+        #[test]
+        fn redirected_children_do_not_regain_maximized_state() {
+            for state in [0, WS_MAXIMIZE, WS_MINIMIZE] {
+                let style = embedded_style(WS_OVERLAPPEDWINDOW | WS_VISIBLE | state, WS_EX_APPWINDOW | WS_EX_WINDOWEDGE, false);
+                assert_eq!(style & WS_MAXIMIZE, 0);
+                assert_ne!(style & WS_CHILD, 0);
+                assert_eq!(style & (WS_CAPTION | WS_THICKFRAME | WS_POPUP), 0);
+                assert_ne!(style & WS_VISIBLE, 0);
+            }
+        }
+
+        #[test]
+        fn composed_children_keep_the_maximized_edge_hint() {
+            let style = embedded_style(WS_OVERLAPPEDWINDOW | WS_VISIBLE, WS_EX_NOREDIRECTIONBITMAP, false);
+            assert_eq!(style & (WS_CHILD | WS_MAXIMIZE), WS_CHILD | WS_MAXIMIZE);
+            assert_eq!(style & (WS_CAPTION | WS_THICKFRAME | WS_POPUP), 0);
+        }
+
+        #[test]
+        fn menu_windows_remain_unmaximized_popups() {
+            for ex_style in [0, WS_EX_NOREDIRECTIONBITMAP] {
+                let style = embedded_style(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, ex_style, true);
+                assert_ne!(style & WS_POPUP, 0);
+                assert_eq!(style & (WS_CHILD | WS_MAXIMIZE | WS_CAPTION | WS_THICKFRAME), 0);
+            }
+        }
+    }
     /// Move the program's top-level window into a new container in `host`.
     /// A window with a Win32 menu bar (Unity) keeps it: a child window cannot
     /// have one, so it stays a captionless popup inside the container.
