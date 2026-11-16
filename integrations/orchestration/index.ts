@@ -141,7 +141,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       if (!client) return;
       const origin = await client.context();
       await publish(ctx);
-      event.systemPromptOptions.sections.herdr = `${JSON.stringify(origin)}\nUse Herdr's deferred agent tools only to manage the user's independent agents and tasks. Start agents only at the user's explicit request or for an accepted process-findings task. Use replicate for your own parallel subtasks; do not supervise or remove the user's agents as your helpers.`;
+      event.systemPromptOptions.sections.herdr = `${JSON.stringify(origin)}\nUse Herdr's deferred agent tools only to manage the user's independent agents and tasks. Start agents only at the user's explicit request or as the orchestrator of a series the user gave you. Use replicate for your own parallel subtasks; do not supervise or remove the user's agents as your helpers.`;
     } catch (value) {
       event.systemPromptOptions.sections.herdr = `Pi PID ${process.pid}; Herdr placement is unavailable. Discover the Herdr agent tools only when the user asks to manage agents; inspect and resolve their context error before changing anything.`;
     }
