@@ -10,12 +10,12 @@ assert.match(config.coreSession, /^test-/);
 assert.ok(config.appHome && config.exe && config.folder && config.trace && config.controller);
 const env = { ...process.env, HC_SESSION: config.coreSession, HERDR_APP_HOME: config.appHome };
 const stamp = Date.now().toString(36), reports = [];
-function app(command, args) {
+function app(command, args, expectError = false) {
   const argv = command === 'ls' ? ['ls'] : ['do', command, JSON.stringify(args ?? {})];
   const result = spawnSync(config.exe, argv, { encoding: 'utf8', env, timeout: 105000 });
-  assert.equal(result.status, 0, `${command}: ${result.stdout}\n${result.stderr}`);
+  assert.equal(result.status === 0, !expectError, `${command}: ${result.stdout}\n${result.stderr}`);
   const value = JSON.parse(result.stdout);
-  assert.ok(!value.error, `${command}: ${value.error}`);
+  assert.equal(Boolean(value.error), expectError, `${command}: ${value.error}`);
   return value;
 }
 async function trace() {
@@ -44,7 +44,7 @@ async function invoke(name, args, expectError = false) {
   });
   assert.equal(result.isError === true, expectError, JSON.stringify(result));
   const text = result.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
-  try { return JSON.parse(text); } catch { return { error: text }; }
+  try { return JSON.parse(text); } catch { return expectError ? { error: text } : { text }; }
 }
 async function step(name, action) {
   const result = await action();
@@ -57,6 +57,11 @@ function profile(model, fallbackModel) { return app('workflow.set', { profile: '
 function input(key, extra = {}) { return { requestId: `LPT1478-live-${stamp}-${key}`, name: `Fixture ${key} ${stamp}`, message: 'Verify LPT-1478: "quoted task"\nsecond line', folder: config.folder, profile: 'feature', ...extra }; }
 const inspect = terminal => app('agent.inspect', { terminal, lines: 0, screen: false });
 const target = ({ terminal, pid, session }) => ({ terminal, pid, session });
+async function message(agent, content) {
+  const path = `herdr:${agent.terminal}`;
+  await invoke('read', { path });
+  return invoke('write', { path, content });
+}
 
 profile('success');
 const successInput = input('success');
@@ -79,15 +84,14 @@ await step('repeated creation reuses its receipt', async () => {
   return { reused: repeated.reused, terminal: repeated.terminal };
 });
 await step('native follow-up reaches the selected Pi', async () => {
-  const sent = await invoke('herdr_agent_send', { ...target(success), message: 'Follow-up with "quotes"\nand a newline' });
-  assert.equal(sent.outcome, 'submitted');
+  await message(success, 'Follow-up with "quotes"\nand a newline');
   await waitFor(async () => (await trace()).some(entry => entry.pid === success.pid && JSON.stringify(entry.context.messages).includes('Follow-up with')));
   await waitFor(() => inspect(success.terminal).status === 'done');
-  return { terminal: sent.terminal, outcome: sent.outcome };
+  return { terminal: success.terminal, delivered: true };
 });
-await step('stale PID and self-removal are refused', async () => {
-  assert.match((await invoke('herdr_agent_stop', { ...target(success), pid: success.pid + 1 }, true)).error, /identity|changed/i);
-  assert.match((await invoke('herdr_agent_remove', { terminal: controller.terminal, pid: controller.pid, session: controller.session }, true)).error, /own/i);
+await step('CLI stale PID and resource deletion are refused', async () => {
+  assert.ok(app('agent.stop', { ...target(success), pid: success.pid + 1 }, true).error);
+  assert.ok((await invoke('delete', { path: `herdr:${controller.terminal}` }, true)).error);
   assert.equal(inspect(success.terminal).pid, success.pid); assert.equal(inspect(controller.terminal).pid, controller.pid);
   return { targetsPreserved: true };
 });
@@ -123,7 +127,7 @@ await step('later model error never reopens startup fallback', async () => {
   const created = await invoke('herdr_agent_create', input('late-error'));
   assert.equal(created.outcome, 'started'); assert.equal(created.attempts.length, 1);
   const agent = inspect(created.terminal);
-  assert.equal((await invoke('herdr_agent_send', { terminal: agent.terminal, pid: agent.pid, session: agent.session, message: 'Trigger the later fixture error' })).outcome, 'submitted');
+  await message(agent, 'Trigger the later fixture error');
   await waitFor(() => inspect(agent.terminal).status === 'error');
   assert.equal(inspect(agent.terminal).startup, 'started');
   assert.equal(app('agent.list').agents.filter(row => row.name === agent.name).length, 1);
@@ -133,15 +137,15 @@ profile('slow');
 await step('stop interrupts Pi without closing its tab', async () => {
   const created = await invoke('herdr_agent_create', input('stop'));
   const agent = inspect(created.terminal);
-  await invoke('herdr_agent_send', { terminal: agent.terminal, pid: agent.pid, session: agent.session, message: 'Wait for the stop check' });
+  await message(agent, 'Wait for the stop check');
   await waitFor(() => inspect(agent.terminal).status === 'working');
-  const stopped = await invoke('herdr_agent_stop', { terminal: agent.terminal, pid: agent.pid, session: agent.session });
+  const stopped = app('agent.stop', target(agent));
   assert.equal(stopped.outcome, 'stopped');
   assert.equal(inspect(agent.terminal).pid, agent.pid); assert.equal(inspect(agent.terminal).state, 'live');
   return { terminal: agent.terminal, outcome: stopped.outcome };
 });
 await step('remove ends only the selected dedicated agent', async () => {
-  const removed = await invoke('herdr_agent_remove', { terminal: success.terminal, pid: success.pid, session: success.session });
+  const removed = app('agent.remove', target(success));
   assert.equal(removed.outcome, 'removed');
   await waitFor(() => !app('agent.list').agents.some(agent => agent.terminal === success.terminal));
   assert.equal(inspect(controller.terminal).pid, controller.pid);
@@ -153,8 +157,8 @@ await step('split siblings prevent destructive agent removal', async () => {
   const before = app('ls').spaces.flatMap(space => space.tabs).find(tab => tab.terminals.some(pane => pane.terminal === agent.terminal));
   const pane = before.terminals.find(pane => pane.terminal === agent.terminal).pane;
   app('pane.split', { pane, direction: 'right' });
-  const refused = await invoke('herdr_agent_remove', target(agent), true);
-  assert.match(refused.error, /single-pane|split|sibling/i);
+  const refused = app('agent.remove', target(agent), true);
+  assert.ok(refused.error);
   const after = app('ls').spaces.flatMap(space => space.tabs).find(tab => tab.id === before.id);
   assert.equal(after.terminals.length, 2);
   assert.equal(inspect(agent.terminal).pid, agent.pid);

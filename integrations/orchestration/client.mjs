@@ -169,17 +169,7 @@ export class AppClient {
     return runJson(this.hc, ['label', process.env.HC_TERMINAL_ID, `herdr.pi=${JSON.stringify(label)}`, '--json']);
   }
   async workflow() { return this.command('workflow.get'); }
-  async list(args) {
-    const [agents, workflow] = await Promise.all([this.command('agent.list', args), this.workflow()]);
-    return { ...agents, workflow };
-  }
   async inspect(terminal, lines = 40, screen) { return this.command('agent.inspect', { terminal, lines, screen }); }
-  async send(input) { return this.command('agent.send', input); }
-  async stop(input) { return this.command('agent.stop', input); }
-  async remove(input) {
-    const { terminal, pid, session } = input;
-    return this.command('agent.remove', { terminal, pid, session });
-  }
   // Every agent gets a space of its own, named after it, so it does not crowd
   // the caller's tab bar. Only a startup fallback joins its primary's space.
   async launch(input) {
