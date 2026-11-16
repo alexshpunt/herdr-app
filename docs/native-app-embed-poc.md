@@ -83,9 +83,13 @@ it, adopts and crops its window and follows the pane; it names no program.
   repository (`\\wsl.localhost\...`) to the global `safe.directory` list with
   Fork's own git, as Fork's "Mark repository as safe" does.
 - **Mod restarts.** A dropped pane state (a mod reload, a layout change) keeps
-  its window hidden for two seconds. The new copy of the pane takes it over;
-  otherwise it closes. A Fork still starting when its pane goes away leaves its
-  window the same way.
+  its window hidden for two seconds. Constructing `NativeAppState` with the
+  same key takes it back after the current App update, before `open` or the
+  pane's first visible frame. A failed replacement init leaves the live copy's
+  window alone. Reclaiming does not resolve or start its executable.
+  Fork skips the startup lease and repository preparation for that window;
+  hidden Diff tabs keep their own windows too. Without a new state it closes.
+  A Fork still starting when its pane goes away leaves its window the same way.
 - **Container.** The window becomes a borderless child of a Herdr-owned container
   window. The container follows the pane and cuts away only the window frame
   outside its client area; everything VS Code draws stays. A move, resize or
