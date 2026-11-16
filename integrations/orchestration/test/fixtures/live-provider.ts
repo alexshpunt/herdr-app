@@ -3,9 +3,18 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { appendFileSync } from 'node:fs';
+import { Type } from 'typebox';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export default function fixture(pi: ExtensionAPI) {
-  const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow'];
+  const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow', 'inspect-work', 'inspect-question'];
+  pi.registerTool({ name: 'fixture_wait', label: 'Fixture wait', description: 'Wait for inspection.', parameters: Type.Object({}),
+    async execute(_id, _args, signal) { await delay(60000, undefined, { signal }); return { content: [{ type: 'text', text: 'Fixture work completed' }] }; } });
+  pi.registerTool({ name: 'fixture_question', label: 'Fixture question', description: 'Ask the fixture question.', parameters: Type.Object({ questions: Type.Array(Type.Object({ prompt: Type.String(), options: Type.Array(Type.Object({ label: Type.String() })) })) }),
+    async execute(_id, args, _signal, _update, ctx) {
+      const answer = await ctx.ui.select(args.questions[0].prompt, args.questions[0].options.map(option => option.label));
+      return { content: [{ type: 'text', text: answer ?? 'Cancelled' }] };
+    } });
   pi.on('before_agent_start', async () => {
     pi.setActiveTools([...new Set([...pi.getActiveTools(), ...pi.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name)])]);
   });
@@ -29,6 +38,10 @@ export default function fixture(pi: ExtensionAPI) {
           output.stopReason = options?.signal?.aborted ? 'aborted' : 'error';
           output.errorMessage = options?.signal?.aborted ? 'Fixture aborted' : 'Intentional fixture model failure (not a network error)';
           stream.push({ type: 'error', reason: output.stopReason, error: output });
+        } else if (model.id.startsWith('inspect-') && last?.role === 'user') {
+          output.content = [{ type: 'toolCall', id: `fixture-${Date.now()}`, name: model.id === 'inspect-work' ? 'fixture_wait' : 'fixture_question', arguments: model.id === 'inspect-work' ? {} : { questions: [{ prompt: 'Which release should ship?', options: [{ label: 'Stable' }, { label: 'Preview' }] }] } }];
+          output.stopReason = 'toolUse';
+          stream.push({ type: 'done', reason: 'toolUse', message: output });
         } else if (model.id === 'controller' && last?.role === 'user') {
           // Other installed extensions can prefix the message, such as with a
           // `[timestamp]`; the request is the JSON object from the first brace.

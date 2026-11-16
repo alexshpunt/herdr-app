@@ -6,20 +6,22 @@ const textOf = message => (message?.content ?? []).filter(part => part.type === 
 const clip = (text, limit) => text.length <= limit ? text : `${text.slice(0, Math.ceil((limit - 3) / 2))} … ${text.slice(-Math.floor((limit - 3) / 2))}`;
 
 export function createInspection(ctx) {
-  let lastResponse, lastError, pendingQuestion;
+  let lastResponse, lastError, pendingQuestion, failed = false;
   const tools = new Map();
   const message = value => {
     if (value.role === 'assistant') {
       const text = clean(textOf(value));
       if (text) lastResponse = text;
-      if (value.stopReason === 'error') lastError = clean(value.errorMessage) || 'Model response failed';
-    } else if (value.role === 'toolResult' && value.isError) lastError = clean(textOf(value));
+      failed = value.stopReason === 'error';
+      if (failed) lastError = clean(value.errorMessage) || 'Model response failed';
+    } else if (value.role === 'user') { lastError = undefined; failed = false; }
+    else if (value.role === 'toolResult' && value.isError) lastError = clean(textOf(value));
   };
   for (const entry of ctx.sessionManager.getBranch()) if (entry.type === 'message') message(entry.message);
   return {
     event(event) {
       switch (event.type) {
-        case 'before_agent_start': lastError = undefined; break;
+        case 'before_agent_start': lastError = undefined; failed = false; break;
         case 'message_end': message(event.message); break;
         case 'tool_execution_start': tools.set(event.toolCallId, { name: event.toolName, args: event.args }); break;
         case 'tool_execution_end':
@@ -38,7 +40,7 @@ export function createInspection(ctx) {
       }
     },
     snapshot() {
-      const value = { busy: !ctx.isIdle(), currentTools: [...new Set([...tools.values()].map(tool => clean(tool.name)))], ...(pendingQuestion ? { pendingQuestion } : {}), ...(lastError ? { lastError } : {}), ...(lastResponse ? { lastResponse } : {}) };
+      const value = { busy: !ctx.isIdle(), failed, currentTools: [...new Set([...tools.values()].map(tool => clean(tool.name)))], ...(pendingQuestion ? { pendingQuestion } : {}), ...(lastError ? { lastError } : {}), ...(lastResponse ? { lastResponse } : {}) };
       const truncated = [];
       // The serialized budget includes escaping and field names. Preserve both
       // ends of replies (opening context and final result) instead of TUI chrome.

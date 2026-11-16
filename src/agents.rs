@@ -235,7 +235,7 @@ pub fn request(
             match pi_snapshot(core, address, &record) {
                 Ok(snapshot) => {
                     verify_inspected(core, address, &record)?;
-                    result["status"] = json!(if snapshot["pendingQuestion"].is_string() { "blocked" } else if snapshot["busy"] == true { "working" } else if snapshot["lastError"].is_string() { "error" } else if snapshot["lastResponse"].is_string() { "done" } else { "idle" });
+                    result["status"] = json!(if snapshot["pendingQuestion"].is_string() { "blocked" } else if snapshot["busy"] == true { "working" } else if snapshot["failed"] == true { "error" } else if snapshot["lastResponse"].is_string() { "done" } else { "idle" });
                     result["source"] = json!("pi");
                     if snapshot["truncated"].is_array() { result["detail"] = json!("Use screen: true for terminal details."); }
                     result["inspection"] = snapshot;

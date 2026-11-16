@@ -26,6 +26,9 @@ test('inspection restores the last reply and reports work, questions and errors 
   assert.equal(inspection.snapshot().lastError, undefined);
   inspection.event({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'fixture-quota' } });
   assert.equal(inspection.snapshot().lastError, 'fixture-quota');
+  assert.equal(inspection.snapshot().failed, true);
+  inspection.event({ type: 'message_end', message: assistant('Recovered') });
+  assert.equal(inspection.snapshot().failed, false);
 });
 
 test('inspection bounds serialized output and flags truncated decision text', () => {
