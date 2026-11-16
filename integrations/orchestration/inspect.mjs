@@ -37,7 +37,9 @@ export function createInspection(ctx) {
           // Custom question UIs often publish no title. Keep their question and
           // choices, not arbitrary arguments of unrelated tools or tool output.
           const questions = [...tools.values()].flatMap(tool => Array.isArray(tool.args?.questions) ? tool.args.questions : []);
-          pendingQuestion = clean([event.title, ...questions.map(question => [question.prompt, ...(question.options ?? []).map(option => option.label)].filter(Boolean).join(' | '))].filter(Boolean).join(' | ')) || event.kind;
+          const title = clean(event.title);
+          const heading = questions.some(question => clean(question.prompt) === title) ? undefined : title;
+          pendingQuestion = clean([heading, ...questions.map(question => [question.prompt, ...(question.options ?? []).map(option => option.label)].filter(Boolean).join(' | '))].filter(Boolean).join(' | ')) || event.kind;
           break;
         }
         case 'ui_prompt_end': pendingQuestion = undefined; break;
