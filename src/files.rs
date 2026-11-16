@@ -38,6 +38,29 @@ impl Revisions {
 }
 
 impl FileEvents {
+    /// Collects the native notifications for one save or folder copy.
+    pub async fn next_batch(&self, executor: &gpui::BackgroundExecutor) -> Result<Changed, async_channel::RecvError> {
+        let mut changed = self.changes.recv().await?;
+        loop {
+            // A fixed batch window splits a folder copy into repeated starts.
+            // Match the runtime watcher's quiet period instead.
+            executor.timer(std::time::Duration::from_millis(200)).await;
+            let mut quiet = true;
+            while let Ok(more) = self.changes.try_recv() {
+                changed.extend(more);
+                quiet = false;
+            }
+            if quiet {
+                return Ok(changed);
+            }
+        }
+    }
+
+    /// The observed source revision of a mod, using the watcher's canonical root.
+    pub fn revision(&self, root: &Path) -> Option<u64> {
+        self.revision_provider()(&root.canonicalize().ok()?)
+    }
+
     pub fn revision_provider(&self) -> impl Fn(&Path) -> Option<u64> + 'static {
         let base = self.root.clone();
         let revisions = self.revisions.clone();
@@ -54,9 +77,14 @@ impl FileEvents {
 }
 
 fn changes(base: &Path, event: notify::Result<notify::Event>) -> (Changed, bool) {
-    let Ok(event) = event else { return (Vec::new(), true) };
+    let Ok(mut event) = event else { return (Vec::new(), true) };
     if !event.need_rescan() && matches!(event.kind, notify::EventKind::Access(_)) {
         return (Vec::new(), false);
+    }
+    // Windows also reports the parent directory when ignored typings are
+    // written on load. Keep structural events, but not directory metadata.
+    if matches!(event.kind, notify::EventKind::Modify(kind) if !matches!(kind, notify::event::ModifyKind::Name(_))) {
+        event.paths.retain(|path| !path.is_dir());
     }
     let rescan = event.need_rescan() || event.paths.iter().any(|path| {
         base.starts_with(path) || path.strip_prefix(base).is_ok_and(|relative| relative.starts_with("mods") && mod_of(relative).is_none())
