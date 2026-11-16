@@ -47,6 +47,7 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const files = JSON.parse(Buffer.from('__HERDR_FILES_BASE64__', 'base64').toString('utf8'));
+const features = __HERDR_FEATURES_JSON__;
 const marker = '.herdr-managed.json';
 const owner = 'herdr-app';
 const readJson = async file => JSON.parse(await fs.readFile(file, 'utf8'));
@@ -141,6 +142,17 @@ async function discoverPiRuntime(searchPath = process.env.PATH || '', platform =
   }
   let moved = false;
   try {
+    const featurePath = path.join(agent, 'herdr-features.json');
+    let previous, missing = false;
+    try { previous = await readJson(featurePath); }
+    catch (error) { if (error.code === 'ENOENT') missing = true; }
+    const valid = previous?.version === 1 && typeof previous.usage === 'boolean' && Number.isFinite(previous.usageSince) && previous.usageSince >= 0;
+    const usageSince = valid ? (!previous.usage && features.usage ? Date.now() : previous.usageSince) : missing ? 0 : Date.now();
+    const featureStage = path.join(agent, `.herdr-features-${token}.json`);
+    try {
+      await fs.writeFile(featureStage, JSON.stringify({ version: 1, ...features, usageSince }), { mode: 0o600, flag: 'wx' });
+      await fs.rename(featureStage, featurePath);
+    } finally { await fs.rm(featureStage, { force: true }); }
     const existing = await optionalStat(target);
     let metadata;
     if (existing) {
@@ -189,6 +201,23 @@ async function discoverPiRuntime(searchPath = process.env.PATH || '', platform =
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
 "###;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+struct Features {
+    workflow: bool,
+    usage: bool,
+}
+static FEATURES: Mutex<Features> = Mutex::new(Features { workflow: true, usage: true });
+/// Set the switches for subsequent machine installs; return whether either changed.
+pub fn configure(person: &crate::settings::Person) -> bool {
+    let next = Features { workflow: person.workflow_enabled, usage: person.usage_enabled };
+    let mut current = FEATURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = *current != next;
+    *current = next;
+    changed
+}
+fn features() -> Features {
+    *FEATURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 #[derive(Default)]
 struct Install {
     state: Mutex<State>,
@@ -200,10 +229,12 @@ enum State {
     Pending,
     Installing,
     Ready {
+        features: Features,
         receipt: Value,
         at: Instant,
     },
     Failed {
+        features: Features,
         error: String,
         at: Instant,
     },
@@ -266,6 +297,7 @@ pub fn start(core: Arc<Core>, on: Option<String>) {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = State::Failed {
+            features: features(),
             error: message.clone(),
             at: Instant::now(),
         };
@@ -282,7 +314,8 @@ pub fn ensure(core: &Core, on: Option<&str>) -> Result<(), String> {
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    loop {
+    let desired = loop {
+        let desired = features();
         match &*state {
             State::Installing => {
                 state = install
@@ -292,16 +325,16 @@ pub fn ensure(core: &Core, on: Option<&str>) -> Result<(), String> {
             }
             // Recheck disk on subsequent launches; cache only a nearby startup
             // install so simultaneous creates share the same result.
-            State::Ready { at, .. } if at.elapsed() < Duration::from_secs(5) => return Ok(()),
-            State::Failed { error, at } if at.elapsed() < Duration::from_secs(5) => {
+            State::Ready { features, at, .. } if *features == desired && at.elapsed() < Duration::from_secs(5) => return Ok(()),
+            State::Failed { features, error, at } if *features == desired && at.elapsed() < Duration::from_secs(5) => {
                 return Err(error.clone())
             }
-            _ => break,
+            _ => break desired,
         }
-    }
+    };
     *state = State::Installing;
     drop(state);
-    let result = install_on(core, on);
+    let result = install_on(core, on, desired);
     let mut state = install
         .state
         .lock()
@@ -310,18 +343,23 @@ pub fn ensure(core: &Core, on: Option<&str>) -> Result<(), String> {
         Ok(receipt) => {
             remember_runtime(receipt);
             *state = State::Ready {
+                features: desired,
                 receipt: receipt.clone(),
                 at: Instant::now(),
             }
         }
         Err(error) => {
             *state = State::Failed {
+                features: desired,
                 error: error.clone(),
                 at: Instant::now(),
             }
         }
     }
     install.changed.notify_all();
+    drop(state);
+    // A click during installation must not leave a machine on the old value.
+    if features() != desired { return ensure(core, on); }
     result.map(|_| ())
 }
 
@@ -376,12 +414,12 @@ impl ExecFailure {
     }
 }
 
-fn install_on(core: &Core, on: Option<&str>) -> Result<Value, String> {
+fn install_on(core: &Core, on: Option<&str>, features: Features) -> Result<Value, String> {
     let files = serde_json::to_vec(FILES).map_err(|error| error.to_string())?;
     let script = INSTALLER.replace(
         "__HERDR_FILES_BASE64__",
         &base64::engine::general_purpose::STANDARD.encode(files),
-    );
+    ).replace("__HERDR_FEATURES_JSON__", &serde_json::to_string(&features).map_err(|e| e.to_string())?);
     receipt(&run_script(core, on, &script)?)
 }
 

@@ -10,6 +10,7 @@ const SECTIONS = [
   { id: "look", title: "Look", icon: "palette" },
   ...(window()?.platform === "macos" ? [{ id: "keyboard", title: "Keyboard", icon: "keyboard" }] : []),
   { id: "machines", title: "Machines", icon: "server" },
+  { id: "integrations", title: "Integrations", icon: "integrations" },
   { id: "alerts", title: "Alerts", icon: "bell" },
   { id: "updates", title: "Updates", icon: "refresh" },
   { id: "privacy", title: "Privacy", icon: "shield" },
@@ -775,6 +776,15 @@ export default class Settings extends View {
       );
   }
 
+  integrations(t) {
+    const workflow = this.person.workflow_enabled !== false;
+    const usage = this.person.usage_enabled !== false;
+    return v_flex().w_full()
+      .child(this.heading(t, "Integrations"))
+      .child(this.row(t, "Workflow", "Agent tools, Herdr prompt context, and the Workflow panel. Reload running Pi sessions to apply changes.", this.toggle(t, "st-workflow", workflow, (_e, cx) => this.change(p => { p.workflow_enabled = !workflow; }, cx))))
+      .child(this.row(t, "Usage", "Record model tokens and costs locally and show the Usage panel. Turning this off keeps existing records and stops new recording; disabled periods are not imported later.", this.toggle(t, "st-usage", usage, (_e, cx) => this.change(p => { p.usage_enabled = !usage; }, cx))))
+      .child(div().pt(14).text_size(13).text_color(t.dim).child("Applies to every connected machine and to other machines when they reconnect. Usage recording is separate from anonymous usage sharing in Privacy."));
+  }
   privacy(t) {
     const s = telemetry();
     const on = s ? s.setting : this.person.telemetry !== false;
@@ -907,6 +917,8 @@ export default class Settings extends View {
                         ? this.keyboard(t)
                       : this.section === "machines"
                         ? this.machines(t)
+                      : this.section === "integrations"
+                        ? this.integrations(t)
                       : this.section === "alerts"
                         ? this.alerts(t)
                         : this.section === "privacy"

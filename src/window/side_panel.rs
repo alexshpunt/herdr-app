@@ -38,6 +38,7 @@ impl AppWindow {
             .values()
             .filter_map(|f| {
                 let section = f.hint.side_panel.as_ref()?;
+                if !section.enabled(&self.person) { return None; }
                 let title = section
                     .title
                     .clone()

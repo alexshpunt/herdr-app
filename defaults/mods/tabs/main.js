@@ -99,7 +99,7 @@ export default class Tabs extends View {
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       // The side panel's header takes its toggle and the window buttons while it is open.
-      .when(!sideOpen, el => el.child(side
+      .when(!sideOpen && (side || settings().workflow_enabled !== false), el => el.child(side
         ? button("side-panel-toggle", svg("mods/workspace-chrome/sidebar-right.svg").size(15), () => run("layout.toggle", { id: "side-panel" })).tooltip("Side panel")
         : button("workflow-toggle", svg("mods/workspace-chrome/layers.svg").size(14), () => run("workflow.open")).tooltip("Workflow")))
       .when(w?.buttons && !sideOpen, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

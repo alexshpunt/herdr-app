@@ -22,12 +22,12 @@ export class AppClient {
 `;
 test('real Pi reload refreshes module code and never reopens the startup fallback boundary',{timeout:30000},async()=>{
  const root=await mkdtemp(path.join(tmpdir(),'herdr-orchestration-reload-'));
- const prior=new Map(['HC_TERMINAL_ID','HC_TERMINAL_SOCKET'].map(key=>[key,process.env[key]]));
+ const prior=new Map(['HC_TERMINAL_ID','HC_TERMINAL_SOCKET','PI_CODING_AGENT_DIR'].map(key=>[key,process.env[key]]));
  let session;
  try {
   for(const file of ['index.ts','orchestration.mjs','ipc.mjs','inspect.mjs']) await copyFile(path.join(here,'..',file),path.join(root,file));
   await writeFile(path.join(root,'client.mjs'),clientModule('first'));
-  process.env.HC_TERMINAL_ID='fixture';process.env.HC_TERMINAL_SOCKET='fixture';
+  process.env.HC_TERMINAL_ID='fixture';process.env.HC_TERMINAL_SOCKET='fixture';process.env.PI_CODING_AGENT_DIR=root;
   const bus=createEventBus(),settings=SettingsManager.inMemory();
   const loader=new DefaultResourceLoader({cwd:root,agentDir:root,settingsManager:settings,eventBus:bus,additionalExtensionPaths:[path.join(root,'index.ts')],noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true});
   await loader.reload();
@@ -65,6 +65,20 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal((await label()).startup,'started');
   await session.extensionRunner.emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'later quota'}});
   await session.extensionRunner.emit({type:'agent_settled',aborted:false});
+  const featurePath = path.join(root, 'herdr-features.json');
+  await writeFile(featurePath, JSON.stringify({ version: 1, workflow: false, usage: true, usageSince: 0 }));
+  await session.reload();
+  assert.deepEqual(session.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')), []);
+  let disabledBridge;
+  bus.emit('herdr:bridge', { provide: value => { disabledBridge = value; } });
+  assert.equal(disabledBridge, undefined);
+  const event = { type: 'before_agent_start', prompt: 'fixture', systemPrompt: '', systemPromptOptions: { sections: {} } };
+  await session.extensionRunner.emit(event);
+  assert.equal(event.systemPromptOptions.sections.herdr, undefined);
+  await writeFile(featurePath, JSON.stringify({ version: 1, workflow: true, usage: false, usageSince: 0 }));
+  await session.reload();
+  assert.deepEqual(session.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name), ['herdr_agent_create']);
+  assert.equal(bridge().version, 1);
   assert.equal((await label()).startup,'started');
  } finally {
   if(session){await session.extensionRunner.emit({type:'session_shutdown',reason:'quit'});session.dispose()}

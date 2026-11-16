@@ -942,6 +942,8 @@ What's about the user, never a look:
   pane's right edge (default `true`). It shows only when the pane has
   scrollback — never on the alternate screen (editors, pagers) — and
   drags to move through it.
+- `workflow_enabled`: `false` hides Workflow and disables its Pi tools and Herdr prompt context. Reload running Pi sessions after changing it.
+- `usage_enabled`: `false` hides Usage and stops local token, cost, response and tool-result recording. Existing records are kept. Re-enabling records new activity, not activity from disabled periods. Both integration switches default to `true`, apply to every connected machine, and synchronize on reconnect. They do not uninstall extensions or change other plugins.
 - `telemetry`: `false` stops anonymous usage data and deletes what wasn't
   sent (on when absent; Settings → Privacy shows each report word for
   word, and `telemetry()` in mods). Once a day the app sends counts:
@@ -1012,6 +1014,7 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
 - `"side_panel": { "title": "Builds", "order": 10 }` in `mod.json` adds the mod
   as a section of every `{ "side_panel": true }` block (see Layouts): widgets,
   metrics and settings that sit beside the work.
+  Optional `feature: "workflow"` or `feature: "usage"` makes a section follow the corresponding integration switch; other sections are unaffected.
 - `"app"` in `mod.json` registers the mod as an app that opens as a tab of the
   agent it is opened for (`app.open`): one object, or a list for several apps
   of one mod. Each has an `id` (default: the mod's name), a `label`, an `icon`

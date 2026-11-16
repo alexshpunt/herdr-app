@@ -6,6 +6,34 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PiIntegrationTest, assistantMessage, toolCall, text, getToolExecution, getToolExecutionDetails } from 'pi-coding-agent-test';
 const here = path.dirname(fileURLToPath(import.meta.url));
+test('new Pi sessions exclude disabled Workflow from the real tool_search catalog', { timeout: 60000 }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'herdr-feature-catalog-'));
+  try {
+    for (const workflow of [false, true]) {
+      await writeFile(path.join(root, 'herdr-features.json'), JSON.stringify({ version: 1, workflow, usage: true, usageSince: 0 }));
+      const run = await new PiIntegrationTest({
+        testName: `herdr-feature-catalog-${workflow}`, cwd: root,
+        artifactsDir: path.resolve(here, '../.tmp/test-runs'), transport: 'tui', rawMode: false,
+        extensions: [path.resolve(here, '../index.ts'), 'builtin:tool-search', path.join(here, 'fixtures/features-probe.ts')],
+        tools: ['tool_search', 'feature_probe'],
+        environment: { PI_CODING_AGENT_DIR: root, HC_TERMINAL_ID: '', HC_TERMINAL_SOCKET: '' },
+        conversation: [
+          assistantMessage([toolCall({ id: 'search', name: 'tool_search', arguments: { query: 'herdr_agent_create' } })], { stopReason: 'toolUse' }),
+          assistantMessage([toolCall({ id: 'probe', name: 'feature_probe', arguments: {} })], { stopReason: 'toolUse' }),
+          assistantMessage([text('Catalog checked.')]),
+        ],
+      }).run('Search for the Herdr agent tool and inspect the catalog.');
+      assert.equal(getToolExecution(run, 'search').isError, false);
+      assert.equal(getToolExecution(run, 'probe').isError, false);
+      const expected = workflow ? ['herdr_agent_create'] : [];
+      assert.deepEqual(getToolExecutionDetails(getToolExecution(run, 'search')).loaded, expected);
+      const probe = getToolExecutionDetails(getToolExecution(run, 'probe'));
+      assert.deepEqual(probe.tools, expected);
+      if (!workflow) assert.ok(!probe.sections.includes('herdr'));
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 const createInput = { requestId:'context-probe', name:'Context probe', message:'Fixture task', folder:path.resolve(here), profile:'feature' };
 test('real Pi exposes a deferred catalog and refuses inherited or missing context safely', {timeout:60000}, async () => {
   const root = await mkdtemp(path.join(tmpdir(),'herdr-deferred-pi-'));

@@ -1,5 +1,7 @@
 # Herdr Pi orchestration
 
+Settings → Integrations → Workflow controls registration and the panel. Off means no Herdr tools, deferred catalog entries, resource bridge or Herdr prompt section. Reload running Pi sessions after changing it; new sessions read the value immediately. The App writes `herdr-features.json` in each connected machine's Pi agent directory and synchronizes it again on reconnect. Missing files preserve the enabled default; invalid files disable the integration. Extensions stay installed, and re-enabling needs no reinstall.
+
 Herdr App embeds this extension and installs it on each connected machine. Pi discovers it in the managed `extensions/herdr-orchestration` directory under its agent directory. Reload an already running Pi after an update. No runtime dependency installation is needed.
 
 Herdr resolves the target machine's Pi npm entrypoint and starts it directly with Node. This preserves the first task's quotes and newlines and lets the core verify Pi's actual PID. An ordinary Pi exit remains finished; core keep-mode restores a shell only after program loss. A standalone binary or shell alias that cannot be resolved safely produces a launch error instead of guessing another command.

@@ -496,6 +496,7 @@ struct AppProbe {
 
 impl AppWindow {
     pub fn new(core: Arc<Core>, requests: async_channel::Receiver<Request>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::pi_install::configure(&settings::load_person().unwrap_or_default());
         crate::pi_install::start(core.clone(), None);
         let runtime = ShellRuntime::new_with_components(cx, crate::browser::components()).map_err(|e| tracing::error!("script runtime failed, mods are off: {e:#}")).ok();
         let file_events = crate::files::watch(&mods::app_dir(), #[cfg(test)] cx.background_executor().clone());
@@ -921,7 +922,16 @@ impl AppWindow {
             crate::telemetry::set_setting(settings::telemetry_setting(&loaded));
             match loaded {
                 Ok(p) => {
+                    if crate::pi_install::configure(&p) {
+                        crate::pi_install::start(self.core.clone(), None);
+                        for (name, doc) in &self.documents {
+                            if !name.is_empty() && doc.connected {
+                                crate::pi_install::start(self.core.clone(), Some(name.clone()));
+                            }
+                        }
+                    }
                     self.person = p;
+                    if !self.person.workflow_enabled { self.close_overlay("workflow", window, cx); }
                     let _ = std::fs::remove_file(file("settings.error"));
                 }
                 Err(e) => self.report("settings", &e),
@@ -3228,6 +3238,7 @@ impl AppWindow {
             }
             // Workflow is a side panel section; layouts without a side panel dock it.
             "workflow.open" => {
+                if !self.person.workflow_enabled { return; }
                 if let Some(n) = self.chrome.find_mut(side_panel::PANEL) {
                     n.hidden = !n.hidden;
                 } else {
