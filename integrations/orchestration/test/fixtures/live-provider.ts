@@ -9,11 +9,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 export default function fixture(pi: ExtensionAPI) {
   const ids = ['controller', 'success', 'primary-error', 'fallback-error', 'late-error', 'slow', 'inspect-work', 'inspect-question'];
   pi.registerTool({ name: 'fixture_wait', label: 'Fixture wait', description: 'Wait for inspection.', parameters: Type.Object({}),
-    async execute(_id, _args, signal) { await delay(60000, undefined, { signal }); return { content: [{ type: 'text', text: 'Fixture work completed' }] }; } });
+    async execute(_id, _args, signal) { await delay(60000, undefined, { signal }); return { content: [{ type: 'text', text: 'Fixture work completed' }], details: {} }; } });
   pi.registerTool({ name: 'fixture_question', label: 'Fixture question', description: 'Ask the fixture question.', parameters: Type.Object({ questions: Type.Array(Type.Object({ prompt: Type.String(), options: Type.Array(Type.Object({ label: Type.String() })) })) }),
     async execute(_id, args, _signal, _update, ctx) {
       const answer = await ctx.ui.select(args.questions[0].prompt, args.questions[0].options.map(option => option.label));
-      return { content: [{ type: 'text', text: answer ?? 'Cancelled' }] };
+      return { content: [{ type: 'text', text: answer ?? 'Cancelled' }], details: {} };
     } });
   pi.on('before_agent_start', async () => {
     pi.setActiveTools([...new Set([...pi.getActiveTools(), ...pi.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name)])]);

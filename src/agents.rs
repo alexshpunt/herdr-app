@@ -150,13 +150,24 @@ fn send_params(address: &str, record: &Value, args: &Value) -> Result<Value, Str
 fn exec_params(address: &str, record: &Value, envelope: Value) -> Result<Value, String> {
     let label = pi_label(record).ok_or("The Pi identity is unavailable")?;
     let route = |field: &str| -> Result<&str, String> {
-        label[field].as_str().filter(|s| !s.is_empty()).ok_or_else(|| "The Pi integration is unavailable; reload this Pi".into())
+        label[field]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "The Pi integration is unavailable; reload this Pi".into())
     };
-    for field in ["socket", "token"] { route(field)?; }
+    for field in ["socket", "token"] {
+        route(field)?;
+    }
     let input = serde_json::to_vec(&envelope).map_err(|error| error.to_string())?;
-    if input.len() > 256 * 1024 - 1024 { return Err("The Pi follow-up message is too large".into()); }
-    let (machine, id) = address.split_once('/').map_or((None, address), |(machine, id)| (Some(machine), id));
-    Ok(json!({"on":machine,"argv":[route("node")?,route("request")?,id,label["pid"].to_string(),label["session"].as_str().unwrap_or_default(),route("hc")?],"input":base64::engine::general_purpose::STANDARD.encode(input),"timeout":18}))
+    if input.len() > 256 * 1024 - 1024 {
+        return Err("The Pi follow-up message is too large".into());
+    }
+    let (machine, id) = address
+        .split_once('/')
+        .map_or((None, address), |(machine, id)| (Some(machine), id));
+    Ok(
+        json!({"on":machine,"argv":[route("node")?,route("request")?,id,label["pid"].to_string(),label["session"].as_str().unwrap_or_default(),route("hc")?],"input":base64::engine::general_purpose::STANDARD.encode(input),"timeout":18}),
+    )
 }
 fn screen_mode(args: &Value) -> Result<Option<bool>, String> {
     match args.get("screen") {
@@ -171,30 +182,66 @@ fn pi_snapshot(core: &Core, address: &str, record: &Value) -> Result<Value, Stri
     }
     let mut params = exec_params(address, record, json!({"action":"inspect"}))?;
     params["timeout"] = json!(5);
-    let observed = core.call_timeout("machine.exec", params, std::time::Duration::from_secs(7))
+    let observed = core
+        .call_timeout("machine.exec", params, std::time::Duration::from_secs(7))
         .map_err(|_| "session-unavailable")?;
-    if observed["code"] != 0 || observed["timed_out"] == true { return Err("session-unavailable".into()); }
-    let output = base64::engine::general_purpose::STANDARD.decode(observed["stdout"].as_str().unwrap_or_default()).map_err(|_| "invalid-session-reply")?;
-    let confirmation: Value = serde_json::from_slice(&output).map_err(|_| "invalid-session-reply")?;
+    if observed["code"] != 0 || observed["timed_out"] == true {
+        return Err("session-unavailable".into());
+    }
+    let output = base64::engine::general_purpose::STANDARD
+        .decode(observed["stdout"].as_str().unwrap_or_default())
+        .map_err(|_| "invalid-session-reply")?;
+    let confirmation: Value =
+        serde_json::from_slice(&output).map_err(|_| "invalid-session-reply")?;
     let snapshot = &confirmation["snapshot"];
-    if confirmation["outcome"] != "inspected" || !snapshot.is_object() || !snapshot["busy"].is_boolean() || snapshot.to_string().chars().count() > 850 {
+    if confirmation["outcome"] != "inspected"
+        || !snapshot.is_object()
+        || !snapshot["busy"].is_boolean()
+        || snapshot.to_string().chars().count() > 850
+    {
         return Err("invalid-session-reply".into());
     }
     Ok(snapshot.clone())
 }
 fn verify_inspected(core: &Core, address: &str, previous: &Value) -> Result<(), String> {
-    let current = core.call("terminal.get", json!({"terminal":address})).map_err(|_| "Cannot verify the inspected terminal")?;
+    let current = core
+        .call("terminal.get", json!({"terminal":address}))
+        .map_err(|_| "Cannot verify the inspected terminal")?;
     if current_pi(previous) {
         validate_identity(&current, &pi_label(previous).unwrap())?;
-    } else if current_pi(&current) || current["pid"] != previous["pid"] || current["state"] != previous["state"] {
+    } else if current_pi(&current)
+        || current["pid"] != previous["pid"]
+        || current["state"] != previous["state"]
+    {
         return Err("The terminal changed during inspection; inspect it again".into());
     }
     Ok(())
 }
 fn compact_screen(text: &str) -> (String, bool) {
-    let normalized = text.lines().map(|line| line.chars().map(|ch| if "─━═│┃║".contains(ch) { ' ' } else { ch }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n");
+    let normalized = text
+        .lines()
+        .map(|line| {
+            line.chars()
+                .map(|ch| {
+                    if "─━═│┃║".contains(ch) {
+                        ' '
+                    } else {
+                        ch
+                    }
+                })
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
     let count = normalized.chars().count();
-    (normalized.chars().skip(count.saturating_sub(650)).collect(), count > 650)
+    (
+        normalized.chars().skip(count.saturating_sub(650)).collect(),
+        count > 650,
+    )
 }
 /// Runs on a worker. Re-read immediately before a mutation rather than trusting
 /// the window's event cache, which may describe a previous process in the pane.
@@ -230,21 +277,41 @@ pub fn request(
             .unwrap_or(80);
         let mode = screen_mode(args)?;
         let mut result = summary(address, &record, placement);
-        if mode == Some(false) { return Ok(result); }
+        if mode == Some(false) {
+            return Ok(result);
+        }
         let fallback = if mode.is_none() {
             match pi_snapshot(core, address, &record) {
                 Ok(snapshot) => {
                     verify_inspected(core, address, &record)?;
-                    result["status"] = json!(if snapshot["pendingQuestion"].is_string() { "blocked" } else if snapshot["busy"] == true { "working" } else if snapshot["failed"] == true { "error" } else if snapshot["lastResponse"].is_string() { "done" } else { "idle" });
+                    result["status"] = json!(if snapshot["pendingQuestion"].is_string() {
+                        "blocked"
+                    } else if snapshot["busy"] == true {
+                        "working"
+                    } else if snapshot["failed"] == true {
+                        "error"
+                    } else if snapshot["lastResponse"].is_string() {
+                        "done"
+                    } else {
+                        "idle"
+                    });
                     result["source"] = json!("pi");
-                    if snapshot["truncated"].is_array() { result["detail"] = json!("Use screen: true for terminal details."); }
+                    if snapshot["truncated"].is_array() {
+                        result["detail"] = json!("Use screen: true for terminal details.");
+                    }
                     result["inspection"] = snapshot;
                     return Ok(result);
                 }
                 Err(reason) => Some(reason),
             }
-        } else { None };
-        let read = core.call("terminal.read", json!({"terminal":address,"lines":if mode.is_none() { 0 } else { lines }}))
+        } else {
+            None
+        };
+        let read = core
+            .call(
+                "terminal.read",
+                json!({"terminal":address,"lines":if mode.is_none() { 0 } else { lines }}),
+            )
             .map_err(|e| format!("Cannot read {address}: {e:#}"))?;
         verify_inspected(core, address, &record)?;
         if let Some(reason) = fallback {
@@ -253,7 +320,8 @@ pub fn request(
             result["fallbackReason"] = json!(reason);
             result["screen"] = json!(screen);
             result["screenTruncated"] = json!(truncated);
-            result["detail"] = json!("Session facts unavailable. Use screen: true for the full terminal screen.");
+            result["detail"] =
+                json!("Session facts unavailable. Use screen: true for the full terminal screen.");
         } else {
             result["source"] = json!("screen");
             result["screen"] = read["text"].clone();

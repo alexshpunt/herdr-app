@@ -72,7 +72,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
         if (ownerSession !== session || ctx.sessionManager.getSessionId() !== session) throw new Error('The Pi session changed; inspect the agent again');
         if (startup !== 'started') throw new Error('The Pi agent has not completed startup');
         const status = typeof current.status === 'object' ? current.status : current.report;
-        if (current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
+        if (inspection?.snapshot().pendingQuestion || current.status === 'blocked' || status?.state === 'blocked') throw new Error('The agent is waiting for the user; do not bypass its question');
       },
       inspect: async () => {
         await currentClient.owner(); currentSession();
