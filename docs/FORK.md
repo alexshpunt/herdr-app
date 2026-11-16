@@ -68,6 +68,21 @@ pi install npm:@plannotator/pi-extension
 pi install /absolute/path/to/herdr-app/integrations/plannotator
 ```
 
+For native Windows Pi, run these in PowerShell (not WSL), using the Windows
+checkout path. The same commands update an existing installation:
+
+```powershell
+pi install npm:@plannotator/pi-extension
+pi install "$HOME\dev\herdr-app\integrations\plannotator"
+```
+
+Run `/reload` in each running Windows Pi after updating the checkout. The
+integration uses Windows named pipes and finds `hc.exe` in the core's standard
+install directory even when it is absent from PATH. `HC_BIN` and
+`HERDR_APP_BIN` can select nonstandard installations. Labels belong to the
+terminal's root Pi or its foreground Pi, so an active child tool does not hide
+the root Pi's annotation buttons.
+
 Reload Pi after installing. An explicitly configured `PLANNOTATOR_BROWSER` keeps
 its existing behavior. Otherwise the integration supplies a browser helper that
 finds the native app and its requesting terminal. It uses the terminal's
