@@ -19,7 +19,8 @@ import time
 from Xlib import X, display
 from Xlib.ext import xtest
 
-app, space, output = sys.argv[1:]
+app, space, output, *extra = sys.argv[1:]
+mod = extra[0] if extra else "linear-browser"
 output = Path(output)
 output.mkdir(parents=True, exist_ok=True)
 assert os.environ.get("HC_SESSION", "").startswith("lpt1560-"), "use a private test core"
@@ -28,7 +29,7 @@ assert os.environ.get("HC_SESSION", "").startswith("lpt1560-"), "use a private t
 class Fixture(http.server.BaseHTTPRequestHandler):
     page = None
 
-    def log_message(self, *_):
+    def log_message(self, format, *args):
         pass
 
     def do_POST(self):
@@ -95,7 +96,7 @@ def click(x, y, button=1):
     d.sync()
 
 
-tab = command("tab.new", "--space", space, "--name", "Navigation regression", "--mod", "linear-browser", "--props", json.dumps({"url": url}))
+tab = command("tab.new", "--space", space, "--name", "Navigation regression", "--mod", mod, "--props", json.dumps({"url": url, "link": {"url": url}}))
 try:
     expect("A")
     host = wait_for(find_host, "Herdr window not found")
