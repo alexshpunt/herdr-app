@@ -423,6 +423,19 @@ mod tests {
     }
 
     #[test]
+    fn screen_fallback_is_bounded_unicode_text_not_padded_chrome() {
+        assert_eq!(
+            compact_screen("────\n   Ready    ║   choose stable  \n\n"),
+            ("Ready choose stable".into(), false)
+        );
+        let (screen, truncated) =
+            compact_screen(&format!("{}Final decision", "Русский ".repeat(500)));
+        assert!(truncated);
+        assert_eq!(screen.chars().count(), 650);
+        assert!(screen.ends_with("Final decision"));
+    }
+
+    #[test]
     fn display_names_cannot_select_an_unintended_agent() {
         assert_eq!(screen_mode(&json!({})).unwrap(), None);
         assert_eq!(screen_mode(&json!({"screen":true})).unwrap(), Some(true));
