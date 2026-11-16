@@ -171,6 +171,9 @@ jobs:
           npm ci --prefix integrations/plannotator
           npm run --prefix integrations/plannotator check
           npm test --prefix integrations/plannotator
+      - name: Check native app launch and reload
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        run: node --test tests/native_launch.test.mjs tests/native_reload.test.mjs
       - name: Check Pi orchestration and installer
         if: runner.os == 'Linux' || runner.os == 'Windows'
         run: |
