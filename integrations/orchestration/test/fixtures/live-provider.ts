@@ -51,7 +51,7 @@ export default function fixture(pi: ExtensionAPI) {
           output.stopReason = 'toolUse';
           stream.push({ type: 'done', reason: 'toolUse', message: output });
         } else {
-          output.content = [{ type: 'text', text: model.id === 'controller' ? `Fixture tool completed: ${text(last)}` : `Fixture ready: ${model.id}; ${text(last)}` }];
+          output.content = [{ type: 'text', text: model.id === 'controller' ? 'Fixture call completed' : `Fixture ready: ${model.id}; ${text(last)}` }];
           stream.push({ type: 'done', reason: 'stop', message: output });
         }
         stream.end();
