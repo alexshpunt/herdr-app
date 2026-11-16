@@ -22,6 +22,7 @@ from Xlib.ext import xtest
 app, space, output_arg, *extra = sys.argv[1:]
 mod = next((arg for arg in extra if not arg.startswith("--")), "linear-browser")
 probe = "--probe" in extra
+spa = "--spa" in extra
 output = Path(output_arg)
 output.mkdir(parents=True, exist_ok=True)
 assert os.environ.get("HC_SESSION", "").startswith("lpt1560-"), "use a private test core"
@@ -45,6 +46,21 @@ class Fixture(http.server.BaseHTTPRequestHandler):
 <style>body {{ margin: 0; }} a {{ position: absolute; left: 20px; top: 80px; }}</style>
 <h1>{page}</h1><a href='/{next_page}'>Next</a><p style='margin-top:150px'>Needle</p>
 <script>addEventListener('pageshow', () => fetch('/seen/{page}', {{method:'POST'}}));</script>"""
+        if spa:
+            html += """<script>
+const render = () => {
+  const page = location.pathname.slice(1);
+  document.querySelector('h1').textContent = page;
+  document.title = page;
+  const next = {A:'B', B:'C', C:'A'}[page];
+  const link = document.querySelector('a');
+  link.href = '/' + next;
+  link.onclick = event => { event.preventDefault(); history.pushState({}, '', '/' + next); render(); };
+  fetch('/seen/' + page, {method:'POST'});
+};
+addEventListener('popstate', render);
+render();
+</script>"""
         data = html.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
