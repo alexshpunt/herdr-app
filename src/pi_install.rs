@@ -202,14 +202,12 @@ async function discoverPiRuntime(searchPath = process.env.PATH || '', platform =
 "###;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Features {
+struct Features {
     workflow: bool,
     usage: bool,
 }
-impl Default for Features {
-    fn default() -> Self { Self { workflow: true, usage: true } }
-}
 static FEATURES: Mutex<Features> = Mutex::new(Features { workflow: true, usage: true });
+/// Set the switches for subsequent machine installs; return whether either changed.
 pub fn configure(person: &crate::settings::Person) -> bool {
     let next = Features { workflow: person.workflow_enabled, usage: person.usage_enabled };
     let mut current = FEATURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

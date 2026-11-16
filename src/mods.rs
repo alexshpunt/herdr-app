@@ -379,6 +379,7 @@ pub struct Section {
 }
 
 impl Section {
+    /// Whether the section's integration is enabled; untagged and personal sections stay visible.
     pub fn enabled(&self, person: &crate::settings::Person) -> bool {
         match self.feature.as_deref() {
             Some("workflow") => person.workflow_enabled,
