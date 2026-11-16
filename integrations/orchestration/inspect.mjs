@@ -39,7 +39,8 @@ function* branchItems(branch) {
   }
 }
 
-function callSummary(args = {}) {
+function callSummary(tool, args = {}) {
+  if (tool === 'codemode') return '';
   const value = [args.command, args.path, args.file, args.query, args.url, args.pattern, args.prompt, args.questions?.[0]?.prompt, args.code, ...Object.values(args)].find(value => typeof value === 'string');
   return clip(clean(value?.split(/\r?\n/u)[0]), 160);
 }
@@ -80,7 +81,7 @@ export function createInspection(ctx) {
           const questions = [...tools.values()].flatMap(tool => Array.isArray(tool.args?.questions) ? tool.args.questions : []);
           const title = clean(event.title);
           const heading = questions.some(question => clean(question.prompt) === title) ? undefined : title;
-          pendingQuestion = clean([heading, ...questions.map(question => [question.prompt, ...(question.options ?? []).map(option => option.label)].filter(Boolean).join(' | '))].filter(Boolean).join(' | ')) || event.kind;
+          pendingQuestion = clean([heading, ...questions.map(question => [question.prompt, ...(question.options ?? []).map(option => option.label)].filter(Boolean).join(' | '))].filter(Boolean).join(' | ')) || 'Answer the open Pi dialog.';
           break;
         }
         case 'ui_prompt_end': pendingQuestion = undefined; break;
@@ -108,7 +109,7 @@ export function createInspection(ctx) {
             if (++reasoning <= 3) reversed.push({ kind: 'reasoning', at, text: clip(part.thinking, 600) });
             else omitted.reasoning++;
           } else if (part.type === 'toolCall') {
-            if (++calls <= 5) reversed.push({ kind: 'call', at, tool: clip(part.name, 160), summary: callSummary(part.arguments), state: tools.has(part.id) ? 'running' : results.get(part.id) ? 'failed' : 'done' });
+            if (++calls <= 5) reversed.push({ kind: 'call', at, tool: clip(part.name, 160), summary: callSummary(part.name, part.arguments), state: tools.has(part.id) ? 'running' : results.get(part.id) ? 'failed' : 'done' });
             else omitted.calls++;
           }
         }
