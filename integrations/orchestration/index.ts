@@ -85,16 +85,22 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     await publish(ctx);
   };
   pi.on('session_start', async (_event, ctx) => { try { await initialize(ctx); } catch (value) { report(ctx, value); } });
-  for (const type of ['before_agent_start', 'message_end', 'tool_execution_start', 'tool_execution_end', 'ui_prompt_start', 'ui_prompt_end', 'agent_settled'] as const) {
-    pi.on(type, async event => { inspection?.event(event); });
-  }
-  for (const type of ['session_tree', 'session_compact'] as const) {
-    pi.on(type, async (_event, ctx) => {
-      if (!inspection) return;
-      const { createInspection } = await importFresh(new URL('./inspect.mjs', import.meta.url).href) as typeof import('./inspect.mjs');
-      inspection = createInspection(ctx);
-    });
-  }
+  pi.on('before_agent_start', async event => { inspection?.event(event); });
+  pi.on('message_end', async event => { inspection?.event(event); });
+  pi.on('tool_execution_start', async event => { inspection?.event(event); });
+  pi.on('tool_execution_end', async event => { inspection?.event(event); });
+  pi.on('ui_prompt_start', async event => { inspection?.event(event); });
+  pi.on('ui_prompt_end', async event => { inspection?.event(event); });
+  pi.on('agent_settled', async event => { inspection?.event(event); });
+  const restoreInspection = async (_event: unknown, ctx: ExtensionContext) => {
+    if (!inspection) return;
+    const url = new URL('./inspect.mjs', import.meta.url); url.searchParams.set('load', randomUUID());
+    const { createInspection } = await importFresh(url.href) as typeof import('./inspect.mjs');
+    inspection = createInspection(ctx);
+  };
+  pi.on('session_tree', restoreInspection);
+  pi.on('session_compact', restoreInspection);
+  pi.on('session_switch', async (_event, ctx) => { try { await initialize(ctx); } catch (value) { report(ctx, value); } });
   pi.on('model_select', async (_event, ctx) => { try { await publish(ctx); } catch (value) { report(ctx, value); } });
   pi.on('before_agent_start', async (event, ctx) => {
     if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET) return;

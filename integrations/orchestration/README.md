@@ -20,6 +20,13 @@ Local `hc` verifies and labels the requesting terminal. The App publishes a priv
 
 Follow-up messages use the target Pi's authenticated local socket and `pi.sendUserMessage`, reached through `machine.exec`. They never type into terminal input: an exited or replaced Pi cannot turn a task message into a shell command. Socket credentials stay private in core labels and never enter tool results or the prompt.
 
+## Inspection
+
+Omit `screen` on `herdr_agent_inspect` or `agent.inspect` to read compact session facts: busy state, current tool names, the last assistant reply, a pending question and the latest error. The target Pi provides these through its authenticated local socket, independently of Usage. No model is called. Question inspection is read-only; it never answers the question or relaxes the blocked-message guard.
+
+Snapshots use the active session branch on load and reload, then Pi lifecycle events. Text is whitespace-normalized and bounded; `truncated` identifies shortened fields. The App verifies the same PID/session after reading. `source: "pi"` distinguishes session facts from `source: "screen-fallback"` when the integration is old, offline or unavailable. A fallback includes its reason and a bounded terminal excerpt, not an empty successful snapshot.
+
+Set `screen: true` to request the unmodified terminal screen and optional history (`lines`: 0–400; tool default 40, command default 80). Set `screen: false` for identity/status metadata only. A truncated snapshot or fallback includes guidance to request the full screen.
 ## Startup and receipts
 
 A successful assistant response, including a tool call, permanently changes startup to `started`. Reload preserves that boundary. A first-response error changes startup to `failed` only after Pi settles, allowing Pi's own automatic retries first. Later model errors never reopen startup fallback.
