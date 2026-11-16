@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { importFresh } from "./fresh-import.mjs";
-import { ownsTerminal, resolveHc } from "./hc.mjs";
 import { createReviewRouter } from "./router.mjs";
 import { createRequestNamer } from "./requested.mjs";
 import type { startBrowserIpc } from "./ipc.mjs";
@@ -39,6 +38,10 @@ export default function herdrPlannotator(pi: ExtensionAPI): void {
     const terminal = process.env.HC_TERMINAL_ID;
     if (!terminal || !process.env.HC_TERMINAL_SOCKET) return;
     try {
+      // Core helpers can gain exports while this Pi stays alive across /reload.
+      const module = new URL("./hc.mjs", import.meta.url);
+      module.searchParams.set("load", randomUUID());
+      const { ownsTerminal, resolveHc } = await importFresh(module.href) as typeof import("./hc.mjs");
       // Herdr runs request.mjs without this shell's PATH: name hc by its path.
       const hc = resolveHc();
       const owner = await pi.exec(hc, ["get", terminal, "--json"], { timeout: 3000 });
