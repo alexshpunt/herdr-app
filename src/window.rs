@@ -5888,6 +5888,7 @@ fn changed_asset_paths(home: &std::path::Path, changed: &[std::path::PathBuf]) -
 
 #[cfg(test)]
 mod tests {
+    include!("window/mod_reload_tests.rs");
     use gpui::{div, point, px, size, Context, IntoElement, Render, TestAppContext, Window};
     use gpui::prelude::*;
 
