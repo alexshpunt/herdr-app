@@ -6,7 +6,7 @@ Herdr App embeds this extension and installs it on each connected machine. Pi di
 
 Herdr resolves the target machine's Pi npm entrypoint and starts it directly with Node. This preserves the first task's quotes and newlines and lets the core verify Pi's actual PID. An ordinary Pi exit remains finished; core keep-mode restores a shell only after program loss. A standalone binary or shell alias that cannot be resolved safely produces a launch error instead of guessing another command.
 
-`herdr_agent_create` uses Pi's native deferred exposure in the `Herdr` namespace. Discover it through `tool_search` to start independent user-owned agents in visible App tabs. Use the `pi-agent-herdr` extension's `read`, `search` and `write` on `herdr:` resources to find, inspect and message them. Agent lifecycle belongs to the user in the App's UI or CLI. Use `replicate` for the calling agent's own subtasks.
+`herdr_agent_create` uses Pi's native deferred exposure in the `Herdr` namespace. Discover it through `tool_search` to start independent user-owned agents in visible App tabs. Use the `pi-agent-herdr` extension's `read`, `search` and `write` on `herdr:` resources to find, inspect and message them, and its deferred `wait_for_agents` in the same `Herdr` namespace to wait until they stop working. Agent lifecycle belongs to the user in the App's UI or CLI. Use `replicate` for the calling agent's own subtasks.
 
 ## Placement
 
