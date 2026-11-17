@@ -445,6 +445,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn directory_metadata_is_not_a_save_but_structure_and_file_edits_are() {
+        use notify::{Event, EventKind, event::{CreateKind, ModifyKind, RemoveKind, RenameMode}};
+        let base = std::env::temp_dir().join(format!("herdr-lpt1520-metadata-{}", std::process::id()));
+        let folder = base.join("mods/probe");
+        std::fs::create_dir_all(&folder).unwrap();
+        for path in [base.join("mods"), folder.clone()] {
+            let (changed, rescan) = changes(&base, Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path)));
+            assert!(changed.is_empty());
+            assert!(!rescan);
+        }
+        for kind in [EventKind::Create(CreateKind::Folder), EventKind::Remove(RemoveKind::Folder), EventKind::Modify(ModifyKind::Name(RenameMode::To))] {
+            assert_eq!(changes(&base, Ok(Event::new(kind).add_path(folder.clone()))).0, vec![PathBuf::from("mods/probe")]);
+        }
+        let source = folder.join("main.js");
+        std::fs::write(&source, "").unwrap();
+        assert_eq!(changes(&base, Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(source))).0, vec![PathBuf::from("mods/probe/main.js")]);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn source_revisions_survive_closed_copies_and_rescan_invalidates_all() {
         let (_, changes) = async_channel::unbounded();
         let events = FileEvents {
@@ -530,6 +550,47 @@ mod tests {
             panic!("poison revision state");
         }).is_err());
         assert_eq!(revision(Path::new("/home/probe/mods/one")), Some(0));
+    }
+
+    #[gpui::test]
+    fn a_folder_copy_waits_for_quiet_and_a_later_save_is_a_new_batch(cx: &mut gpui::TestAppContext) {
+        use std::time::Duration;
+        let (tx, changes) = async_channel::unbounded();
+        let events = FileEvents { changes, root: PathBuf::from("/home/probe"), revisions: Default::default() };
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let received = batches.clone();
+        let executor = cx.background_executor.clone();
+        cx.background_executor.spawn(async move {
+            while let Ok(batch) = events.next_batch(&executor).await {
+                received.lock().unwrap().push(batch);
+            }
+        }).detach();
+        let mut copied = Vec::new();
+        for name in ["mod.json", "main.js", "assets/icon.svg"] {
+            let path = PathBuf::from("mods/new").join(name);
+            copied.push(path.clone());
+            tx.try_send(vec![path]).unwrap();
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(100));
+            cx.run_until_parked();
+            assert!(batches.lock().unwrap().is_empty(), "do not load a folder while its copy is still arriving");
+        }
+        for _ in 0..4 {
+            cx.executor().advance_clock(Duration::from_millis(100));
+            cx.run_until_parked();
+        }
+        assert_eq!(*batches.lock().unwrap(), vec![copied]);
+        let save = vec![PathBuf::from("mods/new/main.js")];
+        tx.try_send(save.clone()).unwrap();
+        cx.run_until_parked();
+        for _ in 0..4 {
+            cx.executor().advance_clock(Duration::from_millis(100));
+            cx.run_until_parked();
+        }
+        assert_eq!(batches.lock().unwrap().len(), 2);
+        assert_eq!(batches.lock().unwrap()[1], save);
+        drop(tx);
+        cx.run_until_parked();
     }
 
     #[gpui::test]
