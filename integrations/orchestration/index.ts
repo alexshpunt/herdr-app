@@ -34,7 +34,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     if (typeof provide !== 'function') return;
     const current = client;
     provide({ version: 1, command(name: string, args: Record<string, unknown>) {
-      if (!['agent.list', 'agent.inspect', 'agent.history', 'agent.send'].includes(name)) throw new Error('Unsupported Herdr bridge command');
+      if (!['agent.list', 'agent.inspect', 'agent.history', 'agent.send', 'agent.remove'].includes(name)) throw new Error('Unsupported Herdr bridge command');
       if (client !== current) throw new Error('Herdr bridge changed; reload or retry the read');
       return current.command(name, args);
     } });

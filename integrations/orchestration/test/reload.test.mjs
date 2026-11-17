@@ -36,7 +36,8 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   const bridge = () => { let api; bus.emit('herdr:bridge', { provide: value => { api = value; } }); assert.ok(api); return api; };
   assert.equal(bridge().version, 1);
   assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
-  assert.throws(() => bridge().command('agent.remove', {}));
+  assert.equal((await bridge().command('agent.remove', { terminal: 'm/t2' })).name, 'agent.remove');
+  for (const name of ['agent.stop', 'space.new', 'tab.new']) assert.throws(() => bridge().command(name, {}));
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
   const snapshot = async () => {
