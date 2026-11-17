@@ -291,6 +291,8 @@ struct Copy {
     /// Its number for commands (`mods::prepare_load`); 0 if it never loaded.
     id: u64,
     root: Option<Entity<ShellRoot>>,
+    /// Native notifications already reflected in this copy's last load attempt.
+    source_revision: Option<u64>,
     _watch: Option<Watcher>,
     error: Option<String>,
 }
@@ -638,12 +640,7 @@ impl AppWindow {
         }));
         if let Some(events) = w.file_events.clone() {
             w._tasks.push(cx.spawn_in(window, async move |this, cx| {
-                while let Ok(mut changed) = events.changes.recv().await {
-                    // An editor's save is several events: take them together.
-                    cx.background_executor().timer(Duration::from_millis(80)).await;
-                    while let Ok(more) = events.changes.try_recv() {
-                        changed.extend(more);
-                    }
+                while let Ok(changed) = events.next_batch(cx.background_executor()).await {
                     if this.update_in(cx, |this, window, cx| this.files_changed(changed, window, cx)).is_err() {
                         break;
                     }
@@ -1753,12 +1750,13 @@ impl AppWindow {
     }
 
     fn load(&self, inst: Instance, window: &mut Window, cx: &mut Context<Self>) -> Copy {
-        let mut copy = Copy { inst, id: 0, root: None, _watch: None, error: None };
+        let mut copy = Copy { inst, id: 0, root: None, source_revision: None, _watch: None, error: None };
         let (Some(runtime), Some(folder)) = (&self.runtime, self.folders.get(&copy.inst.name)) else {
             copy.error = Some(format!("no mod folder ~/.config/herdr-app/mods/{}", copy.inst.name));
             return copy;
         };
         copy.id = mods::prepare_load(&copy.inst);
+        copy.source_revision = self.file_events.as_ref().and_then(|events| events.revision(&folder.dir));
         match runtime.try_load(&folder.dir, window, cx) {
             Ok(root) => {
                 if self.file_events.is_none() {
@@ -4638,6 +4636,13 @@ impl AppWindow {
         let Some(runtime) = self.runtime.clone() else { return };
         for copy in self.copies.values_mut().filter(|c| edited.contains(&c.inst.name) && loaded.contains(&c.id)) {
             let Some(root) = &copy.root else { continue };
+            let revision = self.folders.get(&copy.inst.name).and_then(|folder| self.file_events.as_ref()?.revision(&folder.dir));
+            // An explicit open can load the saved files before their queued
+            // notifications reach us. Only newer edits should restart it.
+            if revision.is_some() && revision == copy.source_revision {
+                continue;
+            }
+            copy.source_revision = revision;
             let error = runtime.reload_now(root, window, cx).err().map(|e| format!("{e:#}"));
             if let Some(e) = &error {
                 tracing::warn!("mod reload failed: {e}");

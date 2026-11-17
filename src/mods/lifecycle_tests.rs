@@ -88,7 +88,8 @@ export default class extends View {{
             let view = host.0.read(cx).content().clone().downcast::<gpui_shell::ScriptView>().unwrap();
             assert_eq!(view.read(cx).build_error(), None);
         }).unwrap();
-        assert_eq!(notes.borrow().last(), Some(&(revision, false, true)));
+        // Native embedding reports an unsupported-platform error outside Windows.
+        assert_eq!(notes.borrow().last(), Some(&(revision, false, cfg!(windows))));
     }
     window.update(cx, |_, window, _| window.remove_window()).unwrap();
     cx.run_until_parked();
