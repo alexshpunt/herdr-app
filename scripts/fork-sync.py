@@ -2,6 +2,7 @@
 """Prepare an upstream merge, then land only the exact verified candidate."""
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -33,7 +34,7 @@ def resolve_conflicts(command):
     print("Merge conflicts in: " + ", ".join(unmerged), file=sys.stderr)
     # stdout carries only this script's JSON result; the resolver's own report goes to the log.
     if subprocess.run(shlex.split(command), stdout=sys.stderr).returncode:
-        raise RuntimeError("The conflict resolver failed")
+        raise RuntimeError("The conflict resolver failed on merge conflicts in: " + ", ".join(unmerged))
     git("add", "--", *unmerged)
     left = git("diff", "--name-only", "--diff-filter=U").stdout.split()
     markers = git("grep", "-n", "--cached", "-E", "^(<<<<<<<|>>>>>>>) ", "--", *unmerged, check=False).stdout.strip()
@@ -108,9 +109,16 @@ def main():
     print(json.dumps({"prepare": prepare, "publish": publish, "land": land}[args.action](args)))
 
 
+def report(message):
+    """Print a failure; in GitHub Actions as an error annotation, which the upstream sync alert quotes as the cause."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        message = "::error title=Upstream sync::" + message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(message, file=sys.stderr)
+
+
 if __name__ == "__main__":
     try:
         main()
     except RuntimeError as error:
-        print(str(error), file=sys.stderr)
+        report(str(error))
         sys.exit(1)

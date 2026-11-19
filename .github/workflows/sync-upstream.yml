@@ -10,7 +10,6 @@ on:
 # that change .github/workflows. The model resolver never shares a job with it.
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: fork-upstream-sync
@@ -114,22 +113,3 @@ jobs:
         run: |
           gh auth setup-git
           python3 scripts/fork-sync.py land --branch "$CANDIDATE_BRANCH" --sha "$CANDIDATE_SHA"
-  # A conflict or a failed check stops the sync; a Linear issue makes sure someone sees it.
-  notify:
-    needs: [prepare, publish, verify, land]
-    if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: master
-          persist-credentials: false
-      - name: Open or update the Linear issue
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 scripts/fork-sync-notify.py --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
-            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --result 'prepare=${{ needs.prepare.result }}' --result 'publish=${{ needs.publish.result }}' \
-            --result 'verify=${{ needs.verify.result }}' --result 'land=${{ needs.land.result }}'

@@ -1,8 +1,7 @@
-import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -135,52 +134,15 @@ class ForkSync(unittest.TestCase):
         self.sync("land", "--branch", candidate["branch"], "--sha", candidate["sha"], ok=False)
         self.assertEqual(git(self.fork, "rev-parse", "master"), before)
 
-
-def load_notify():
-    sys.dont_write_bytecode = True  # no __pycache__ beside the scripts
-    spec = importlib.util.spec_from_file_location("fork_sync_notify", Path(__file__).with_name("fork-sync-notify.py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class ForkSyncNotify(unittest.TestCase):
-    def setUp(self):
-        self.notify = load_notify()
-        self.calls = []
-
-    def linear(self, open_issues):
-        def post(query, variables):
-            self.calls.append((query, variables))
-            if query == self.notify.FIND:
-                return {"teams": {"nodes": [{"id": "team"}]}, "projects": {"nodes": [{"id": "project"}]}, "issues": {"nodes": open_issues}}
-            if query == self.notify.CREATE:
-                return {"issueCreate": {"success": True, "issue": {"identifier": "LPT-1", "url": "https://linear.app/x/LPT-1"}}}
-            return {"commentCreate": {"success": True}}
-        return post
-
-    def report(self, open_issues):
-        return self.notify.report(self.linear(open_issues), "alexshpunt/herdr-app", "https://run", [("prepare", "failure")], [("prepare", "refused")])
-
-    def test_a_first_failure_opens_an_issue_in_the_project(self):
-        self.assertEqual(self.report([])["action"], "created")
-        issue = self.calls[-1][1]["input"]
-        self.assertEqual((issue["teamId"], issue["projectId"]), ("team", "project"))
-        self.assertEqual(issue["title"], "Upstream sync of alexshpunt/herdr-app is failing")
-        self.assertIn("https://run", issue["description"])
-        self.assertIn("refused", issue["description"])
-
-    def test_a_repeated_failure_comments_on_the_open_issue(self):
-        result = self.report([{"id": "open", "identifier": "LPT-9", "url": "u"}])
-        self.assertEqual(result, {"action": "commented", "issue": "LPT-9", "url": "u"})
-        self.assertEqual(self.calls[-1][0], self.notify.COMMENT)
-        self.assertEqual(self.calls[-1][1]["input"]["issueId"], "open")
-
-    def test_the_log_excerpt_ends_at_the_first_error_without_timestamps(self):
-        log = "\n".join(f"2026-11-19T04:28:{i:02}.0000000Z line {i}" for i in range(50))
-        log += "\n2026-11-19T04:29:00.0000000Z ##[error]Process completed with exit code 1.\n2026-11-19T04:29:01.0000000Z Post job cleanup."
-        excerpt = self.notify.error_context(log, lines=3).splitlines()
-        self.assertEqual(excerpt, ["line 48", "line 49", "##[error]Process completed with exit code 1."])
+    def test_in_github_actions_a_failure_is_an_error_annotation_with_the_cause(self):
+        self.conflict()
+        resolver = self.resolver("raise SystemExit(3)\n")
+        result = subprocess.run(
+            ["python3", str(SCRIPT), "prepare", "--upstream", str(self.upstream), "--branch", "automation/upstream-test", "--resolver", resolver],
+            cwd=self.work, text=True, capture_output=True, env={**os.environ, "GITHUB_ACTIONS": "true"})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "", "stdout carries only the JSON result")
+        self.assertIn("::error title=Upstream sync::The conflict resolver failed on merge conflicts in: base.txt", result.stderr)
 
 
 if __name__ == "__main__":
