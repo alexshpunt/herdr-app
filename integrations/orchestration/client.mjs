@@ -181,4 +181,19 @@ export class AppClient {
     const origin = await this.context();
     return this.command('space.new', { ...common, name: input.name, tab: input.name, machine: input.machine ?? origin.machine ?? '' });
   }
+  // A replica of the calling Pi opens its prepared session copy in a new tab of
+  // the caller's space. The bridge launches only Pi, never an arbitrary argv.
+  async replicate(input = {}) {
+    for (const key of ['name', 'session', 'folder', 'model', 'task']) {
+      if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`agent.replicate needs a non-empty ${key}`);
+    }
+    const absolute = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
+    if (!absolute.test(input.folder)) throw new Error('agent.replicate needs an absolute folder');
+    if (!absolute.test(input.session) || !input.session.endsWith('.jsonl')) throw new Error('agent.replicate needs an absolute .jsonl session file');
+    if (input.thinking !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(input.thinking)) throw new Error('agent.replicate got an unknown thinking level');
+    const origin = await this.context();
+    const argv = ['pi', '--session', input.session, '--model', input.model, ...(input.thinking ? ['--thinking', input.thinking] : [])];
+    const result = await this.command('tab.new', { space: origin.space, name: input.name, folder: input.folder, argv, task: input.task, focus: false });
+    return { ...result, space: result.space || origin.space };
+  }
 }
