@@ -64,11 +64,13 @@ with Contents, Workflows and Actions write access and no expiration. The default
 upstream changes them about once a week. The model never runs in a job that holds
 the token: the merge job hands the candidate to a fresh job as a git bundle.
 
-When the resolver, CI or a push fails, `scripts/fork-sync-notify.py` opens the
-Linear issue "Upstream sync of alexshpunt/herdr-app is failing" in project
-herdr-config (team LPT), or comments on it while it is open, with the run link and
-the end of the failed log. It uses the `LINEAR_API_KEY` repository secret, a
-personal Linear key limited to team LPT that can read, create issues and comment.
+When the resolver, CI or a push fails, the run fails, and the webhook receiver
+of agent-infrastructure on pi-vps alerts the owner: an email, the Linear issue
+"Upstream sync of alexshpunt/herdr-app is failing" (opened, or commented while it
+is open) and a row in the GitHub Inbox of herdr-app-plugins. It matches the
+workflow by the word "upstream" in its name, so keep that word when renaming it,
+and it reads the cause from the failed steps' `::error::` annotations, which
+`scripts/fork-sync.py` prints. The repository needs no secret for alerts.
 Resolve such a failure by merging `upstream/master` into a branch by hand and
 landing it through a PR (merge commit, not squash), then close the issue.
 
