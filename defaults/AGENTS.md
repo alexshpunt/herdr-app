@@ -805,8 +805,12 @@ The main ones:
   `agent.stop {terminal, pid, session}` interrupts with the stop key, without killing or escalating.
   `agent.remove {terminal, pid, session}` ends that agent and removes its dedicated single-pane tab;
   tabs with sibling panes are rejected. Inspect again after an unknown outcome before retrying.
-- Workflow: `workflow.get` reads the persisted profile table; `workflow.set {profile, model, fallbackModel?, thinking?}`
-  changes one profile atomically. Use `provider/model` ids; omit fallbackModel to keep it, or pass null to disable it.
+- Workflow: `workflow.get` reads the persisted profile table (id, name, description of when to use it, models,
+  thinking); `workflow.set {profile, model?, fallbackModel?, thinking?, name?, description?}` changes one profile
+  atomically, keeping omitted fields. Use `provider/model` ids; pass fallbackModel null to disable it; description
+  "" or null clears it. `workflow.add {id, name, model, description?, fallbackModel?, thinking?}` adds a profile
+  (unique lowercase kebab-case id; thinking defaults to high) and `workflow.remove {profile}` removes one; both
+  return all profiles. Agents read the profiles to choose one for the agents they start; they never change them.
   `workflow.models {machine?}` reads Pi's global `enabledModels` scope on one machine (default: the selected
   space's; empty string: this computer), without a running Pi. It returns a cached snapshot with `loading`,
   diagnostics and errors, supplemented by current live Pi catalogs, and extension installation status.
@@ -814,7 +818,8 @@ The main ones:
   The pickers also accept a manual `provider/model` id when the catalog is unavailable. Its settings are the Workflow section of the right side panel; `workflow.open`
   toggles that panel, or a Workflow dock beside the active-tab workspace in layouts without one.
   Primary, fallback and all six thinking levels save automatically, independently of model capabilities.
-  The Features and Bugs profiles choose primary and startup-only fallback models for new agents;
+  Each profile's name and description edit in place; Add profile and each profile's Remove change the table.
+  The profiles (Features and Bugs by default) choose primary and startup-only fallback models for new agents;
   an agent that produced a successful assistant response never switches models automatically.
   The app installs its bundled orchestration extension in each configured machine's Pi extension directory.
   Existing Pi processes need a reload after extension updates. Workflow launches reject a substituted model or
@@ -1231,7 +1236,8 @@ All of it is in `herdr.d.ts`. In short:
   Terminal copy/paste and implicit right-click routing follow the focused block.
 - Floating: `placement()` (null unless this copy floats).
 - Act: `run(command, args)`.
-- Workflow: `await workflow("get")`, `await workflow("set", {profile, model, fallbackModel?, thinking?})`,
+- Workflow: `await workflow("get")`, `await workflow("set", {profile, model?, fallbackModel?, thinking?, name?, description?})`,
+  `await workflow("add", {id, name, model, description?, fallbackModel?, thinking?})`, `await workflow("remove", {profile})`,
   `await workflow("models", {machine?})`. The models reply keeps its explicit catalog error and installation status;
   do not invent picker choices when a Pi has not published them.
 - Overlays: `openOverlay({ mod, props, kind: "dialog" | "popup" | "window" | "dock", width, height, at, frame })`

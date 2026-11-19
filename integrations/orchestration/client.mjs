@@ -173,7 +173,8 @@ export class AppClient {
   // Every agent gets a space of its own, named after it, so it does not crowd
   // the caller's tab bar. Only a startup fallback joins its primary's space.
   async launch(input) {
-    const common = { folder: input.folder, argv: ['pi', '--model', input.model, '--thinking', input.thinking, '--herdr-workflow-model', input.model, '--herdr-workflow-thinking', input.thinking], task: input.message, focus: false };
+    const depth = input.depth ? ['--herdr-depth', String(input.depth)] : [];
+    const common = { folder: input.folder, argv: ['pi', '--model', input.model, '--thinking', input.thinking, '--herdr-workflow-model', input.model, '--herdr-workflow-thinking', input.thinking, ...depth], task: input.message, focus: false };
     if (input.space) {
       const result = await this.command('tab.new', { ...common, space: input.space, name: input.name });
       return { ...result, space: result.space || input.space };
@@ -191,8 +192,10 @@ export class AppClient {
     if (!absolute.test(input.folder)) throw new Error('agent.replicate needs an absolute folder');
     if (!absolute.test(input.session) || !input.session.endsWith('.jsonl')) throw new Error('agent.replicate needs an absolute .jsonl session file');
     if (input.thinking !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(input.thinking)) throw new Error('agent.replicate got an unknown thinking level');
+    if (input.depth !== undefined && !(Number.isSafeInteger(input.depth) && input.depth > 0)) throw new Error('agent.replicate got an invalid depth');
     const origin = await this.context();
-    const argv = ['pi', '--session', input.session, '--model', input.model, ...(input.thinking ? ['--thinking', input.thinking] : [])];
+    const argv = ['pi', '--session', input.session, '--model', input.model, ...(input.thinking ? ['--thinking', input.thinking] : []),
+      ...(input.depth ? ['--herdr-depth', String(input.depth)] : [])];
     const result = await this.command('tab.new', { space: origin.space, name: input.name, folder: input.folder, argv, task: input.task, focus: false });
     return { ...result, space: result.space || origin.space };
   }

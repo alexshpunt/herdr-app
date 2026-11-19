@@ -163,6 +163,14 @@ fn module(values: BTreeMap<String, Value>, calls: Rc<RefCell<Calls>>) -> HostMod
                 }
                 serde_json::to_value(config).unwrap()
             }
+            "add" => {
+                config.profiles.push(serde_json::from_value(json!({"id":args["id"],"name":args["name"],"model":args["model"],"thinking":"high"})).unwrap());
+                serde_json::to_value(config).unwrap()
+            }
+            "remove" => {
+                config.profiles.retain(|p| args["profile"] != p.id);
+                serde_json::to_value(config).unwrap()
+            }
             "models" => json!({"machine":args["machine"],"models":[{"id":"provider/model-a","name":"Model A"},{"id":"provider/model-b","name":"Model B"}],"installation":{"state":"ready"}}),
             _ => panic!("unexpected workflow action {action}"),
         };
@@ -582,6 +590,30 @@ fn workflow_is_an_untitled_section_in_the_side_panel_and_a_closable_dock_elsewhe
     assert!(machine.iter().any(|l| l.trim() == "text \"remote\""), "{remote}");
     let dock = describe(cx, &staged, "frame/workflow", true, props(), updates("current", "current"), None).unwrap();
     assert!(dock.contains("wf-close") && dock.contains("Workflow") && dock.contains("workflow-content"), "{dock}");
+}
+
+#[gpui::test]
+fn workflow_profiles_show_name_description_removal_and_addition(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let config = serde_json::to_string(&crate::workflow::Config::default()).unwrap();
+    let loaded = format!("this.config = {config}; this.loading = false;");
+    let plain = describe(cx, &staged, "frame/workflow", true, Value::Null, updates("current", "current"), Some(&loaded)).unwrap();
+    for id in ["wf-feature-name", "wf-feature-description", "wf-feature-remove", "wf-bug-name", "wf-add"] {
+        assert!(plain.contains(id), "{id}: {plain}");
+    }
+    assert!(plain.contains("New features and changes.") && plain.contains("Add profile"), "{plain}");
+    assert!(!plain.contains("wf-feature-remove-confirm") && !plain.contains("wf-new"), "{plain}");
+    let removing = describe(cx, &staged, "frame/workflow", true, Value::Null, updates("current", "current"),
+        Some(&format!("{loaded} this.removing = 'feature';"))).unwrap();
+    assert!(removing.contains("wf-feature-remove-confirm") && removing.contains("wf-feature-remove-cancel"), "{removing}");
+    assert!(!removing.contains("wf-bug-remove-confirm"), "only the chosen profile asks: {removing}");
+    let adding = describe(cx, &staged, "frame/workflow", true, Value::Null, updates("current", "current"),
+        Some(&format!("{loaded} this.editing = {{ field: 'new' }};"))).unwrap();
+    assert!(adding.contains("wf-new") && !adding.contains("wf-add"), "{adding}");
+    let renaming = describe(cx, &staged, "frame/workflow", true, Value::Null, updates("current", "current"),
+        Some(&format!("{loaded} this.editing = {{ profile: 'bug', field: 'description' }};"))).unwrap();
+    assert!(renaming.contains("wf-bug-description-input") && !renaming.contains("wf-bug-description\""), "{renaming}");
 }
 
 #[gpui::test]

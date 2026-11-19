@@ -1063,7 +1063,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .async_function("hc", |a| Ok(exec_future("hc".into(), strings(a.get(0)), None, None, EXEC_LIMIT)))
         .async_function("workflow", |a| {
             let action = a.string(0)?;
-            if !matches!(action, "get" | "set" | "models") { return Err(HostError::new("workflow action is get, set, or models")); }
+            if !matches!(action, "get" | "set" | "add" | "remove" | "models") { return Err(HostError::new("workflow action is get, set, add, remove, or models")); }
             let allow_catalog_error = action == "models";
             let cmd = json!({"do":format!("workflow.{action}"),"args":a.get(1).map(from_host).unwrap_or(Value::Null)});
             let (tx, rx) = std::sync::mpsc::channel();

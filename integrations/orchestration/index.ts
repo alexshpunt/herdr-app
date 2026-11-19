@@ -7,8 +7,30 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { importFresh } from './client.mjs';
+import { childDepth } from './orchestration.mjs';
+
+/** Commands pi-agent-herdr may send through the bridge. Launches go only through replicate and subagent. */
+const BRIDGE_COMMANDS = ['agent.list', 'agent.inspect', 'agent.history', 'agent.send', 'agent.remove', 'agent.replicate', 'agent.subagent', 'workflow.get'];
+type Client = InstanceType<typeof import('./client.mjs').AppClient>;
+type Service = InstanceType<typeof import('./orchestration.mjs').Orchestrator>;
+
+/** A sub-agent is a workflow-profile launch, with startup fallback, as a tab of the caller's own space. */
+async function startSubagent(client: Client, service: Service | undefined, args: Record<string, unknown>, depth: number) {
+  if (!service) throw new Error('agent.subagent is unavailable until this Pi finishes connecting to Herdr; retry shortly');
+  for (const key of ['requestId', 'name', 'folder', 'profile', 'task'])
+    if (typeof args[key] !== 'string' || !(args[key] as string).trim()) throw new Error(`agent.subagent needs a non-empty ${key}`);
+  const origin = await client.context();
+  const input = { requestId: args.requestId as string, name: args.name as string, folder: args.folder as string, profile: args.profile as string, message: args.task as string };
+  try { return await service.create(input, undefined, undefined, { space: origin.space, depth }); }
+  catch (error) { throw new Error(`agent.subagent refused: ${error instanceof Error ? error.message : String(error)}`); }
+}
 
 export default function herdrOrchestration(pi: ExtensionAPI): void {
+  // Pi exits on a long option no extension registered. Herdr's launch flags stay known even
+  // while Workflow is turned off, so a replica or agent started just before still runs.
+  pi.registerFlag('herdr-workflow-model', { type: 'string', description: 'Exact model requested by a Herdr workflow launch' });
+  pi.registerFlag('herdr-workflow-thinking', { type: 'string', description: 'Exact thinking level requested by a Herdr workflow launch' });
+  pi.registerFlag('herdr-depth', { type: 'string', description: 'Nesting depth of a Herdr replica or sub-agent; set by the launch' });
   // Read on every reload, not through a cached helper module.
   try {
     const features = JSON.parse(readFileSync(path.join(getAgentDir(), 'herdr-features.json'), 'utf8'));
@@ -16,8 +38,8 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
   }
-  pi.registerFlag('herdr-workflow-model', { type: 'string', description: 'Exact model requested by a Herdr workflow launch' });
-  pi.registerFlag('herdr-workflow-thinking', { type: 'string', description: 'Exact thinking level requested by a Herdr workflow launch' });
+  // Agents the user starts are depth 0; their replicas and sub-agents 1; theirs 2, which start no more.
+  const depth = () => { const value = Number(pi.getFlag('herdr-depth') ?? 0); return Number.isSafeInteger(value) && value > 0 ? value : 0; };
   let selectionError: ((ctx: ExtensionContext) => string | undefined) | undefined;
   let client: InstanceType<typeof import('./client.mjs').AppClient> | undefined;
   let service: InstanceType<typeof import('./orchestration.mjs').Orchestrator> | undefined;
@@ -32,11 +54,14 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     if (!client || !request || typeof request !== 'object') return;
     const provide = (request as { provide?: unknown }).provide;
     if (typeof provide !== 'function') return;
-    const current = client;
+    const current = client, orchestrator = service;
     provide({ version: 1, command(name: string, args: Record<string, unknown>) {
-      if (!['agent.list', 'agent.inspect', 'agent.history', 'agent.send', 'agent.remove', 'agent.replicate'].includes(name)) throw new Error('Unsupported Herdr bridge command');
+      if (!BRIDGE_COMMANDS.includes(name)) throw new Error('Unsupported Herdr bridge command');
       if (client !== current) throw new Error('Herdr bridge changed; reload or retry the read');
-      return name === 'agent.replicate' ? current.replicate(args) : current.command(name, args);
+      if (name !== 'agent.replicate' && name !== 'agent.subagent') return current.command(name, args);
+      const child = childDepth(name, depth());
+      if (name === 'agent.replicate') return current.replicate({ ...args, depth: child });
+      return startSubagent(current, orchestrator, args, child);
     } });
   });
   const report = (ctx: ExtensionContext, value: unknown) => ctx.ui.notify(`Herdr agents: ${value instanceof Error ? value.message : String(value)}`, 'warning');
@@ -149,7 +174,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       if (!client) return;
       const origin = await client.context();
       await publish(ctx);
-      event.systemPromptOptions.sections.herdr = `${JSON.stringify(origin)}\nUse Herdr's deferred agent tools only to manage the user's independent agents and tasks. Start agents only at the user's explicit request or as the orchestrator of a series the user gave you. Use replicate for your own parallel subtasks; do not supervise or remove the user's agents as your helpers.`;
+      event.systemPromptOptions.sections.herdr = `${JSON.stringify(origin)}\nYour replicas and sub-agents are yours to steer and close. Agents started with the Herdr agent tool belong to the user: do not supervise, message or close them as your helpers unless the user asks.`;
     } catch (value) {
       event.systemPromptOptions.sections.herdr = `Pi PID ${process.pid}; Herdr placement is unavailable. Discover the Herdr agent tools only when the user asks to manage agents; inspect and resolve their context error before changing anything.`;
     }
@@ -171,15 +196,15 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   // mutations, while the startup observer can distinguish success from early exit.
   pi.on('session_shutdown', async () => { await publishing.catch(() => {}); await ipc?.stop(); ipc = undefined; client = undefined; service = undefined; });
 
-  const namespace = { name: 'Herdr', description: 'Manage the user’s independent agents in Herdr App', instructions: 'Start agents only for tasks the user explicitly asked to run independently. Use replicate for your own subtasks. Keep user-owned agents running after your task ends.' };
+  const namespace = { name: 'Herdr', description: 'Start and wait for the user’s independent agents in Herdr App', instructions: 'Start independent agents for the user only at the user’s request or as the orchestrator of a series of tasks the user gave you. For your own work use replicate or subagent. Keep user-owned agents running after your task ends.' };
   const outputSchema = Type.Object({}, { additionalProperties: true });
-  function register<T extends TSchema>(name: string, description: string, parameters: T, execute: (args: Static<T>, signal?: AbortSignal, update?: (data: unknown) => void) => Promise<unknown>) {
+  function register<T extends TSchema>(name: string, description: string, promptGuidelines: string[], parameters: T, execute: (args: Static<T>, signal?: AbortSignal, update?: (data: unknown) => void) => Promise<unknown>) {
     pi.registerTool({
-      name, label: name.replaceAll('_', ' '), description, parameters, outputSchema,
+      name, label: name === 'agent' ? 'Herdr agent' : name.replaceAll('_', ' '), description, promptGuidelines, parameters, outputSchema,
       exposure: 'deferred', namespace, executionMode: 'sequential',
       renderCall(args, theme) {
         const identity = (args as Record<string, unknown>).name ?? (args as Record<string, unknown>).terminal ?? '';
-        return new Text(theme.fg('toolTitle', `${name.replace('herdr_agent_', 'Herdr ')}${identity ? ` · ${stripVTControlCharacters(String(identity))}` : ''}`), 0, 0);
+        return new Text(theme.fg('toolTitle', `${name === 'agent' ? 'Herdr agent' : name}${identity ? ` · ${stripVTControlCharacters(String(identity))}` : ''}`), 0, 0);
       },
       renderResult(result, options, theme, context) {
         if (context.isError && (!result.details || typeof result.details !== 'object' || Object.keys(result.details).length === 0)) return new Text(theme.fg('error', result.content.filter(item => item.type === 'text').map(item => stripVTControlCharacters(item.text)).join('\n')), 0, 0);
@@ -205,12 +230,18 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       },
     });
   }
-  register('herdr_agent_create', 'Use herdr_agent_create to start an independent task for the user in a new Herdr space of its own. Use replicate for your own subtasks. The first message is submitted at launch; fallback is limited to startup before the first successful assistant response.', Type.Object({
+  register('agent', 'Use agent to start an independent agent for the user in a new Herdr space of its own: a task the user asked to run on its own, or the next task of a series the user made you orchestrate. The user owns it. The first message is submitted at launch; a profile\'s fallback model is used only when startup fails before the first successful response.', [
+    'Use agent only at the user\'s request or as the orchestrator of a series of tasks the user gave you. For a part of your own task use replicate; for a side track of your own work use subagent.',
+    'Read herdr:profiles before choosing a profile, and choose the one whose description fits the task, or the one the user names. Use an explicit model override only when the user names a model.',
+    'Use the task\'s issue ID as requestId and give the accepted task link in message. After an interruption, reuse the same requestId and inputs; never retry an unconfirmed launch under a new key.',
+    'Tell the user where each agent is and report a launch that did not start, with its reason. Do not supervise, message or close the user\'s agents unless the user asks.',
+    'As the orchestrator of a series, wait with wait_for_agents for the agents whose results you need next, with background: true while you have other work. Answer what the task and the user\'s decisions already settle, bring real forks to the user, and start the next tasks as they unblock.',
+  ], Type.Object({
     requestId: Type.String({ minLength: 1, description: 'Stable unique task key, such as its issue ID. Reuse the same key and inputs after interruption; do not choose a new key to retry an unknown launch.' }),
     name: Type.String({ minLength: 1, description: 'Visible agent name; it also names the agent’s new space and tab.' }),
     message: Type.String({ minLength: 1, description: 'First task message, including its accepted task link.' }),
     folder: Type.String({ minLength: 1, description: 'Absolute repository folder on the target machine.' }),
-    profile: Type.String({ minLength: 1, description: 'Workflow profile ID from Herdr settings: feature or bug.' }),
+    profile: Type.String({ minLength: 1, description: 'Workflow profile ID; read herdr:profiles for the current profiles and what each is for.' }),
     machine: Type.Optional(Type.String({ description: 'Configured machine for the agent’s new space; default this Pi’s machine. Empty string selects the app’s local machine.' })),
     model: Type.Optional(Type.String({ minLength: 1, description: 'Explicit provider/model override. Default the profile’s primary model.' })),
     fallbackModel: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: 'Startup-only provider/model override. Null disables fallback; omitted uses the profile.' })),

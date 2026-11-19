@@ -14,6 +14,9 @@ static WRITES: Mutex<()> = Mutex::new(());
 pub struct Profile {
     pub id: String,
     pub name: String,
+    /// When to use this profile; agents read it to choose one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_model: Option<String>,
@@ -34,6 +37,7 @@ impl Default for Config {
                 Profile {
                     id: "feature".into(),
                     name: "Features".into(),
+                    description: Some("New features and changes.".into()),
                     model: "anthropic/claude-opus-5-5".into(),
                     fallback_model: Some("openai-codex/gpt-6.1-sol".into()),
                     thinking: "high".into(),
@@ -41,6 +45,7 @@ impl Default for Config {
                 Profile {
                     id: "bug".into(),
                     name: "Bugs".into(),
+                    description: Some("Bug fixes.".into()),
                     model: "anthropic/claude-sonnet-5-5".into(),
                     fallback_model: Some("openai-codex/gpt-6.1-terra".into()),
                     thinking: "high".into(),
@@ -48,6 +53,14 @@ impl Default for Config {
             ],
         }
     }
+}
+
+/// Profile ids are lowercase kebab-case, such as `review` or `quick-fix`.
+fn profile_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.split('-').all(|part| {
+            !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }
 
 fn model_id(model: &str) -> bool {
@@ -108,32 +121,39 @@ fn load_at(path: &Path) -> Result<Config, String> {
     Ok(config)
 }
 
-fn set_at(path: &Path, args: &Value) -> Result<Config, String> {
-    let _guard = WRITES.lock().map_err(|e| e.to_string())?;
-    let id = args["profile"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("workflow.set needs profile")?;
-    let model = args["model"]
-        .as_str()
-        .filter(|id| model_id(id))
-        .ok_or("workflow.set model must be provider/model")?;
-    let mut config = load_at(path)?;
-    let profile = config
-        .profiles
-        .iter_mut()
-        .find(|p| p.id == id)
-        .ok_or_else(|| format!("No workflow profile {id:?}"))?;
-    profile.model = model.into();
+/// Apply the optional fields shared by workflow.set and workflow.add; `command` names the caller in errors.
+fn apply(profile: &mut Profile, args: &Value, command: &str) -> Result<(), String> {
+    if let Some(model) = args.get("model") {
+        profile.model = model
+            .as_str()
+            .filter(|id| model_id(id))
+            .ok_or_else(|| format!("{command} model must be provider/model"))?
+            .into();
+    }
+    if let Some(name) = args.get("name") {
+        profile.name = name
+            .as_str()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| format!("{command} name must be a non-empty string"))?
+            .into();
+    }
+    if let Some(description) = args.get("description") {
+        profile.description = match description {
+            Value::Null => None,
+            Value::String(text) if text.trim().is_empty() => None,
+            Value::String(text) => Some(text.trim().into()),
+            _ => return Err(format!("{command} description must be a string, or null to clear it")),
+        };
+    }
     if let Some(fallback) = args.get("fallbackModel") {
         profile.fallback_model = match fallback {
             Value::Null => None,
             Value::String(id) if model_id(id) => Some(id.clone()),
             _ => {
-                return Err(
-                    "workflow.set fallbackModel must be provider/model, or null to disable it"
-                        .into(),
-                )
+                return Err(format!(
+                    "{command} fallbackModel must be provider/model, or null to disable it"
+                ))
             }
         };
     }
@@ -141,9 +161,19 @@ fn set_at(path: &Path, args: &Value) -> Result<Config, String> {
         profile.thinking = level
             .as_str()
             .filter(|s| thinking(s))
-            .ok_or("workflow.set thinking must be off, minimal, low, medium, high, or xhigh")?
+            .ok_or_else(|| {
+                format!("{command} thinking must be off, minimal, low, medium, high, or xhigh")
+            })?
             .into();
     }
+    Ok(())
+}
+
+/// Load, change and save the configuration under the write lock; nothing is written when `change` fails.
+fn update_at(path: &Path, change: impl FnOnce(&mut Config) -> Result<(), String>) -> Result<Config, String> {
+    let _guard = WRITES.lock().map_err(|e| e.to_string())?;
+    let mut config = load_at(path)?;
+    change(&mut config)?;
     validate(&config)?;
     std::fs::create_dir_all(
         path.parent()
@@ -156,6 +186,60 @@ fn set_at(path: &Path, args: &Value) -> Result<Config, String> {
     Ok(config)
 }
 
+fn profile_arg<'a>(args: &'a Value, command: &str) -> Result<&'a str, String> {
+    args["profile"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| format!("{command} needs profile"))
+}
+
+fn set_at(path: &Path, args: &Value) -> Result<Config, String> {
+    let id = profile_arg(args, "workflow.set")?;
+    update_at(path, |config| {
+        let profile = config
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| format!("No workflow profile {id:?}"))?;
+        apply(profile, args, "workflow.set")
+    })
+}
+
+fn add_at(path: &Path, args: &Value) -> Result<Config, String> {
+    let id = args["id"]
+        .as_str()
+        .filter(|id| profile_id(id))
+        .ok_or("workflow.add id must be lowercase kebab-case, such as review or quick-fix")?;
+    if !args["name"].is_string() { return Err("workflow.add needs name".into()); }
+    if !args["model"].is_string() { return Err("workflow.add needs model".into()); }
+    update_at(path, |config| {
+        if config.profiles.iter().any(|p| p.id == id) {
+            return Err(format!("Workflow profile {id:?} already exists"));
+        }
+        let mut profile = Profile {
+            id: id.into(),
+            name: String::new(),
+            description: None,
+            model: String::new(),
+            fallback_model: None,
+            thinking: "high".into(),
+        };
+        apply(&mut profile, args, "workflow.add")?;
+        config.profiles.push(profile);
+        Ok(())
+    })
+}
+
+fn remove_at(path: &Path, args: &Value) -> Result<Config, String> {
+    let id = profile_arg(args, "workflow.remove")?;
+    update_at(path, |config| {
+        let before = config.profiles.len();
+        config.profiles.retain(|p| p.id != id);
+        if config.profiles.len() == before { return Err(format!("No workflow profile {id:?}")); }
+        Ok(())
+    })
+}
+
 pub fn get() -> Result<Value, String> {
     serde_json::to_value(load_at(&crate::mods::app_dir().join("workflow.json"))?)
         .map_err(|e| e.to_string())
@@ -163,6 +247,16 @@ pub fn get() -> Result<Value, String> {
 
 pub fn set(args: &Value) -> Result<Value, String> {
     serde_json::to_value(set_at(&crate::mods::app_dir().join("workflow.json"), args)?)
+        .map_err(|e| e.to_string())
+}
+
+pub fn add(args: &Value) -> Result<Value, String> {
+    serde_json::to_value(add_at(&crate::mods::app_dir().join("workflow.json"), args)?)
+        .map_err(|e| e.to_string())
+}
+
+pub fn remove(args: &Value) -> Result<Value, String> {
+    serde_json::to_value(remove_at(&crate::mods::app_dir().join("workflow.json"), args)?)
         .map_err(|e| e.to_string())
 }
 
@@ -350,6 +444,7 @@ mod tests {
         config.profiles.push(Profile {
             id: "review".into(),
             name: "Reviews".into(),
+            description: None,
             model: "provider/reviewer".into(),
             fallback_model: None,
             thinking: "high".into(),
@@ -359,6 +454,95 @@ mod tests {
         let changed = set_at(&path, &json!({"profile":"bug","model":"provider/fixer"})).unwrap();
         assert_eq!(changed.profiles[2], config.profiles[2]);
         assert_eq!(changed.profiles[1].model, "provider/fixer");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn profiles_are_added_with_defaults_and_removed_down_to_none() {
+        let path = scratch();
+        let added = add_at(&path, &json!({"id":"quick-fix", "name":" Quick fixes ", "model":"provider/fast"})).unwrap();
+        let profile = added.profiles.last().unwrap();
+        assert_eq!(
+            (profile.id.as_str(), profile.name.as_str(), profile.model.as_str(), profile.thinking.as_str()),
+            ("quick-fix", "Quick fixes", "provider/fast", "high")
+        );
+        assert_eq!((profile.description.as_ref(), profile.fallback_model.as_ref()), (None, None));
+        let full = add_at(&path, &json!({
+            "id":"review2", "name":"Reviews", "model":"provider/reviewer", "description":"Code review.",
+            "fallbackModel":"provider/backup", "thinking":"xhigh"
+        })).unwrap();
+        let review = full.profiles.last().unwrap();
+        assert_eq!(review.description.as_deref(), Some("Code review."));
+        assert_eq!(review.fallback_model.as_deref(), Some("provider/backup"));
+        assert_eq!(review.thinking, "xhigh");
+        assert_eq!(load_at(&path).unwrap(), full);
+        let removed = remove_at(&path, &json!({"profile":"feature"})).unwrap();
+        assert_eq!(removed.profiles.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["bug", "quick-fix", "review2"]);
+        for id in ["bug", "quick-fix", "review2"] { remove_at(&path, &json!({"profile":id})).unwrap(); }
+        // The last profile can go too, and an empty table stays empty instead of returning to the defaults.
+        assert!(load_at(&path).unwrap().profiles.is_empty());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn invalid_additions_and_removals_change_nothing() {
+        let path = scratch();
+        let saved = set_at(&path, &json!({"profile":"bug", "model":"provider/fixer"})).unwrap();
+        for args in [
+            json!({"id":"feature", "name":"Again", "model":"provider/model"}),
+            json!({"id":"Review", "name":"Reviews", "model":"provider/model"}),
+            json!({"id":"quick_fix", "name":"Reviews", "model":"provider/model"}),
+            json!({"id":"-review", "name":"Reviews", "model":"provider/model"}),
+            json!({"id":"review--x", "name":"Reviews", "model":"provider/model"}),
+            json!({"id":"review", "name":" ", "model":"provider/model"}),
+            json!({"id":"review", "model":"provider/model"}),
+            json!({"id":"review", "name":"Reviews"}),
+            json!({"id":"review", "name":"Reviews", "model":"no-provider"}),
+            json!({"id":"review", "name":"Reviews", "model":"provider/model", "thinking":"max"}),
+            json!({"id":"review", "name":"Reviews", "model":"provider/model", "description":3}),
+        ] {
+            assert!(add_at(&path, &args).is_err(), "{args}");
+            assert_eq!(load_at(&path).unwrap(), saved, "{args}");
+        }
+        for args in [json!({"profile":"missing"}), json!({})] {
+            assert!(remove_at(&path, &args).is_err(), "{args}");
+            assert_eq!(load_at(&path).unwrap(), saved);
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn set_renames_and_describes_without_a_model_and_clears_descriptions() {
+        let path = scratch();
+        let original = load_at(&path).unwrap();
+        let changed = set_at(&path, &json!({"profile":"bug", "name":"Fixes", "description":" Small fixes. "})).unwrap();
+        assert_eq!((changed.profiles[1].name.as_str(), changed.profiles[1].description.as_deref()), ("Fixes", Some("Small fixes.")));
+        assert_eq!(changed.profiles[1].model, original.profiles[1].model);
+        assert_eq!(changed.profiles[0], original.profiles[0]);
+        for clear in [json!(""), json!(null)] {
+            set_at(&path, &json!({"profile":"bug", "description":"again"})).unwrap();
+            let cleared = set_at(&path, &json!({"profile":"bug", "description":clear})).unwrap();
+            assert_eq!(cleared.profiles[1].description, None);
+            assert!(!std::fs::read_to_string(&path).unwrap().contains("\"description\": null"));
+        }
+        let saved = load_at(&path).unwrap();
+        for args in [json!({"profile":"bug", "name":""}), json!({"profile":"bug", "name":null}), json!({"profile":"bug", "description":false})] {
+            assert!(set_at(&path, &args).is_err(), "{args}");
+            assert_eq!(load_at(&path).unwrap(), saved);
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn files_written_before_descriptions_keep_loading() {
+        let path = scratch();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"version":1,"profiles":[{"id":"feature","name":"Features","model":"provider/a","thinking":"high"}]}"#).unwrap();
+        let config = load_at(&path).unwrap();
+        assert_eq!(config.profiles.len(), 1);
+        assert_eq!(config.profiles[0].description, None);
+        let described = set_at(&path, &json!({"profile":"feature", "description":"Features."})).unwrap();
+        assert_eq!(serde_json::to_value(&described).unwrap()["profiles"][0]["description"], "Features.");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

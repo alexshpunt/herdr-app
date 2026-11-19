@@ -547,20 +547,43 @@ End the inspected Pi agent and remove its dedicated single-pane tab. Rejects cha
 
 ## `workflow.get`
 
-Read the persisted Features and Bugs workflow profiles, including their primary model, startup-only fallback model, and thinking level.
+Read the persisted workflow profiles: each one's id, name, description of when to use it, primary model, startup-only fallback model, and thinking level.
 
 No arguments.
 
 ## `workflow.set`
 
-Update one workflow profile atomically. Models use provider/model ids; omit fallbackModel to keep it, or pass null to disable it. Existing agents keep their model.
+Update one workflow profile atomically; omitted fields stay. Models use provider/model ids; pass fallbackModel null to disable it. The name stays non-empty; description "" or null clears it. Existing agents keep their model.
 
 | Argument | Required |
 |---|---|
 | `profile` | yes |
-| `model` | yes |
+| `model` | no |
 | `fallbackModel` | no |
 | `thinking` | no |
+| `name` | no |
+| `description` | no |
+
+## `workflow.add`
+
+Add a workflow profile. Its id is unique lowercase kebab-case, such as review or quick-fix; thinking defaults to high. Returns all profiles.
+
+| Argument | Required |
+|---|---|
+| `id` | yes |
+| `name` | yes |
+| `model` | yes |
+| `description` | no |
+| `fallbackModel` | no |
+| `thinking` | no |
+
+## `workflow.remove`
+
+Remove a workflow profile; the last one can go too. Running agents keep their model. Returns the remaining profiles.
+
+| Argument | Required |
+|---|---|
+| `profile` | yes |
 
 ## `workflow.models`
 
