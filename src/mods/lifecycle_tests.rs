@@ -656,7 +656,19 @@ export default class extends View {
     let root = window.update(cx, |_, window, cx| runtime.try_load(&fixture.0, window, cx).unwrap()).unwrap();
     cx.run_until_parked();
 
-    let (mut peer, _) = listener.accept().unwrap();
+    // The connect finishes on a socket thread, outside the test executor: an
+    // idle executor does not mean the connection has arrived yet.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut peer = loop {
+        match listener.accept() {
+            Ok((peer, _)) => break peer,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+                cx.run_until_parked();
+            }
+            Err(e) => panic!("the mod never connected: {e}"),
+        }
+    };
     peer.set_nonblocking(false).unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let peer = std::thread::spawn(move || peer.read(&mut [0]));
