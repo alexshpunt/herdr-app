@@ -764,7 +764,8 @@ The main ones:
 - New spaces and tabs are shown at once. `focus: false` on `space.new` or
   `tab.new` keeps the shown space and the target space's selected tab (with no
   space shown, the new space is shown), for work the person looks at later;
-  such tabs go last in their space, in the order made. `focus` is a boolean.
+  such tabs go last in their space, in the order made (one opened for an agent
+  goes after that agent's tabs). `focus` is a boolean.
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane; `argv` starts in your interactive shell, for its PATH, and the
   pane ends with it, keeping its exit code; that shell PATH needs sh, bash, zsh, dash, ksh or

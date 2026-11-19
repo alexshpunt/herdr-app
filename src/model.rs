@@ -1023,6 +1023,20 @@ mod tests {
     }
 
     #[test]
+    fn an_unselected_tab_for_an_agent_joins_that_agents_tabs() {
+        let mut m = Model::default();
+        m.add_space("s1", "", "", Tab::new("agent", "", "a", "t1"));
+        m.add_tab("s1", Tab::new("other", "", "b", "t2"));
+        let app = |id: &str, props: Value| Tab::with_pane(id, "", mod_pane(&format!("{id}-pane"), "vscode", props));
+        assert!(m.add_tab_unselected("s1", app("first", json!({ "origin": "t1" }))));
+        assert!(m.add_tab_unselected("s1", app("second", json!({ "origin": "t1" }))));
+        assert!(m.add_tab_unselected("s1", app("plain", json!({}))));
+        let order: Vec<&str> = m.space("s1").unwrap().tabs.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(order, ["agent", "first", "second", "other", "plain"], "with the agent's tabs, in the order they came; others last");
+        assert_eq!(m.space("s1").unwrap().active.as_deref(), Some("other"));
+    }
+
+    #[test]
     fn settling_the_shown_tab_hands_over_and_showing_it_brings_it_back() {
         let mut m = model_with_one();
         m.add_tab("p1", Tab::new("c2", "docs", "x2", "t2"));

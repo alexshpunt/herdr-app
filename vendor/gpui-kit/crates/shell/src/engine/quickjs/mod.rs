@@ -2149,9 +2149,7 @@ impl ShellRuntime {
     /// while the previous runtime is alive. Its copies keep it until they finish
     /// closing, and it is freed when the last of them drops it.
     pub fn replace_default(cx: &mut App) -> Result<Rc<Self>> {
-        let runtime = Self::new_isolated_with_components(FrozenComponentRegistry::default())?;
-        runtime.set_global(cx);
-        Ok(runtime)
+        Self::replace_default_with_components(cx, FrozenComponentRegistry::default())
     }
 
     /// HERDR: [`Self::replace_default`] with the host's frozen component

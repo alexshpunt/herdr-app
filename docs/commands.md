@@ -60,7 +60,7 @@ Move a space to a position (1 = first).
 
 ## `tab.new`
 
-Make a tab in a space (default: the selected one; name default: none, so it's called by its number) with a terminal in folder (default: the focused terminal's; empty string: the space's machine's home), optionally an agent (argv) and its first message (task); or with a mod as its only pane (`mod`, its `props`: a file, a board). It is shown at once; focus false adds it last in its space and keeps the shown space and the target space's selected tab. With no space open, a person's new tab starts a space (as space.new).
+Make a tab in a space (default: the selected one; name default: none, so it's called by its number) with a terminal in folder (default: the focused terminal's; empty string: the space's machine's home), optionally an agent (argv) and its first message (task); or with a mod as its only pane (`mod`, its `props`: a file, a board). It is shown at once; focus false adds it last in its space (a tab opened for an agent: after that agent's tabs) and keeps the shown space and the target space's selected tab. With no space open, a person's new tab starts a space (as space.new).
 
 | Argument | Required |
 |---|---|

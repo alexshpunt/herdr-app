@@ -60,7 +60,9 @@ export default class Pane extends View {
     const t = theme();
     const p = this.me();
     if (!p) return div();
-    const name = p.mod === "linear-browser" ? "Browser" : p.name || ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
+    // A name someone gave the pane wins over what it shows.
+    const shown = p.mod === "linear-browser" ? "Browser" : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
+    const name = p.name || shown;
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;

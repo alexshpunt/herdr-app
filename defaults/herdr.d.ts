@@ -95,7 +95,8 @@ export function playSound(sound: string): null;
  *   tab.close {id?}, tab.rename {id?, name}, tab.move {id?, index | by} (by: -1 left, 1 right, wrapping), tab.select {index | id},
  *   tab.next, tab.prev.
  * New spaces and tabs take focus by default. Boolean focus: false keeps the shown
- * space, selected tab and keyboard focus; background tabs are appended in creation order.
+ * space, selected tab and keyboard focus; background tabs are appended in creation order
+ * (one opened for an agent goes after that agent's tabs).
  * With no space shown, a new space is shown even with focus: false.
  * Panes: pane.split {direction: "right" | "down", pane?}, pane.close {pane?}, pane.zoom {pane?}, pane.rename {pane?, name},
  *   pane.resize {direction, pane?, px?},

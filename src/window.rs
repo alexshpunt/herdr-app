@@ -4398,7 +4398,7 @@ impl AppWindow {
 
     /// Its mod.json says `"frameless": true`: no frame header over its pane.
     fn frameless(&self, id: &str) -> bool {
-        self.copies.get(id).and_then(|c| self.folders.get(&c.inst.name)).is_some_and(|f| f.hint.frameless)
+        self.copies.get(id).and_then(|c| self.view_mod(&c.inst.name)).is_some_and(|f| f.hint.frameless)
     }
 
     fn swap_pane(&mut self, from: &str, explicit: bool, dir: &str) -> Result<(), String> {
