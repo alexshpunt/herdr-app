@@ -19,6 +19,7 @@ export class AppClient {
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async command(name,args){return {version:${JSON.stringify(version)},name,args}}
  async replicate(args){return {replicated:args}}
+ async workflow(){return {version:1,profiles:[]}}
 }
 `;
 test('real Pi reload refreshes module code and never reopens the startup fallback boundary',{timeout:30000},async()=>{
@@ -38,8 +39,13 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal(bridge().version, 1);
   assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
   assert.equal((await bridge().command('agent.remove', { terminal: 'm/t2' })).name, 'agent.remove');
-  // A replica launch goes through the client's own validation, not a raw tab.new.
-  assert.deepEqual(await bridge().command('agent.replicate', { name: 'r' }), { replicated: { name: 'r' } });
+  // A replica launch goes through the client's own validation, not a raw tab.new, one level deeper than its caller.
+  assert.deepEqual(await bridge().command('agent.replicate', { name: 'r', depth: 9 }), { replicated: { name: 'r', depth: 1 } });
+  assert.equal((await bridge().command('workflow.get', {})).name, 'workflow.get');
+  // A sub-agent is a workflow-profile launch: a profile the App does not have starts nothing.
+  await assert.rejects(bridge().command('agent.subagent', { requestId: 'sub-1', name: 'research', folder: root, profile: 'missing', task: 'Look it up.' }),
+    /^Error: agent\.subagent refused: Unknown workflow profile missing\. Current profiles: none/);
+  await assert.rejects(bridge().command('agent.subagent', { name: 'research' }), /agent\.subagent needs a non-empty requestId/);
   for (const name of ['agent.stop', 'space.new', 'tab.new']) assert.throws(() => bridge().command(name, {}));
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
@@ -72,7 +78,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   const featurePath = path.join(root, 'herdr-features.json');
   await writeFile(featurePath, JSON.stringify({ version: 1, workflow: false, usage: true, usageSince: 0 }));
   await session.reload();
-  assert.deepEqual(session.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')), []);
+  assert.deepEqual(session.getAllTools().filter(tool => tool.name === 'agent'), []);
   let disabledBridge;
   bus.emit('herdr:bridge', { provide: value => { disabledBridge = value; } });
   assert.equal(disabledBridge, undefined);
@@ -81,7 +87,7 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal(event.systemPromptOptions.sections.herdr, undefined);
   await writeFile(featurePath, JSON.stringify({ version: 1, workflow: true, usage: false, usageSince: 0 }));
   await session.reload();
-  assert.deepEqual(session.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name), ['herdr_agent_create']);
+  assert.deepEqual(session.getAllTools().filter(tool => tool.name === 'agent').map(tool => tool.name), ['agent']);
   assert.equal(bridge().version, 1);
   assert.equal((await label()).startup,'started');
  } finally {

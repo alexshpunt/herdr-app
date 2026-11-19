@@ -7,7 +7,7 @@ export default function featureProbe(pi: ExtensionAPI): void {
   pi.registerTool({
     name: 'feature_probe', label: 'Feature probe', description: 'Read the live integration catalog and prompt section keys.', parameters: Type.Object({}),
     async execute() {
-      const details = { tools: pi.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name), sections };
+      const details = { tools: pi.getAllTools().filter(tool => tool.name === 'agent').map(tool => tool.name), sections };
       return { content: [{ type: 'text', text: JSON.stringify(details) }], details };
     },
   });

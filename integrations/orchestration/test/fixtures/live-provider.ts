@@ -16,7 +16,7 @@ export default function fixture(pi: ExtensionAPI) {
       return { content: [{ type: 'text', text: answer ?? 'Cancelled' }], details: {} };
     } });
   pi.on('before_agent_start', async () => {
-    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...pi.getAllTools().filter(tool => tool.name.startsWith('herdr_agent_')).map(tool => tool.name)])]);
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...pi.getAllTools().filter(tool => tool.name === 'agent').map(tool => tool.name)])]);
   });
   pi.registerProvider('herdr-fixture', {
     name: 'Herdr live verification fixture', baseUrl: 'http://herdr-fixture.invalid', apiKey: 'fixture', api: 'openai-completions',

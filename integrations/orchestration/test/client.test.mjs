@@ -77,6 +77,9 @@ test('each agent opens in a new space named after it; a fallback joins its given
   assert.equal(calls[1][1].machine, '', 'an explicit empty machine selects the App\u2019s own computer');
   assert.equal((await app.launch({ ...input, space: 'laptop/sp2' })).space, 'laptop/sp2');
   assert.deepEqual([calls[2][0], calls[2][1].space, calls[2][1].focus], ['tab.new', 'laptop/sp2', false]);
+  // A sub-agent's launch tells its Pi how deeply it is nested.
+  await app.launch({ ...input, space: 'laptop/sp1', depth: 1 });
+  assert.deepEqual(calls[3][1].argv.slice(-2), ['--herdr-depth', '1']);
 });
 test('a replica opens its session copy with Pi in a new tab of the caller\u2019s space', async () => {
   const app = new AppClient(() => {}, 12, 'session-a');
@@ -89,9 +92,11 @@ test('a replica opens its session copy with Pi in a new tab of the caller\u2019s
     argv: ['pi', '--session', input.session, '--model', 'p/main', '--thinking', 'high'], task: input.task, focus: false }]);
   await app.replicate({ ...input, session: 'C:\\Users\\u\\s.jsonl', folder: 'C:\\repo', thinking: undefined });
   assert.deepEqual(calls[1][1].argv, ['pi', '--session', 'C:\\Users\\u\\s.jsonl', '--model', 'p/main']);
-  for (const bad of [{ task: ' ' }, { folder: 'repo' }, { session: '/tmp/s.txt' }, { session: 'relative.jsonl' }, { thinking: 'max' }, { model: undefined }])
+  await app.replicate({ ...input, depth: 2 });
+  assert.deepEqual(calls[2][1].argv.slice(-2), ['--herdr-depth', '2']);
+  for (const bad of [{ task: ' ' }, { folder: 'repo' }, { session: '/tmp/s.txt' }, { session: 'relative.jsonl' }, { thinking: 'max' }, { model: undefined }, { depth: 0 }, { depth: '1' }])
     await assert.rejects(app.replicate({ ...input, ...bad }), /agent\.replicate/);
-  assert.equal(calls.length, 2, 'invalid input launches nothing');
+  assert.equal(calls.length, 3, 'invalid input launches nothing');
 });
 test('a missing route refuses instead of contacting an unrelated App', async () => {
   await assert.rejects(requestViaMailbox(fixture(), undefined, identity, { ls: true }), /reload|route/i);

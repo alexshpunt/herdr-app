@@ -32,7 +32,7 @@ async function invoke(name, args) {
       if (last?.role === 'toolResult' && last.toolName === name) {
         assert.ok(!last.isError, JSON.stringify(last));
         const text = last.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
-        return { data: name === 'herdr_agent_create' ? JSON.parse(text) : text, chars: text.length };
+        return { data: name === 'agent' ? JSON.parse(text) : text, chars: text.length };
       }
     }
   });
@@ -45,7 +45,7 @@ async function record(name, run) {
   return result;
 }
 async function create(model, message = 'Fixture decision: PR #42 merged') {
-  const result = await invoke('herdr_agent_create', { requestId: `inspect-${Date.now()}-${model}`, name: `Inspect ${model}`, message, folder: config.folder, profile: 'feature', model: `herdr-fixture/${model}`, fallbackModel: null });
+  const result = await invoke('agent', { requestId: `inspect-${Date.now()}-${model}`, name: `Inspect ${model}`, message, folder: config.folder, profile: 'feature', model: `herdr-fixture/${model}`, fallbackModel: null });
   assert.equal(result.data.outcome, 'started'); return result.data;
 }
 const done = await create('success');

@@ -19,6 +19,8 @@ export function hc(args: string[]): Promise<ExecResult>;
 export interface WorkflowProfile {
   id: string;
   name: string;
+  /** When to use this profile; agents read it to choose one. */
+  description?: string;
   model: string;
   fallbackModel?: string;
   thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -36,7 +38,11 @@ export interface WorkflowCatalog {
  * A models reply can contain an error and no choices when no current Pi published its picker.
  * Omit machine for the selected space's machine; use an empty string for this computer. */
 export function workflow(action: "get"): Promise<WorkflowConfig>;
-export function workflow(action: "set", args: { profile: string; model: string; fallbackModel?: string | null; thinking?: WorkflowProfile["thinking"] }): Promise<WorkflowConfig>;
+/** Omitted fields stay; a null fallbackModel disables it; an empty or null description clears it. */
+export function workflow(action: "set", args: { profile: string; model?: string; fallbackModel?: string | null; thinking?: WorkflowProfile["thinking"]; name?: string; description?: string | null }): Promise<WorkflowConfig>;
+/** The id is unique lowercase kebab-case; thinking defaults to high. */
+export function workflow(action: "add", args: { id: string; name: string; model: string; description?: string; fallbackModel?: string | null; thinking?: WorkflowProfile["thinking"] }): Promise<WorkflowConfig>;
+export function workflow(action: "remove", args: { profile: string }): Promise<WorkflowConfig>;
 export function workflow(action: "models", args?: { machine?: string }): Promise<WorkflowCatalog>;
 
 /** The user's home directory. */

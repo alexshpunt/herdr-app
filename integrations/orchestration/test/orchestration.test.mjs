@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Orchestrator, startupOutcome, bindOrigin } from '../orchestration.mjs';
+import { Orchestrator, startupOutcome, bindOrigin, childDepth } from '../orchestration.mjs';
 
 const origin = { pid: 12, session: 'caller', terminal: 'm/t1', machine: 'm', space: 'm/sp1' };
 const config = { version: 1, profiles: [{ id: 'feature', name: 'Features', model: 'p/main', fallbackModel: 'p/backup', thinking: 'high' }] };
@@ -97,6 +97,28 @@ test('fallback opens a new space after an early exit closes the primary space', 
   assert.deepEqual(api.calls.filter(call => call[0] === 'launch').map(call => call[1].space), [undefined, undefined]);
   assert.equal(result.attempts[0].outcome, 'exited');
   assert.equal(result.attempts[1].space, 'm/sp2');
+}));
+test('a sub-agent and its fallback open as tabs of the caller\u2019s space, one level deeper', () => fixture(async root => {
+  const api = client([record('failed'), record('failed'), record('started')]);
+  api.inspect = async terminal => terminal === 'm/t2' ? { ...record(null), state: 'finished' } : record('started');
+  let next = 1;
+  api.launch = async args => { api.calls.push(['launch', args]); return { terminal: `m/t${++next}`, tab: `m/tb${next}`, space: 'm/sp1' }; };
+  const result = await new Orchestrator(api, root, { pollMs: 0 }).create(input, undefined, undefined, { space: 'm/sp1', depth: 2 });
+  assert.equal(result.outcome, 'started');
+  // Even after the primary exited, the fallback stays next to the caller instead of opening a space.
+  assert.deepEqual(api.calls.map(call => [call[1].model, call[1].space, call[1].depth]), [['p/main', 'm/sp1', 2], ['p/backup', 'm/sp1', 2]]);
+}));
+test('replicas and sub-agents nest two levels below the agent the user started', () => {
+  assert.equal(childDepth('agent.subagent', 0), 1);
+  assert.equal(childDepth('agent.replicate', 1), 2);
+  assert.throws(() => childDepth('agent.subagent', 2), /^Error: agent\.subagent refused: .*nesting stops at depth 2\. Do this work yourself\.$/);
+});
+test('an unknown profile names the current ones and launches nothing', () => fixture(async root => {
+  const api = client();
+  await assert.rejects(new Orchestrator(api, root).create({ ...input, profile: 'research' }), /Unknown workflow profile research\. Current profiles: feature\. Read herdr:profiles/);
+  api.workflow = async () => ({ version: 1, profiles: [] });
+  await assert.rejects(new Orchestrator(api, root).create({ ...input, profile: 'feature' }), /Current profiles: none; the user adds them in Herdr App's Workflow settings/);
+  assert.equal(api.calls.length, 0);
 }));
 test('an early model exit reports its terminal error with the requested selection', () => fixture(async root => {
   const api = client();

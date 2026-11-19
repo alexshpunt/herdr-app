@@ -28,6 +28,13 @@ export function startupOutcome(agent) {
   if (agent.state !== 'live' || agent.exited) return 'exited';
   return 'pending';
 }
+/** Agents the user starts are depth 0; a replica or sub-agent at this depth starts no more of them. */
+export const MAX_DEPTH = 2;
+/** The nesting depth a replica or sub-agent of a Pi at `depth` gets, or a refusal once nesting stops. */
+export function childDepth(command, depth) {
+  if (depth >= MAX_DEPTH) throw new Error(`${command} refused: this agent is a replica or sub-agent at nesting depth ${depth}, and nesting stops at depth ${MAX_DEPTH}. Do this work yourself.`);
+  return depth + 1;
+}
 const hash = value => createHash('sha256').update(value).digest('hex');
 const nonempty = (value, name) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must be a non-empty string`);
@@ -48,14 +55,22 @@ export class Orchestrator {
     await writeFile(temp, JSON.stringify(data), { mode: 0o600 });
     await rename(temp, file);
   }
-  async create(input, signal, update = (_data) => {}) {
+  /**
+   * Launch a workflow agent and observe its startup. `placement.space` opens it as a
+   * tab of that space, primary and fallback alike (a sub-agent next to its caller);
+   * otherwise it gets a space of its own. `placement.depth` marks a nested agent.
+   */
+  async create(input, signal, update = (_data) => {}, placement = {}) {
     aborted(signal);
     for (const key of ['requestId', 'name', 'folder', 'message', 'profile']) nonempty(input[key], key);
     if (!/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(input.folder)) throw new Error('folder must be an absolute path on the target machine');
     const origin = await this.client.context();
     const config = await this.client.workflow();
     const profile = config.profiles?.find(p => p.id === input.profile);
-    if (!profile) throw new Error(`Unknown workflow profile ${input.profile}; read workflow.get in Herdr App`);
+    if (!profile) {
+      const ids = (config.profiles ?? []).map(p => p.id);
+      throw new Error(`Unknown workflow profile ${input.profile}. Current profiles: ${ids.length ? ids.join(', ') : 'none; the user adds them in Herdr App\'s Workflow settings'}. Read herdr:profiles for what each is for.`);
+    }
     const model = nonempty(input.model ?? profile.model, 'model');
     const fallback = input.fallbackModel === null ? undefined : (input.fallbackModel ?? profile.fallbackModel);
     const thinking = input.thinking ?? profile.thinking ?? 'high';
@@ -83,7 +98,7 @@ export class Orchestrator {
       receipt.outcome = 'unknown';
       receipt.detail = 'Launch intent saved; inspect Herdr before retrying an unconfirmed launch.';
       await this.save(file, receipt);
-      const target = await this.client.launch({ ...input, model: chosen, thinking, space });
+      const target = await this.client.launch({ ...input, model: chosen, thinking, space: placement.space ?? space, depth: placement.depth });
       for (const field of ['terminal', 'tab', 'space']) nonempty(target[field], `launch result ${field}`);
       receipt = { ...receipt, ...target, outcome: 'pending', detail: 'Waiting for the first successful assistant response', attempts: [...receipt.attempts, { model: chosen, thinking, ...target }] };
       await this.save(file, receipt);

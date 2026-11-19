@@ -3222,6 +3222,8 @@ impl AppWindow {
         match name {
             "workflow.get" => { self.answer(crate::workflow::get()); return; }
             "workflow.set" => { self.answer(crate::workflow::set(a)); self.refresh_mods(cx); return; }
+            "workflow.add" => { self.answer(crate::workflow::add(a)); self.refresh_mods(cx); return; }
+            "workflow.remove" => { self.answer(crate::workflow::remove(a)); self.refresh_mods(cx); return; }
             "workflow.models" => {
                 if a.get("machine").is_some_and(|m| !m.is_string() && !m.is_null()) { return self.fail("machine must be a string"); }
                 let machine = match Self::arg(a, "machine") {
@@ -4434,12 +4436,15 @@ impl AppWindow {
                         self.launch_pi_request(name, args, machine, false, Some(reply), window, cx);
                         return;
                     }
-                    if matches!(name, "workflow.get" | "workflow.set") {
+                    if matches!(name, "workflow.get" | "workflow.set" | "workflow.add" | "workflow.remove") {
                         let command = crate::commands::find(name).expect("registered workflow command");
                         let name = name.to_owned();
                         cx.background_executor().spawn(async move {
-                            let result = crate::commands::validate_args(command, &args).and_then(|()| {
-                                if name == "workflow.get" { crate::workflow::get() } else { crate::workflow::set(&args) }
+                            let result = crate::commands::validate_args(command, &args).and_then(|()| match name.as_str() {
+                                "workflow.get" => crate::workflow::get(),
+                                "workflow.set" => crate::workflow::set(&args),
+                                "workflow.add" => crate::workflow::add(&args),
+                                _ => crate::workflow::remove(&args),
                             });
                             let _ = reply.send(result.unwrap_or_else(|error| json!({"error":error})));
                         }).detach();

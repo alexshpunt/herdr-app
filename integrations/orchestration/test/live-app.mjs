@@ -66,7 +66,7 @@ async function message(agent, content) {
 profile('success');
 const successInput = input('success');
 const success = await step('profile launch preserves the task and real identity', async () => {
-  const created = await invoke('herdr_agent_create', successInput);
+  const created = await invoke('agent', successInput);
   assert.equal(created.outcome, 'started'); assert.equal(created.attempts.length, 1);
   assert.equal(created.model, 'herdr-fixture/success');
   const agent = inspect(created.terminal); assert.equal(agent.identityCurrent, true);
@@ -78,7 +78,7 @@ const success = await step('profile launch preserves the task and real identity'
 });
 await step('repeated creation reuses its receipt', async () => {
   const before = app('agent.list').agents.length;
-  const repeated = await invoke('herdr_agent_create', successInput);
+  const repeated = await invoke('agent', successInput);
   assert.equal(repeated.reused, true); assert.equal(repeated.terminal, success.terminal);
   assert.equal(app('agent.list').agents.length, before);
   return { reused: repeated.reused, terminal: repeated.terminal };
@@ -97,7 +97,7 @@ await step('CLI stale PID and resource deletion are refused', async () => {
 });
 profile('primary-error', 'success');
 const fallback = await step('first-response failure permits exactly one fallback', async () => {
-  const created = await invoke('herdr_agent_create', input('fallback'));
+  const created = await invoke('agent', input('fallback'));
   assert.equal(created.outcome, 'started'); assert.equal(created.fallbackUsed, true); assert.equal(created.attempts.length, 2);
   assert.deepEqual(created.attempts.map(attempt => attempt.model), ['herdr-fixture/primary-error', 'herdr-fixture/success']);
   const primary = inspect(created.retainedPrimary.terminal);
@@ -106,7 +106,7 @@ const fallback = await step('first-response failure permits exactly one fallback
 });
 await step('exit before extension initialization permits exactly one fallback', async () => {
   const missingModel = 'herdr-review-missing/model';
-  const created = await invoke('herdr_agent_create', input('early-exit', { model: missingModel, fallbackModel: 'herdr-fixture/success' }));
+  const created = await invoke('agent', input('early-exit', { model: missingModel, fallbackModel: 'herdr-fixture/success' }));
   assert.equal(created.outcome, 'started'); assert.equal(created.fallbackUsed, true);
   assert.deepEqual(created.attempts.map(attempt => attempt.model), [missingModel, 'herdr-fixture/success']);
   const primary = inspect(created.retainedPrimary.terminal);
@@ -118,13 +118,13 @@ await step('exit before extension initialization permits exactly one fallback', 
 });
 profile('primary-error', 'fallback-error');
 await step('failed fallback stops after its second attempt', async () => {
-  const created = await invoke('herdr_agent_create', input('failed-fallback'), true);
+  const created = await invoke('agent', input('failed-fallback'), true);
   assert.equal(created.outcome, 'model-failed'); assert.equal(created.fallbackUsed, true); assert.equal(created.attempts.length, 2);
   return { outcome: created.outcome, attempts: created.attempts.length };
 });
 profile('late-error', 'success');
 await step('later model error never reopens startup fallback', async () => {
-  const created = await invoke('herdr_agent_create', input('late-error'));
+  const created = await invoke('agent', input('late-error'));
   assert.equal(created.outcome, 'started'); assert.equal(created.attempts.length, 1);
   const agent = inspect(created.terminal);
   await message(agent, 'Trigger the later fixture error');
@@ -135,7 +135,7 @@ await step('later model error never reopens startup fallback', async () => {
 });
 profile('slow');
 await step('stop interrupts Pi without closing its tab', async () => {
-  const created = await invoke('herdr_agent_create', input('stop'));
+  const created = await invoke('agent', input('stop'));
   const agent = inspect(created.terminal);
   await message(agent, 'Wait for the stop check');
   await waitFor(() => inspect(agent.terminal).status === 'working');
