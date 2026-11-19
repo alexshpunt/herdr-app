@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -136,6 +137,7 @@ class ForkSync(unittest.TestCase):
 
 
 def load_notify():
+    sys.dont_write_bytecode = True  # no __pycache__ beside the scripts
     spec = importlib.util.spec_from_file_location("fork_sync_notify", Path(__file__).with_name("fork-sync-notify.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
