@@ -34,9 +34,9 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     if (typeof provide !== 'function') return;
     const current = client;
     provide({ version: 1, command(name: string, args: Record<string, unknown>) {
-      if (!['agent.list', 'agent.inspect', 'agent.history', 'agent.send', 'agent.remove'].includes(name)) throw new Error('Unsupported Herdr bridge command');
+      if (!['agent.list', 'agent.inspect', 'agent.history', 'agent.send', 'agent.remove', 'agent.replicate'].includes(name)) throw new Error('Unsupported Herdr bridge command');
       if (client !== current) throw new Error('Herdr bridge changed; reload or retry the read');
-      return current.command(name, args);
+      return name === 'agent.replicate' ? current.replicate(args) : current.command(name, args);
     } });
   });
   const report = (ctx: ExtensionContext, value: unknown) => ctx.ui.notify(`Herdr agents: ${value instanceof Error ? value.message : String(value)}`, 'warning');
