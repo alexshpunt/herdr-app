@@ -7449,6 +7449,17 @@ mod tests {
     }
 
     fn open_window_on_core<'a>(cx: &'a mut gpui::TestAppContext, core: std::sync::Arc<crate::hc::Core>, mod_name: &str, main_js: &str, layout: serde_json::Value, first_run: bool) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
+        open_window_with_events(cx, core, mod_name, main_js, layout, first_run, false)
+    }
+
+    /// A window whose file events come from the real native watcher of the
+    /// app home, for tests of how the window reacts to actual notifications.
+    fn open_window_watching<'a>(cx: &'a mut gpui::TestAppContext, mod_name: &str, main_js: &str, layout: serde_json::Value) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
+        open_window_with_events(cx, crate::hc::offline(), mod_name, main_js, layout, false, true)
+    }
+
+    /// `native`: watch the app home for real, once it exists; else the silent stub.
+    fn open_window_with_events<'a>(cx: &'a mut gpui::TestAppContext, core: std::sync::Arc<crate::hc::Core>, mod_name: &str, main_js: &str, layout: serde_json::Value, first_run: bool, native: bool) -> (gpui::Entity<super::AppWindow>, &'a mut gpui::VisualTestContext) {
         use serde_json::json;
         let home = crate::mods::app_dir();
         crate::mods::write_workspace().unwrap();
@@ -7468,7 +7479,14 @@ mod tests {
         if !first_run {
             crate::mods::set_shared("frame.welcomed".into(), json!("test"));
         }
-        let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::with_file_events(core, requests, Some(crate::files::FileEvents::for_test(home.clone())), window, cx));
+        let file_events = if native {
+            let events = crate::files::watch(&home, cx.background_executor.clone());
+            assert!(events.is_some(), "native watcher");
+            events
+        } else {
+            Some(crate::files::FileEvents::for_test(home.clone()))
+        };
+        let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::with_file_events(core, requests, file_events, window, cx));
         assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
         (view, cx)
     }

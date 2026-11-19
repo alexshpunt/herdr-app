@@ -8,7 +8,8 @@ fn pending_mod_creation(cx: &mut gpui::TestAppContext) {
     use serde_json::json;
     use std::time::{Duration, Instant};
     if !running_alone("pending_mod_creation") { return; }
-    let (view, cx) = open_window(cx, "unused", "", json!({
+    // Real notifications from the app home, not the harness's silent stub.
+    let (view, cx) = open_window_watching(cx, "unused", "", json!({
         "id": "root", "type": "block", "titlebar": "none", "content": { "tab": "active" }
     }));
     let folder = crate::mods::app_dir().join("mods/pending-probe");
