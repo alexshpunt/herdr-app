@@ -90,6 +90,8 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.prepare.outputs.sha }}
+      # The fork ships only the Windows build; Linux and macOS failures don't hold back a merge.
+      windows_only: true
     permissions:
       contents: read
   land:
