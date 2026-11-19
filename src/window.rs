@@ -7499,11 +7499,22 @@ mod tests {
             export default class Heavy extends View {{ render() {{ return div().child(String(kept.length)); }} }}\n")
     }
 
+    /// Hands files the test saved to the window as the native watcher would:
+    /// their mods' source revisions advance first, then `files_changed` runs.
+    fn save_notified(view: &gpui::Entity<super::AppWindow>, changed: Vec<std::path::PathBuf>, cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            if let Some(events) = &this.file_events {
+                events.record_for_test(&changed);
+            }
+            this.files_changed(changed, window, cx);
+        }));
+    }
+
     /// Saves `heavy`'s main.js as `version` and lets the window apply it, then
     /// returns the mounted copies and their errors.
     fn edit_heavy(view: &gpui::Entity<super::AppWindow>, version: usize, mib: usize, cx: &mut gpui::VisualTestContext) -> (usize, Vec<String>) {
         std::fs::write(crate::mods::app_dir().join("mods/heavy/main.js"), heavy_mod(version, mib)).unwrap();
-        cx.update(|window, cx| view.update(cx, |this, cx| this.files_changed(vec!["mods/heavy/main.js".into()], window, cx)));
+        save_notified(view, vec!["mods/heavy/main.js".into()], cx);
         cx.executor().advance_clock(std::time::Duration::from_secs(1));
         cx.run_until_parked();
         view.update(cx, |this, _| (
@@ -7818,9 +7829,7 @@ mod tests {
             });
         }
         std::fs::write(home.join("mods/broken/main.js"), "throw null;").unwrap();
-        cx.update(|window, cx| view.update(cx, |this, cx| {
-            this.files_changed(vec!["mods/broken/main.js".into()], window, cx);
-        }));
+        save_notified(&view, vec!["mods/broken/main.js".into()], cx);
         cx.executor().advance_clock(std::time::Duration::from_secs(1));
         cx.run_until_parked();
         let state = view.update(cx, |this, _| format!("cooldown={:?} suppressed={:?} copies={:?}", this.load_recovery.map(|t| t.elapsed()), this.failed_loads, this.copies.values().map(|c| (&c.inst.name, &c.error)).collect::<Vec<_>>()));

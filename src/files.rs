@@ -61,10 +61,20 @@ impl FileEvents {
         self.revision_provider()(&root.canonicalize().ok()?)
     }
 
+    /// Events that never arrive, rooted like `watch` roots them, so source
+    /// revisions resolve the same way on every system.
     #[cfg(test)]
     pub fn for_test(root: PathBuf) -> Self {
         let (_, changes) = async_channel::unbounded();
+        let root = root.canonicalize().unwrap_or(root);
         Self { changes, root, revisions: Arc::new(Mutex::new(Revisions::default())) }
+    }
+
+    /// What the native watcher records for `changed` before it delivers them:
+    /// a test that saves files and calls `files_changed` itself records them first.
+    #[cfg(test)]
+    pub fn record_for_test(&self, changed: &Changed) {
+        self.revisions.lock().unwrap_or_else(std::sync::PoisonError::into_inner).changed(changed, false);
     }
 
     pub fn revision_provider(&self) -> impl Fn(&Path) -> Option<u64> + 'static {
