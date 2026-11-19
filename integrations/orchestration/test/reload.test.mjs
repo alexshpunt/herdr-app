@@ -18,6 +18,7 @@ export class AppClient {
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async command(name,args){return {version:${JSON.stringify(version)},name,args}}
+ async replicate(args){return {replicated:args}}
 }
 `;
 test('real Pi reload refreshes module code and never reopens the startup fallback boundary',{timeout:30000},async()=>{
@@ -37,6 +38,8 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal(bridge().version, 1);
   assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
   assert.equal((await bridge().command('agent.remove', { terminal: 'm/t2' })).name, 'agent.remove');
+  // A replica launch goes through the client's own validation, not a raw tab.new.
+  assert.deepEqual(await bridge().command('agent.replicate', { name: 'r' }), { replicated: { name: 'r' } });
   for (const name of ['agent.stop', 'space.new', 'tab.new']) assert.throws(() => bridge().command(name, {}));
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
