@@ -3,9 +3,9 @@
 #
 # Upstream's release.yml publishes only for its maintainer, to his bucket, so it
 # never releases here; it is disabled in this fork. This workflow builds the
-# Windows app on every master push that changes the build, and sync-upstream
-# starts it after landing an upstream merge (a push made with GITHUB_TOKEN does
-# not trigger workflows). Nothing is signed.
+# Windows app on every master push that changes the build, including the
+# upstream merges sync-upstream lands (it pushes with FORK_SYNC_TOKEN, so the push
+# triggers workflows). Nothing is signed.
 name: fork release
 run-name: fork release ${{ github.sha }}
 

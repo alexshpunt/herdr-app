@@ -48,16 +48,28 @@ this fork (`gh workflow disable release.yml`). Do not re-enable it.
 ## Follow upstream
 
 `sync-upstream.yml` merges `herdrdev/herdr-app` into master every day, runs CI
-on the merge, fast-forwards master and starts the fork release.
+on the merge and fast-forwards master; that push starts the fork release.
 
 When the merge conflicts, `scripts/fork-resolve-conflicts` has a cheap model
 (`opencode-go/deepseek-v4.1-flash` through pi, the `OPENCODE_API_KEY` repository
 secret) edit the conflicted files. `scripts/fork-sync.py` rejects the result if
 any conflict marker is left, and the candidate still has to pass the whole CI
-before master moves, so a wrong resolution fails instead of landing. When the
-resolver or CI fails, the workflow opens an issue "Upstream sync is failing";
-resolve it by merging `upstream/master` into a branch by hand and landing it
-through a PR (merge commit, not squash).
+before master moves, so a wrong resolution fails instead of landing.
+
+Pushes use the `FORK_SYNC_TOKEN` repository secret: a fine-grained personal
+access token of the owner, limited to this repository and `alexshpunt/herdr-core`
+with Contents, Workflows and Actions write access and no expiration. The default
+`GITHUB_TOKEN` cannot push upstream commits that change `.github/workflows`, and
+upstream changes them about once a week. The model never runs in a job that holds
+the token: the merge job hands the candidate to a fresh job as a git bundle.
+
+When the resolver, CI or a push fails, `scripts/fork-sync-notify.py` opens the
+Linear issue "Upstream sync of alexshpunt/herdr-app is failing" in project
+herdr-config (team LPT), or comments on it while it is open, with the run link and
+the end of the failed log. It uses the `LINEAR_API_KEY` repository secret, a
+personal Linear key limited to team LPT that can read, create issues and comment.
+Resolve such a failure by merging `upstream/master` into a branch by hand and
+landing it through a PR (merge commit, not squash), then close the issue.
 
 ## Connect Pi and Plannotator
 
