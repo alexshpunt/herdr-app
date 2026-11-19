@@ -49,20 +49,20 @@ def error_context(log, lines=LOG_LINES):
 
 
 def failed_job_logs(repo, run_id):
-    """Each failed job of this run with the end of its log; a note when GitHub cannot give them."""
+    """(heading, text) for each failed job of this run: the end of its log, or why GitHub could not give it."""
     def gh(*args):
         return subprocess.run(["gh", "api", *args], text=True, capture_output=True, check=True).stdout
     try:
         listed = json.loads(gh(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"))["jobs"]
         jobs = [job for job in listed if job.get("conclusion") == "failure"]
     except (subprocess.CalledProcessError, json.JSONDecodeError) as error:
-        return [("logs", f"could not list the failed jobs: {error}")]
+        return [("Could not list the failed jobs of this run:", str(error))]
     logs = []
     for job in jobs:
         try:
-            logs.append((job["name"], error_context(gh(f"repos/{repo}/actions/jobs/{job['id']}/logs"))))
+            logs.append((f"End of the failed `{job['name']}` log:", error_context(gh(f"repos/{repo}/actions/jobs/{job['id']}/logs"))))
         except subprocess.CalledProcessError as error:
-            logs.append((job["name"], f"could not read the log: {error}"))
+            logs.append((f"Could not read the `{job['name']}` log:", str(error)))
     return logs
 
 
@@ -73,8 +73,8 @@ def describe(repo, run_url, results, logs):
         f"Run: {run_url}",
         "Jobs: " + ", ".join(f"{name} {result}" for name, result in results),
     ]
-    for name, log in logs:
-        parts += ["", f"End of the failed `{name}` log:", "```", log, "```"]
+    for heading, text in logs:
+        parts += ["", heading, "```", text, "```"]
     parts += [
         "",
         "To fix it, find the cause in the run. A conflict the automation could not resolve, or a failed check on the "
