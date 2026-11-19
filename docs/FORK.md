@@ -47,13 +47,14 @@ this fork (`gh workflow disable release.yml`). Do not re-enable it.
 
 ## Follow upstream
 
-`sync-upstream.yml` merges `herdrdev/herdr-app` into master every day, runs CI
-on the merge and fast-forwards master; that push starts the fork release.
+`sync-upstream.yml` merges `herdrdev/herdr-app` into master every day, runs the
+Windows CI job on the merge (`ci.yml` with `windows_only`, since the fork ships
+only Windows) and fast-forwards master; that push starts the fork release.
 
 When the merge conflicts, `scripts/fork-resolve-conflicts` has a cheap model
 (`opencode-go/deepseek-v4.1-flash` through pi, the `OPENCODE_API_KEY` repository
 secret) edit the conflicted files. `scripts/fork-sync.py` rejects the result if
-any conflict marker is left, and the candidate still has to pass the whole CI
+any conflict marker is left, and the candidate still has to pass the Windows CI
 before master moves, so a wrong resolution fails instead of landing.
 
 Pushes use the `FORK_SYNC_TOKEN` repository secret: a fine-grained personal
@@ -179,9 +180,10 @@ to ordinary installations automatically.
 
 The `sync upstream` workflow runs daily at 04:23 UTC and can be started manually.
 It merges upstream into a temporary `automation/upstream-*` branch, then runs the
-same Windows, Linux and macOS CI against that exact commit. Master advances only
-after those checks pass. A merge conflict, failed check, changed candidate or
-concurrent master change leaves master untouched. The workflow never force-pushes.
+Windows CI job against that exact commit. Master advances only after it passes;
+Linux and macOS run on the master push that follows and don't hold the merge
+back. A merge conflict, failed check, changed candidate or concurrent master
+change leaves master untouched. The workflow never force-pushes.
 
 Source builds do not install upstream's official app updates. Synchronization
 updates this repository; install a checked fork build to update the app. CI keeps
