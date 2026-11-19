@@ -78,6 +78,21 @@ test('each agent opens in a new space named after it; a fallback joins its given
   assert.equal((await app.launch({ ...input, space: 'laptop/sp2' })).space, 'laptop/sp2');
   assert.deepEqual([calls[2][0], calls[2][1].space, calls[2][1].focus], ['tab.new', 'laptop/sp2', false]);
 });
+test('a replica opens its session copy with Pi in a new tab of the caller\u2019s space', async () => {
+  const app = new AppClient(() => {}, 12, 'session-a');
+  const calls = [];
+  app.context = async () => ({ machine: 'laptop', space: 'laptop/sp1' });
+  app.command = async (name, args) => { calls.push([name, args]); return { terminal: 'laptop/t4', tab: 'laptop/tb4' }; };
+  const input = { name: 'check-auth', session: '/home/u/.pi/agent/sessions/x/replica.jsonl', folder: '/repo', model: 'p/main', thinking: 'high', task: 'Check auth\n"quoted"' };
+  assert.deepEqual(await app.replicate(input), { terminal: 'laptop/t4', tab: 'laptop/tb4', space: 'laptop/sp1' });
+  assert.deepEqual(calls[0], ['tab.new', { space: 'laptop/sp1', name: 'check-auth', folder: '/repo',
+    argv: ['pi', '--session', input.session, '--model', 'p/main', '--thinking', 'high'], task: input.task, focus: false }]);
+  await app.replicate({ ...input, session: 'C:\\Users\\u\\s.jsonl', folder: 'C:\\repo', thinking: undefined });
+  assert.deepEqual(calls[1][1].argv, ['pi', '--session', 'C:\\Users\\u\\s.jsonl', '--model', 'p/main']);
+  for (const bad of [{ task: ' ' }, { folder: 'repo' }, { session: '/tmp/s.txt' }, { session: 'relative.jsonl' }, { thinking: 'max' }, { model: undefined }])
+    await assert.rejects(app.replicate({ ...input, ...bad }), /agent\.replicate/);
+  assert.equal(calls.length, 2, 'invalid input launches nothing');
+});
 test('a missing route refuses instead of contacting an unrelated App', async () => {
   await assert.rejects(requestViaMailbox(fixture(), undefined, identity, { ls: true }), /reload|route/i);
 });
