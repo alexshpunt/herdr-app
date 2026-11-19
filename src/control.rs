@@ -224,10 +224,16 @@ fn parse_args(rest: &[String]) -> Result<Value, String> {
 
 /// `herdr-app shot`: the window's last frame, with the native windows shown
 /// in it (on Windows: adopted programs and browser panes), saved as a PNG.
-/// The frame is taken here; a thread of its own captures the native windows,
-/// writes the file and answers `reply`.
-pub fn shot(window: &gpui::Window, path: PathBuf, reply: std::sync::mpsc::Sender<Value>) {
-    let image = match window.render_to_image() {
+/// The frame is taken here, after the window's pending updates are drawn, so
+/// it must run outside a window update; a thread of its own captures the
+/// native windows, writes the file and answers `reply`.
+pub fn shot<C: gpui::AppContext>(
+    window: gpui::AnyWindowHandle,
+    cx: &mut C,
+    path: PathBuf,
+    reply: std::sync::mpsc::Sender<Value>,
+) {
+    let image = match window.render_current_to_image(cx) {
         Ok(image) => image,
         Err(error) => {
             let _ = reply.send(json!({ "error": format!("cannot save screenshot: {error:#}") }));
@@ -235,7 +241,7 @@ pub fn shot(window: &gpui::Window, path: PathBuf, reply: std::sync::mpsc::Sender
         }
     };
     #[cfg(windows)]
-    let host = native_views::host(window);
+    let host = window.update(cx, |_, window, _| native_views::host(window)).ok().flatten();
     let answer_failure = reply.clone();
     let spawned = std::thread::Builder::new()
         .name("herdr-shot".into())
@@ -544,6 +550,12 @@ mod shot_tests {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flag_values_that_parse_as_json_are_json() {
+        let args: Vec<String> = ["--name", "eng-123", "--focus", "false", "--argv", r#"["claude"]"#].map(String::from).into();
+        assert_eq!(parse_args(&args).unwrap(), json!({ "name": "eng-123", "focus": false, "argv": ["claude"] }));
+    }
 
     #[test]
     fn a_second_launch_raises_the_running_window() {
