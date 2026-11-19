@@ -31,7 +31,8 @@ def resolve_conflicts(command):
     """Let a command resolve the merge in progress; accept it only if nothing is left unresolved."""
     unmerged = git("diff", "--name-only", "--diff-filter=U").stdout.split()
     print("Merge conflicts in: " + ", ".join(unmerged), file=sys.stderr)
-    if subprocess.run(shlex.split(command)).returncode:
+    # stdout carries only this script's JSON result; the resolver's own report goes to the log.
+    if subprocess.run(shlex.split(command), stdout=sys.stderr).returncode:
         raise RuntimeError("The conflict resolver failed")
     git("add", "--", *unmerged)
     left = git("diff", "--name-only", "--diff-filter=U").stdout.split()
@@ -42,6 +43,7 @@ def resolve_conflicts(command):
 
 
 def prepare(args):
+    """Merge upstream into a local candidate branch. Needs no credentials: publish pushes it."""
     git("fetch", "--no-tags", args.upstream, args.base)
     upstream = git("rev-parse", "FETCH_HEAD").stdout.strip()
     if ancestor(upstream, "HEAD"):
@@ -53,8 +55,17 @@ def prepare(args):
             raise RuntimeError(merged.stderr.strip() or merged.stdout.strip())
         resolve_conflicts(args.resolver)
     sha = git("rev-parse", "HEAD").stdout.strip()
-    git("push", "--set-upstream", "origin", args.branch)
     return {"changed": True, "branch": args.branch, "sha": sha}
+
+
+def publish(args):
+    """Push the prepared candidate, only if the local branch is still that exact commit."""
+    if not re.fullmatch(r"[0-9a-f]{40,64}", args.sha):
+        raise RuntimeError("The candidate must be a full commit SHA")
+    if git("rev-parse", "refs/heads/" + args.branch).stdout.strip() != args.sha:
+        raise RuntimeError("The candidate branch changed after preparation")
+    git("push", "origin", f"{args.sha}:refs/heads/{args.branch}")
+    return {"published": True, "branch": args.branch, "sha": args.sha}
 
 
 def land(args):
@@ -80,7 +91,7 @@ def land(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "land"])
+    parser.add_argument("action", choices=["prepare", "publish", "land"])
     parser.add_argument("--upstream", default="https://github.com/herdrdev/herdr-app.git")
     parser.add_argument("--base", default="master")
     parser.add_argument("--branch", required=True)
@@ -91,10 +102,10 @@ def main():
         parser.error("Candidate branches must start with automation/upstream-")
     git("check-ref-format", "--branch", args.branch)
     git("check-ref-format", "--branch", args.base)
-    if args.action == "land" and not args.sha:
-        parser.error("land requires --sha")
+    if args.action != "prepare" and not args.sha:
+        parser.error(args.action + " requires --sha")
     clean()
-    print(json.dumps(prepare(args) if args.action == "prepare" else land(args)))
+    print(json.dumps({"prepare": prepare, "publish": publish, "land": land}[args.action](args)))
 
 
 if __name__ == "__main__":
