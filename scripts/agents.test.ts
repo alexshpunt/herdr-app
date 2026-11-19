@@ -130,6 +130,8 @@ test("a failed agent check keeps cached launchable agents and shows an error ins
     const globals = {
       View: class {}, spaces: () => [], shared: () => ({ "": agents }), setShared: (...args: unknown[]) => writes.push(args),
       knownAgents: async () => { throw Error("shell failed"); },
+      // The fork's Linear and GitHub targets resolve beside the agent check; neither is under test here.
+      resolveLinearTarget: async () => null, resolveGithubTarget: async () => null, readTextFile: async () => null, exec: async () => ({ code: 1 }),
       theme: () => ({}), props: () => ({}), keys: () => [], window: () => ({ platform: "macos" }), panes: () => [],
       div: element, svg: element, image: element, h_flex: element, v_flex: element,
     };

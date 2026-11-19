@@ -162,6 +162,7 @@ test("middle-click closes the pointed tab without selecting it", () => {
   };
   const Clicked = new Function(...Object.keys(injected), source.replace(/^import .*;\n/gm, "").replace("export default class Tabs", "return class Tabs"))(...Object.values(injected));
   const view = new Clicked();
+  view.init();
   view.panels = {};
   view.render();
   for (const tab of tabs) {

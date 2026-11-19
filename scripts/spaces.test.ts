@@ -334,6 +334,9 @@ test("checks both the space folder and its terminal folder", () => {
   h.view.at = {};
   h.view.busy = {};
   h.view.ready = {};
+  h.view.checked = {};
+  h.view.unsure = new Set();
+  h.view.watching = new Map();
   expect(h.view.due(Date.now(), h.snapshot, h.paneSnapshot)).toEqual(new Set([
     JSON.stringify([null, "/main"]), JSON.stringify([null, "/elsewhere"]),
   ]));
