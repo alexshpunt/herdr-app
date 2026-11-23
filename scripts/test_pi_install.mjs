@@ -28,7 +28,7 @@ async function fixture(work) {
 }
 test('installs every embedded runtime file with its exact source', () => fixture(async root => {
   const runtime = await Promise.all([...source.matchAll(/"([\w.-]+)",\s*include_str!\("([^"\n]+)"\)/g)].map(async ([, name, relative]) => [name, await readFile(path.resolve(here, '../src', relative), 'utf8')]));
-  assert.deepEqual(runtime.map(([name]) => name).sort(), ['client.mjs', 'index.ts', 'inspect.mjs', 'ipc.mjs', 'orchestration.mjs', 'package.json', 'request.mjs']);
+  assert.deepEqual(runtime.map(([name]) => name).sort(), ['client.mjs', 'index.ts', 'inspect.mjs', 'ipc.mjs', 'orchestration.mjs', 'package.json', 'request.mjs', 'resume.mjs']);
   const result = run(root, runtime);
   assert.equal(result.status, 0, result.stderr);
   for (const [name, content] of runtime) assert.equal(await readFile(path.join(root, 'extensions', 'herdr-orchestration', name), 'utf8'), content);

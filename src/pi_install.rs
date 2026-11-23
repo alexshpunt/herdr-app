@@ -38,6 +38,10 @@ const FILES: &[(&str, &str)] = &[
         "request.mjs",
         include_str!("../integrations/orchestration/request.mjs"),
     ),
+    (
+        "resume.mjs",
+        include_str!("../integrations/orchestration/resume.mjs"),
+    ),
 ];
 const PREFIX: &str = "herdr-pi-install:";
 const INSTALLER: &str = r###"

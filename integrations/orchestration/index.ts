@@ -31,6 +31,32 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   pi.registerFlag('herdr-workflow-model', { type: 'string', description: 'Exact model requested by a Herdr workflow launch' });
   pi.registerFlag('herdr-workflow-thinking', { type: 'string', description: 'Exact thinking level requested by a Herdr workflow launch' });
   pi.registerFlag('herdr-depth', { type: 'string', description: 'Nesting depth of a Herdr replica or sub-agent; set by the launch' });
+  // After a reboot or a lost holder, the core reopens this session in the terminal
+  // instead of a bare shell. This works whether or not Workflow is turned on.
+  let resume: ReturnType<typeof import('./resume.mjs').createResume> | undefined;
+  let resumeWarned = false;
+  const followSession = async (ctx: ExtensionContext) => {
+    // A print-mode run (`pi -p`) ends by itself: there is no conversation to reopen.
+    if (!process.env.HC_TERMINAL_ID || !process.env.HC_TERMINAL_SOCKET || !ctx.hasUI) return;
+    try {
+      if (!resume) {
+        const url = new URL('./resume.mjs', import.meta.url); url.searchParams.set('load', randomUUID());
+        const { createResume } = await importFresh(url.href) as typeof import('./resume.mjs');
+        resume = createResume();
+      }
+      const flags = Object.fromEntries(['herdr-workflow-model', 'herdr-workflow-thinking', 'herdr-depth'].map(name => [name, pi.getFlag(name)]));
+      await resume.update({ sessionFile: ctx.sessionManager.getSessionFile(), flags });
+    } catch (value) {
+      if (resumeWarned) return;
+      resumeWarned = true;
+      ctx.ui.notify(`Herdr agents: this session will not reopen by itself after a reboot: ${value instanceof Error ? value.message : String(value)}`, 'warning');
+    }
+  };
+  // Not awaited: a slow core must not hold up Pi's start or the end of a turn.
+  pi.on('session_start', async (_event, ctx) => { void followSession(ctx); });
+  // A Pi started from a shell becomes the terminal's foreground a moment after it starts.
+  pi.on('agent_end', async (_event, ctx) => { void followSession(ctx); });
+  pi.on('session_shutdown', async event => { try { await resume?.shutdown(event.reason); } catch { /* The next loss then reopens it once. */ } });
   // Read on every reload, not through a cached helper module.
   try {
     const features = JSON.parse(readFileSync(path.join(getAgentDir(), 'herdr-features.json'), 'utf8'));
