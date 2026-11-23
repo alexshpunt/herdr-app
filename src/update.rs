@@ -13,6 +13,9 @@
 //! The core is checked on the same clock (`core/latest.json`): a newer core
 //! of the same generation is offered (also applied after an app update), unless
 //! a package manager owns it. Within a generation a newer core only adds.
+//!
+//! FORK: the fork's Windows release builds read the fork's GitHub releases
+//! instead (see `fork_feed`) and also install a newer core by themselves.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -73,6 +76,27 @@ fn releases() -> String {
     std::env::var("HERDR_RELEASES_URL").unwrap_or_else(|_| "https://releases.herdr.dev".into())
 }
 
+// FORK: the fork's Windows release builds (`scripts/fork-package`) set
+// HERDR_FORK_RELEASE and HERDR_FORK_VERSION (`0.1.16-fork.67.1`). They update
+// the app and the core from the fork's GitHub releases, never from
+// releases.herdr.dev, which would replace the fork with the upstream app. They
+// leave HERDR_APP_RELEASE unset, so telemetry and feedback stay off.
+// HERDR_RELEASES_URL still selects a test server in upstream's layout.
+const FORK_RELEASE: bool = option_env!("HERDR_FORK_RELEASE").is_some();
+const FORK_APP_MANIFEST: &str = "https://github.com/alexshpunt/herdr-app/releases/latest/download/manifest.json";
+const FORK_CORE_MANIFEST: &str = "https://github.com/alexshpunt/herdr-core/releases/latest/download/manifest.json";
+
+/// This build's version: a fork release's build-numbered one, else the crate's.
+pub const VERSION: &str = match option_env!("HERDR_FORK_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+/// FORK: release information comes from the fork's GitHub releases.
+fn fork_feed() -> bool {
+    FORK_RELEASE && std::env::var_os("HERDR_RELEASES_URL").is_none()
+}
+
 /// The version downloaded and waiting for a restart.
 static READY: Mutex<Option<String>> = Mutex::new(None);
 
@@ -120,18 +144,18 @@ pub fn set_core(version: Option<String>, managed: Option<String>) {
 }
 
 fn checks_app() -> Option<PathBuf> {
-    root().filter(|_| option_env!("HERDR_APP_RELEASE").is_some() || std::env::var_os("HERDR_RELEASES_URL").is_some())
+    root().filter(|_| checks_core())
 }
 
 /// A release build checks the core; a source build only when pointed at a test release server.
 fn checks_core() -> bool {
-    option_env!("HERDR_APP_RELEASE").is_some() || std::env::var_os("HERDR_RELEASES_URL").is_some()
+    option_env!("HERDR_APP_RELEASE").is_some() || FORK_RELEASE || std::env::var_os("HERDR_RELEASES_URL").is_some()
 }
 
 /// For the settings screen: both programs, what's waiting, when we last looked.
 pub fn status() -> serde_json::Value {
     serde_json::json!({
-        "app": { "version": env!("CARGO_PKG_VERSION"), "ready": ready(), "updates": checks_app().is_some() },
+        "app": { "version": VERSION, "ready": ready(), "updates": checks_app().is_some() },
         "notes": crate::update_notes::notes(ready().as_deref()),
         "core": core(),
         "checked": *CHECKED.lock().unwrap(),
@@ -190,6 +214,11 @@ pub fn start() {
                 wait = RETRY;
                 succeeded = false;
             }
+            // FORK: a fork release installs a newer core of its generation by
+            // itself (terminals keep running); upstream only offers a button.
+            if core && FORK_RELEASE && auto_core_update(&self::core()) {
+                update_core();
+            }
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             *CHECKED.lock().unwrap() = checked_at(succeeded, now);
             CHECKING.store(false, Ordering::Relaxed);
@@ -219,8 +248,14 @@ struct CoreRelease {
 }
 
 fn latest_core() -> Result<CoreRelease, String> {
-    let text = curl_text(&format!("{}/core/latest.json", releases()))?;
-    serde_json::from_str(&text).map_err(|e| format!("core/latest.json: {e}"))
+    let url = if fork_feed() { FORK_CORE_MANIFEST.to_owned() } else { format!("{}/core/latest.json", releases()) };
+    let text = curl_text(&url)?;
+    serde_json::from_str(&text).map_err(|e| format!("{url}: {e}"))
+}
+
+/// FORK: whether the checker installs the newer core it found by itself.
+fn auto_core_update(core: &CoreInfo) -> bool {
+    core.ready.is_some() && core.managed.is_none() && !core.updating
 }
 
 fn after_update_target<'a>(have: &str, latest: Option<&'a CoreRelease>, generation: u64, core_min: &'a str) -> Option<&'a str> {
@@ -263,19 +298,28 @@ pub fn update_core() {
 
 /// Downloads the latest release if it's newer. Ok(Some): a version is ready.
 fn check(root: &Path) -> Result<Option<String>, String> {
+    if fork_feed() {
+        return check_manifest(root, FORK_APP_MANIFEST, None);
+    }
     check_from(root, &releases())
 }
 
 fn check_from(root: &Path, releases: &str) -> Result<Option<String>, String> {
-    let path = "app/latest.json";
-    let text = curl_text(&format!("{releases}/{path}"))?;
-    let manifest: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
-    let version = manifest["version"].as_str().ok_or(format!("{path}: no version"))?;
-    if !newer(version, env!("CARGO_PKG_VERSION")) {
+    check_manifest(root, &format!("{releases}/app/latest.json"), Some(releases))
+}
+
+/// FORK: upstream's check, with the manifest URL passed in; `notes` is the
+/// server with per-version changelogs (fork releases have none).
+fn check_manifest(root: &Path, manifest_url: &str, notes: Option<&str>) -> Result<Option<String>, String> {
+    let text = curl_text(manifest_url)?;
+    let manifest: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{manifest_url}: {e}"))?;
+    let version = manifest["version"].as_str().ok_or(format!("{manifest_url}: no version"))?;
+    if !newer(version, VERSION) {
         return Ok(None);
     }
     // Notes are optional: a missing feed must never hold up the update.
-    if !crate::update_notes::has(version)
+    if let Some(releases) = notes
+        && !crate::update_notes::has(version)
         && let Ok(text) = curl_text(&format!("{releases}/app/{version}/changelog.md"))
     {
         crate::update_notes::cache(&text);
@@ -401,6 +445,13 @@ fn version_of(app: &Path) -> Option<String> {
 
 /// `a` is a later version than `b` (semver; `0.2.0-rc.1` comes before `0.2.0`).
 pub(crate) fn newer(a: &str, b: &str) -> bool {
+    // FORK: fork builds (`0.1.22-fork.12.1`) order by their base version, then
+    // their build numbers, and come after the plain version they build on.
+    if (a.contains("-fork.") || b.contains("-fork."))
+        && let (Some(a), Some(b)) = (fork_order(a), fork_order(b))
+    {
+        return a > b;
+    }
     fn parts(v: &str) -> (Vec<u64>, Option<&str>) {
         let (core, pre) = v.trim_start_matches('v').split_once('-').map_or((v.trim_start_matches('v'), None), |(c, p)| (c, Some(p)));
         (core.split('.').map(|n| n.parse().unwrap_or(0)).collect(), pre)
@@ -414,6 +465,18 @@ pub(crate) fn newer(a: &str, b: &str) -> bool {
         },
         o => o == std::cmp::Ordering::Greater,
     }
+}
+
+/// FORK: a plain or fork version's base and build numbers, which order it;
+/// None for another pre-release.
+fn fork_order(v: &str) -> Option<(Vec<u64>, Vec<u64>)> {
+    let numbers = |s: &str| s.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u64>>>();
+    let v = v.trim_start_matches('v');
+    let (base, build) = match v.split_once('-') {
+        Some((base, suffix)) => (base, numbers(suffix.strip_prefix("fork.")?)?),
+        None => (v, Vec::new()),
+    };
+    Some((numbers(base)?, build))
 }
 
 /// A receipt is published only after the archive and its executable were verified.
@@ -464,14 +527,14 @@ pub fn apply_on_startup() -> bool {
         // SAFETY: startup runs before any app threads. Do not leak the guard
         // into the core's environment and every terminal it later starts.
         unsafe { std::env::remove_var("HERDR_APP_UPDATE_EXPECTED") };
-        if expected != env!("CARGO_PKG_VERSION") {
-            tracing::warn!("update: relaunched as {}, expected {expected}; not retrying", env!("CARGO_PKG_VERSION"));
+        if expected != VERSION {
+            tracing::warn!("update: relaunched as {}, expected {expected}; not retrying", VERSION);
         }
         return false;
     }
     let Some(root) = checks_app() else { return false };
     let staged = staged_version(&root);
-    let Some(version) = startup_target(env!("CARGO_PKG_VERSION"), staged.as_deref(), expected.as_deref()) else { return false };
+    let Some(version) = startup_target(VERSION, staged.as_deref(), expected.as_deref()) else { return false };
     if swap(&root).is_err() {
         return false;
     }
@@ -485,7 +548,7 @@ pub fn apply_on_startup() -> bool {
 pub fn apply() -> std::io::Result<bool> {
     let Some(root) = root() else { return Ok(false) };
     let staged = staged_version(&root);
-    if ready().as_deref() != staged.as_deref() || !staged.as_deref().is_some_and(|version| newer(version, env!("CARGO_PKG_VERSION"))) {
+    if ready().as_deref() != staged.as_deref() || !staged.as_deref().is_some_and(|version| newer(version, VERSION)) {
         return Ok(false);
     }
     swap(&root).map(|()| true)
