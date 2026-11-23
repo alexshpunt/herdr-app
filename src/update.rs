@@ -310,10 +310,10 @@ fn check_from(root: &Path, releases: &str) -> Result<Option<String>, String> {
 
 /// FORK: upstream's check, with the manifest URL passed in; `notes` is the
 /// server with per-version changelogs (fork releases have none).
-fn check_manifest(root: &Path, path: &str, notes: Option<&str>) -> Result<Option<String>, String> {
-    let text = curl_text(path)?;
-    let manifest: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
-    let version = manifest["version"].as_str().ok_or(format!("{path}: no version"))?;
+fn check_manifest(root: &Path, manifest_url: &str, notes: Option<&str>) -> Result<Option<String>, String> {
+    let text = curl_text(manifest_url)?;
+    let manifest: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{manifest_url}: {e}"))?;
+    let version = manifest["version"].as_str().ok_or(format!("{manifest_url}: no version"))?;
     if !newer(version, VERSION) {
         return Ok(None);
     }
