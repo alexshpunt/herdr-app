@@ -56,6 +56,7 @@ jobs:
       run:
         shell: bash
     outputs:
+      base: ${{ steps.version.outputs.base }}
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,7 +89,15 @@ jobs:
         run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
       - name: Keep unchanged sources fresh
         run: scripts/ci-sources restore
+      # The version the build reports and updates by: the crate's, then this run.
+      - id: version
+        run: |
+          base=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "version=$base-fork.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Build and pack
+        env:
+          HERDR_FORK_VERSION: ${{ steps.version.outputs.version }}
         run: scripts/fork-package
       - name: Note the sources the cache was built from
         run: scripts/ci-sources record
@@ -97,8 +106,6 @@ jobs:
         with:
           path: *cache-paths
           key: fork-v1-windows-x86_64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-      - id: version
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: herdr-app-windows-x86_64
@@ -125,20 +132,27 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE: ${{ needs.build.outputs.base }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          tag="fork-${VERSION}-${GITHUB_RUN_NUMBER}"
+          tag="fork-${BASE}-${GITHUB_RUN_NUMBER}"
+          if [[ $GITHUB_RUN_ATTEMPT != 1 ]]; then tag="$tag-$GITHUB_RUN_ATTEMPT"; fi
           cp distribution/fork-install.ps1 dist/install.ps1
+          # Installed fork builds read this from the latest release to update themselves.
+          sha=$(cut -d' ' -f1 dist/herdr-app-windows-x86_64.tar.gz.sha256)
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/herdr-app-windows-x86_64.tar.gz"
+          jq -n --arg version "$VERSION" --arg url "$url" --arg sha "$sha" \
+            '{version: $version, targets: {"windows-x86_64": {url: $url, sha256: $sha}}}' > dist/manifest.json
           cat > notes.md <<NOTES
-          Windows x64 build of the fork at ${GITHUB_SHA::7} (herdr-app ${VERSION}). Not signed; it does not update itself.
+          Windows x64 build of the fork at ${GITHUB_SHA::7} (herdr-app ${VERSION}). Not signed. Installed fork builds update themselves and their herdr-core.
 
-          Install or update:
+          Install:
 
           \`\`\`
           powershell -c "irm https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.ps1 | iex"
           \`\`\`
           NOTES
           gh release create "$tag" \
-            dist/herdr-app-windows-x86_64.tar.gz dist/herdr-app-windows-x86_64.tar.gz.sha256 dist/install.ps1 \
-            --target "$GITHUB_SHA" --title "Herdr App ${VERSION} fork build ${GITHUB_RUN_NUMBER}" \
+            dist/herdr-app-windows-x86_64.tar.gz dist/herdr-app-windows-x86_64.tar.gz.sha256 dist/install.ps1 dist/manifest.json \
+            --target "$GITHUB_SHA" --title "Herdr App ${VERSION}" \
             --notes-file notes.md --generate-notes --latest
