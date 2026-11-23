@@ -38,9 +38,27 @@ The installer verifies the app build's SHA-256 and stages the personal
 herdr-core fork and its checksum from the same GitHub release before replacing
 anything. It installs the core or updates the core the app uses, keeping running
 terminals alive. It replaces `%LOCALAPPDATA%\Programs\herdr-app`; an open app
-keeps running until it quits. These app builds do not update themselves, because
-upstream's updater would replace the fork with the upstream app. Run the
-installer again for newer builds.
+keeps running until it quits.
+
+## Updates
+
+An installed fork build updates itself and its core from the fork's GitHub
+releases, never from upstream's release server, which would replace the fork
+with the upstream app. About every hour it reads `manifest.json` of the latest
+herdr-app release, downloads a newer build, checks its SHA-256 and switches to
+it when the app quits or you press Restart. The first start after that brings
+herdr-core to the latest herdr-core fork release. When only a newer core release
+appears, the app runs `hc update` by itself; terminals and agents keep running
+and the app reconnects. Settings → Updates shows both versions and what is
+waiting.
+
+Each build reports its own version, the crate's version followed by the release
+run, such as `0.1.16-fork.67.1`; fork builds order by those numbers and come
+after the plain upstream version they build on. Builds older than this feature
+cannot update themselves: run the installer once more. Source builds and local
+`just install` builds do not update. `scripts/fork-package`, which the release
+workflow runs, sets `HERDR_FORK_RELEASE` and `HERDR_FORK_VERSION`; it leaves
+upstream's `HERDR_APP_RELEASE` unset, so telemetry and feedback stay off.
 
 Upstream's `release.yml` publishes only for its maintainer and is disabled in
 this fork (`gh workflow disable release.yml`). Do not re-enable it.
