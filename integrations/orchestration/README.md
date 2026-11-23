@@ -10,6 +10,12 @@ Three tools start agents. `agent`, from this extension, starts an independent ag
 
 `agent` uses Pi's native deferred exposure in the `Herdr` namespace. Discover it through `tool_search` to start independent user-owned agents in visible App tabs. It takes a workflow profile ID; agents read `herdr:profiles` for the current profiles and their descriptions. Use the `pi-agent-herdr` extension's `read`, `search` and `write` on `herdr:` resources to find, inspect and message them, and its deferred `wait_for_agents` in the same `Herdr` namespace to wait until they stop working. `delete` on `herdr:<terminal>` closes an agent the caller started for itself or one the user asked it to close; other agents stay with the user in the App's UI or CLI.
 
+## Resume after a lost terminal
+
+A Pi that owns a kept App terminal sets the terminal's recovery command (`terminal.keep` with `recover`, a herdr-core fork feature) to `node <pi cli> --session <session file>` plus its Herdr launch flags, never its first task message. After the terminal's program is lost to a reboot, a stopped core or a lost holder, the core reopens that session there once, in the terminal's folder; when that Pi ends, the terminal gets its shell. The resumed Pi waits for the user: nothing is sent to it. This runs whether or not Workflow is on.
+
+The command follows the session the Pi shows: it is set on session start and refreshed after each turn, so `/new`, `/resume` and forks move it, and a Pi started from a shell sets it once the core sees it in the foreground. A deliberate quit (`/quit`, Ctrl+D) forgets it, so a closed Pi stays closed; a reload, a session switch and a SIGTERM or SIGHUP from a shutdown or a closed terminal keep it. A nested Pi, a terminal the App does not keep and a Pi outside Herdr leave it alone. A core without the feature leaves terminals as plain shells after a loss, and the Pi shows one warning.
+
 ## Placement
 
 Each agent that `agent` starts opens in a new space of its own, named after the agent, with one tab of the same name. The space is on the requested `machine`, else on the calling Pi's machine, and starts in the given folder. It does not take focus, so the caller's space and tab bar stay as they were. The tool has no way to put an agent into an existing space. A startup fallback opens as a second tab in its primary's space. Apps opened for the agent (Linear, GitHub, Files, Diff, reviews) open as tabs in its space. `agent.remove`, from the user or from `delete(herdr:<terminal>)`, closes the agent's tab; the space closes with its last tab.
