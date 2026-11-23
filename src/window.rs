@@ -487,6 +487,8 @@ pub struct AppWindow {
     cwds: HashMap<String, String>,
     /// The folders programs reported themselves (OSC 7), by address.
     reported: HashMap<String, Reported>,
+    /// Folders a quitting program handed to the shell it returns to, by address.
+    handoffs: HashMap<String, Handoff>,
     /// Monotonic request identity prevents late replies from reviving another report.
     next_report_check: u64,
     /// Each machine's own hostname (None: this one), to check a report's host.
@@ -622,6 +624,7 @@ impl AppWindow {
             listed_once: false,
             cwds: HashMap::new(),
             reported: HashMap::new(),
+            handoffs: HashMap::new(),
             next_report_check: 0,
             hostnames: HashMap::new(),
             folders_checked: HashMap::new(),
@@ -2454,6 +2457,7 @@ impl AppWindow {
             }
         }
         self.track_folders(cx);
+        self.deliver_handoffs(cx);
         for t in self.terms.values() {
             if self.live.get(&t.address).is_some_and(|r| r["pid"].as_u64().is_some()) {
                 t.view.update(cx, |v, cx| v.reattach_if_needed(self.core.clone(), cx));
@@ -2618,12 +2622,30 @@ impl AppWindow {
     /// that program stays in front (see `reported_folders`).
     fn folder_reported(&mut self, addr: &str, report: Option<crate::folder_report::Report>, cx: &mut Context<Self>) {
         let news = match report {
+            Some(report) if report.handoff => {
+                // Only from the program core has seen in front of this terminal:
+                // a replay or another program's report moves no shell.
+                let known = self.reported.get(addr).is_some_and(|r| {
+                    r.verification.ever_confirmed && r.report.pid == report.pid && r.report.token == report.token
+                });
+                if known {
+                    self.handoffs.insert(addr.to_owned(), Handoff { report, at: Instant::now() });
+                }
+                // Its program is leaving: the folder no longer holds.
+                self.reported.remove(addr).is_some()
+            }
             Some(report) => {
+                // A program reporting itself again is no longer leaving; a shell's own
+                // report at its prompt carries no reporter and keeps the handoff.
+                if report.pid.is_some() {
+                    self.handoffs.remove(addr);
+                }
                 // Repeated identical reports keep the observation already in flight.
                 if self.reported.get(addr).is_some_and(|r| r.report == report) {
                     false
                 } else {
-                    self.reported.insert(addr.to_owned(), Reported::new(report, self.live.get(addr)));
+                    let next = Reported::replacing(self.reported.get(addr), report, self.live.get(addr));
+                    self.reported.insert(addr.to_owned(), next);
                     true
                 }
             }
@@ -2678,10 +2700,7 @@ impl AppWindow {
             if machine.is_none() && crate::folder_report::is_windows(&r.report.path) != cfg!(windows) {
                 continue;
             }
-            let name = match self.hostnames.get(&machine) {
-                Some(Hostname::Known(name)) => Some(name.as_str()),
-                _ => None,
-            };
+            let name = known_hostname(&self.hostnames, &machine);
             match crate::folder_report::on_machine(r.report.host.as_deref(), name) {
                 Some(true) => {
                     held.insert(addr.clone(), r.report.path.clone());
@@ -2696,6 +2715,55 @@ impl AppWindow {
             self.ask_hostname(machine, cx);
         }
         held
+    }
+
+    /// Types the move into the shell a handed-off program returned to, once
+    /// that shell is in front again (`handoff_step`).
+    fn deliver_handoffs(&mut self, cx: &mut Context<Self>) {
+        let mut typed = Vec::new();
+        let mut ask = HashSet::new();
+        let (live, hostnames) = (&self.live, &self.hostnames);
+        self.handoffs.retain(|addr, h| {
+            if h.at.elapsed() > HANDOFF_WAIT {
+                return false;
+            }
+            // A listing can miss a terminal of another machine for a moment.
+            let Some(rec) = live.get(addr) else { return true };
+            let machine = addr.split_once('/').map(|(m, _)| m.to_owned());
+            match handoff_step(addr, rec, &h.report, known_hostname(hostnames, &machine)) {
+                HandoffStep::Wait => true,
+                HandoffStep::AskHost => {
+                    ask.insert(machine);
+                    true
+                }
+                HandoffStep::Drop => false,
+                HandoffStep::Type(line) => {
+                    // A handoff report always names its reporter's token.
+                    if let Some(token) = h.report.token.clone() {
+                        typed.push((addr.clone(), token, line));
+                    }
+                    false
+                }
+            }
+        });
+        for machine in ask {
+            self.ask_hostname(machine, cx);
+        }
+        for (addr, token, line) in typed {
+            let core = self.core.clone();
+            cx.background_executor().spawn(async move {
+                match claim_handoff(&core, &addr, &token) {
+                    // The core waits for a person's draft and pastes as a person would.
+                    Ok(true) => {
+                        if let Err(e) = core.call_timeout("terminal.send", json!({"terminal": addr, "text": line}), Duration::from_secs(90)) {
+                            tracing::warn!(terminal = %addr, "cannot move the shell after a handoff: {e:#}");
+                        }
+                    }
+                    Ok(false) => tracing::debug!(terminal = %addr, "another app moved the shell after this handoff"),
+                    Err(e) => tracing::warn!(terminal = %addr, "cannot claim a handoff, so the shell stays: {e:#}"),
+                }
+            }).detach();
+        }
     }
 
     fn check_reporter(&mut self, addr: String, pid: u64, token: String, id: u64, cx: &mut Context<Self>) {
@@ -6060,6 +6128,17 @@ impl Reported {
         Self { report, pid, verification: Default::default(), last_check: None }
     }
 
+    /// A new report replacing `previous`. The same identified reporter in
+    /// another folder keeps the fact that core has seen it in front, so a
+    /// handoff right after a move still counts as that reporter's.
+    fn replacing(previous: Option<&Reported>, report: crate::folder_report::Report, rec: Option<&Value>) -> Self {
+        let mut next = Self::new(report, rec);
+        if let Some(previous) = previous.filter(|p| p.report.pid.is_some() && p.report.pid == next.report.pid && p.report.token == next.report.token) {
+            next.verification.ever_confirmed = previous.verification.ever_confirmed;
+        }
+        next
+    }
+
     fn confirmed(&self) -> bool {
         self.report.pid.is_none() || self.verification.confirmed
     }
@@ -6070,6 +6149,84 @@ impl Reported {
         let Some(front) = rec.and_then(front_pid) else { return true };
         if self.pid.is_none() { self.pid = Some(front); }
         self.pid == Some(front)
+    }
+}
+
+/// A folder a quitting program handed to the shell it returns to.
+struct Handoff {
+    report: crate::folder_report::Report,
+    at: Instant,
+}
+
+/// How long a handoff waits for its shell to be in front again.
+const HANDOFF_WAIT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, PartialEq)]
+enum HandoffStep {
+    /// Its program still runs, or something else is in front.
+    Wait,
+    /// The report's host needs the terminal machine's hostname first.
+    AskHost,
+    /// Nothing to type: the terminal ended, the folder is on another machine,
+    /// or the shell is one this can't quote for.
+    Drop,
+    /// The line to type into the shell.
+    Type(String),
+}
+
+/// What a handoff does with the terminal's core record now. Only the terminal's
+/// own shell, observed in front with another PID than the reporter's, gets the line.
+fn handoff_step(addr: &str, rec: &Value, report: &crate::folder_report::Report, hostname: Option<&str>) -> HandoffStep {
+    if rec.get("state").and_then(Value::as_str) != Some("live") {
+        return HandoffStep::Drop;
+    }
+    // Without an observed foreground nobody can tell the program has gone.
+    let Some(front) = rec.pointer("/foreground/pid").and_then(Value::as_u64) else { return HandoffStep::Wait };
+    if Some(front) == report.pid || Some(front) != rec.get("pid").and_then(Value::as_u64) {
+        return HandoffStep::Wait;
+    }
+    let machine = addr.split_once('/').map(|(m, _)| m);
+    if machine.is_none() && crate::folder_report::is_windows(&report.path) != cfg!(windows) {
+        return HandoffStep::Drop;
+    }
+    match crate::folder_report::on_machine(report.host.as_deref(), hostname) {
+        None => return HandoffStep::AskHost,
+        Some(false) => return HandoffStep::Drop,
+        Some(true) => {}
+    }
+    let first = |v: Option<&Value>| v.and_then(|a| a.get(0)).and_then(Value::as_str).map(str::to_owned);
+    let shell = first(rec.pointer("/foreground/argv")).or_else(|| first(rec.get("argv")));
+    shell.and_then(|shell| crate::folder_report::cd_command(&shell, &report.path)).map_or(HandoffStep::Drop, HandoffStep::Type)
+}
+
+/// Claims a handoff in its terminal machine's core, so it is typed once however
+/// many Apps show that terminal. False: another App has claimed it.
+fn claim_handoff(core: &Core, addr: &str, token: &str) -> anyhow::Result<bool> {
+    use crate::folder_report::{claim, HANDOFF_CLAIMS};
+    let (on, terminal) = match addr.split_once('/') {
+        Some((machine, terminal)) => (Some(machine), terminal),
+        None => (None, addr),
+    };
+    let timeout = Duration::from_secs(10);
+    // Writes from other Apps can win a few rounds; each loser reads again.
+    for _ in 0..5 {
+        let current = core.call_timeout("doc.get", json!({"name": HANDOFF_CLAIMS, "on": on}), timeout)?;
+        let version = current["version"].as_u64().ok_or_else(|| anyhow::anyhow!("the handoff claims have no version"))?;
+        let Some(value) = claim(&current["value"], terminal, token) else { return Ok(false) };
+        match core.call_timeout("doc.set", json!({"name": HANDOFF_CLAIMS, "on": on, "version": version, "value": value}), timeout) {
+            Ok(_) => return Ok(true),
+            Err(e) if crate::hc::error_kind(&e) == Some("conflict") => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    anyhow::bail!("the handoff claims kept changing")
+}
+
+/// The hostname already learned for a machine (None: this one).
+fn known_hostname<'a>(hostnames: &'a HashMap<Option<String>, Hostname>, machine: &Option<String>) -> Option<&'a str> {
+    match hostnames.get(machine) {
+        Some(Hostname::Known(name)) => Some(name),
+        _ => None,
     }
 }
 
@@ -6667,6 +6824,62 @@ mod tests {
         assert!(early.still_in_front(None));
         assert!(early.still_in_front(Some(&json!({ "pid": 20 }))));
         assert!(!early.still_in_front(Some(&json!({ "pid": 20, "foreground": { "pid": 21 } }))));
+    }
+
+    #[test]
+    fn a_handoff_types_into_the_terminals_own_shell_once_its_program_has_gone() {
+        use super::{handoff_step, HandoffStep};
+        use serde_json::json;
+        let report = crate::folder_report::parse("file://box/srv/next?herdr-pid=21&herdr-token=t&herdr-handoff=1").unwrap();
+        let rec = |front: serde_json::Value| json!({ "state": "live", "pid": 10, "argv": ["/bin/bash"], "foreground": front });
+        let shell = rec(json!({ "pid": 10, "argv": ["bash"] }));
+        // A terminal of another machine: its path need not be in this system's form
+        // (`a_windows_folder_never_reaches_a_local_unix_shell` covers that).
+        let line = HandoffStep::Type(" cd -- '/srv/next'".into());
+        // Pi still in front, or no observation of what is.
+        assert_eq!(handoff_step("box/t1", &rec(json!({ "pid": 21, "argv": ["pi"] })), &report, Some("box")), HandoffStep::Wait);
+        assert_eq!(handoff_step("box/t1", &json!({ "state": "live", "pid": 10 }), &report, Some("box")), HandoffStep::Wait);
+        // Another program than the terminal's own shell: no keys go to it.
+        assert_eq!(handoff_step("box/t1", &rec(json!({ "pid": 30, "argv": ["vim"] })), &report, Some("box")), HandoffStep::Wait);
+        assert_eq!(handoff_step("box/t1", &shell, &report, Some("box")), line);
+        // Another machine's terminal: its own hostname decides.
+        assert_eq!(handoff_step("vps/t1", &shell, &report, None), HandoffStep::AskHost);
+        assert_eq!(handoff_step("vps/t1", &shell, &report, Some("vps")), HandoffStep::Drop);
+        assert_eq!(handoff_step("vps/t1", &shell, &report, Some("box.lan")), line);
+        // An ended terminal, or a shell it can't quote for.
+        assert_eq!(handoff_step("box/t1", &json!({ "state": "finished", "pid": 10, "foreground": { "pid": 10 } }), &report, Some("box")), HandoffStep::Drop);
+        assert_eq!(handoff_step("box/t1", &rec(json!({ "pid": 10, "argv": ["nu"] })), &report, Some("box")), HandoffStep::Drop);
+        // Without the foreground's argv, the terminal's own.
+        assert_eq!(handoff_step("box/t1", &rec(json!({ "pid": 10 })), &report, Some("box")), line);
+    }
+
+    #[test]
+    fn a_windows_folder_never_reaches_a_local_unix_shell() {
+        use super::{handoff_step, HandoffStep};
+        use serde_json::json;
+        let report = crate::folder_report::parse("file:///C:/dev?herdr-pid=21&herdr-token=t&herdr-handoff=1").unwrap();
+        let rec = json!({ "state": "live", "pid": 10, "foreground": { "pid": 10, "argv": ["pwsh.exe"] } });
+        let step = handoff_step("t1", &rec, &report, None);
+        if cfg!(windows) {
+            assert_eq!(step, HandoffStep::Type("Set-Location -LiteralPath 'C:\\dev'".into()));
+        } else {
+            assert_eq!(step, HandoffStep::Drop);
+        }
+    }
+
+    #[test]
+    fn a_handoff_right_after_a_move_still_comes_from_a_seen_reporter() {
+        let report = |path: &str, token: &str| crate::folder_report::parse(&format!("file://box{path}?herdr-pid=21&herdr-token={token}")).unwrap();
+        let mut before = super::Reported::new(report("/src/main", "t"), None);
+        assert!(before.verification.begin(1));
+        assert!(before.verification.finish(1, Some(true)));
+        // Moved before a check of the new folder: the reporter was already seen in front.
+        let moved = super::Reported::replacing(Some(&before), report("/src/feature", "t"), None);
+        assert!(moved.verification.ever_confirmed);
+        assert!(!moved.confirmed(), "the new folder still waits for its own check");
+        // Another process instance with the same PID was never seen.
+        assert!(!super::Reported::replacing(Some(&before), report("/src/feature", "u"), None).verification.ever_confirmed);
+        assert!(!super::Reported::replacing(None, report("/src/feature", "t"), None).verification.ever_confirmed);
     }
 
     #[test]

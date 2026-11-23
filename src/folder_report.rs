@@ -3,6 +3,9 @@
 //! Pi's Teleport sends it when a session starts and after every move. It is the
 //! only way to know where a program is when its process folder differs from the
 //! session folder, such as after Pi moves to another worktree.
+//!
+//! Teleport's last report before Pi quits can be a handoff (`herdr-handoff=1`):
+//! the shell Pi returns to should follow it there (`cd_command`).
 
 /// Where a program said its terminal is, and the machine it named, if any.
 #[derive(Clone, Debug, PartialEq)]
@@ -14,6 +17,9 @@ pub struct Report {
     pub pid: Option<u64>,
     /// An opaque identity issued by the terminal's holder.
     pub token: Option<String>,
+    /// The reporter is quitting: the shell it returns to should move to `path`.
+    /// Only with an identified reporter (`pid` and `token`).
+    pub handoff: bool,
 }
 
 /// Validation of an identified reporter. Unknown observations hide the report
@@ -21,7 +27,8 @@ pub struct Report {
 #[derive(Debug, Default, PartialEq)]
 pub struct Verification {
     pub confirmed: bool,
-    ever_confirmed: bool,
+    /// The core has seen this reporter in front at least once.
+    pub ever_confirmed: bool,
     pending: Option<u64>,
 }
 
@@ -72,11 +79,12 @@ pub fn parse(raw: &str) -> Option<Report> {
     }
     let mut pid = None;
     let mut token = None;
+    let mut handoff = false;
     if let Some((_, uri)) = raw.split_once("://") {
         let uri = uri.split('#').next()?;
         if let Some((_, query)) = uri.split_once('?') {
             for part in query.split('&') {
-                if matches!(part, "herdr-pid" | "herdr-token") {
+                if matches!(part, "herdr-pid" | "herdr-token" | "herdr-handoff") {
                     return None;
                 }
                 if let Some(value) = part.strip_prefix("herdr-pid=") {
@@ -93,11 +101,16 @@ pub fn parse(raw: &str) -> Option<Report> {
                         return None;
                     }
                     token = Some(value);
+                } else if let Some(value) = part.strip_prefix("herdr-handoff=") {
+                    if handoff || value != "1" {
+                        return None;
+                    }
+                    handoff = true;
                 }
             }
         }
     }
-    if token.is_some() && pid.is_none() {
+    if (token.is_some() && pid.is_none()) || (handoff && token.is_none()) {
         return None;
     }
     let (host, path) = match raw.split_once("://") {
@@ -131,6 +144,7 @@ pub fn parse(raw: &str) -> Option<Report> {
         path: native(&path)?,
         token,
         pid,
+        handoff,
     })
 }
 
@@ -149,6 +163,45 @@ pub fn on_machine(host: Option<&str>, name: Option<&str>) -> Option<bool> {
 /// share's (`\\server\share`), not a Unix one.
 pub fn is_windows(path: &str) -> bool {
     path.starts_with(r"\\") || path.as_bytes().get(1) == Some(&b':')
+}
+
+/// The line that moves a shell to `path` after a handoff, named by the shell's
+/// program (`/bin/bash`, `-zsh`, `pwsh.exe`). A leading space keeps it out of
+/// bash's default history (`HISTCONTROL=ignoreboth`), zsh's with
+/// `HIST_IGNORE_SPACE`, and fish's. None: a shell this can't quote for, or a
+/// path a single line can't carry.
+pub fn cd_command(shell: &str, path: &str) -> Option<String> {
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return None;
+    }
+    let name = shell.rsplit(['/', '\\']).next().unwrap_or(shell).trim_start_matches('-').to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    match name {
+        "bash" | "zsh" | "sh" | "dash" | "ksh" | "mksh" | "ash" => Some(format!(" cd -- '{}'", path.replace('\'', r"'\''"))),
+        "fish" => Some(format!(" cd '{}'", path.replace('\\', r"\\").replace('\'', r"\'"))),
+        "pwsh" | "powershell" => Some(format!("Set-Location -LiteralPath {}", crate::programs::powershell_quote(path))),
+        _ => None,
+    }
+}
+
+/// The core document, on a terminal's machine, that lists the handoffs an App
+/// has typed there, so a terminal shown by several Apps gets one `cd`.
+pub const HANDOFF_CLAIMS: &str = "herdr-app-handoffs";
+
+/// The latest claims kept: far more than handoffs that wait at the same time.
+const CLAIMS_KEPT: usize = 64;
+
+/// `claims` with this handoff added, or None when an App already claimed it.
+/// A reporter's token is unique in its terminal, so the pair names one quit.
+pub fn claim(claims: &serde_json::Value, terminal: &str, token: &str) -> Option<serde_json::Value> {
+    let entry = format!("{terminal} {token}");
+    let mut list = claims.as_array().cloned().unwrap_or_default();
+    if list.iter().any(|c| c.as_str() == Some(entry.as_str())) {
+        return None;
+    }
+    list.push(entry.into());
+    let stale = list.len().saturating_sub(CLAIMS_KEPT);
+    Some(serde_json::Value::Array(list.split_off(stale)))
 }
 
 /// Percent-decoding of a URI part into UTF-8 text.
@@ -211,7 +264,7 @@ fn native(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_windows, on_machine, parse, Report};
+    use super::{cd_command, claim, is_windows, on_machine, parse, Report};
 
     fn report(host: Option<&str>, path: &str) -> Option<Report> {
         Some(Report {
@@ -219,6 +272,7 @@ mod tests {
             path: path.to_owned(),
             pid: None,
             token: None,
+            handoff: false,
         })
     }
 
@@ -309,6 +363,54 @@ mod tests {
         assert!(parse("file://box/src?herdr-pid=42&herdr-token").is_none());
         assert!(parse("file://box/src?herdr-pid=0").is_none());
     }
+
+    #[test]
+    fn reads_a_handoff_only_from_an_identified_reporter() {
+        let report = parse("file://box/src?herdr-pid=42&herdr-token=t&herdr-handoff=1").unwrap();
+        assert!(report.handoff);
+        assert_eq!(report.path, "/src");
+        assert!(!parse("file://box/src?herdr-pid=42&herdr-token=t").unwrap().handoff);
+        assert!(parse("file://box/src?herdr-pid=42&herdr-handoff=1").is_none(), "no token");
+        assert!(parse("file://box/src?herdr-handoff=1").is_none(), "no reporter");
+        assert!(parse("file://box/src?herdr-pid=42&herdr-token=t&herdr-handoff=yes").is_none());
+        assert!(parse("file://box/src?herdr-pid=42&herdr-token=t&herdr-handoff").is_none());
+        assert!(parse("file://box/src?herdr-pid=42&herdr-token=t&herdr-handoff=1&herdr-handoff=1").is_none());
+        assert!(!parse("file://box/src?herdr-pid=42&herdr-token=t#herdr-handoff=1").unwrap().handoff, "a fragment is no query");
+    }
+
+    #[test]
+    fn quotes_the_cd_for_each_shell() {
+        assert_eq!(cd_command("/bin/bash", "/srv/it's here").as_deref(), Some(r" cd -- '/srv/it'\''s here'"));
+        assert_eq!(cd_command("-zsh", "/srv/a b").as_deref(), Some(" cd -- '/srv/a b'"));
+        assert_eq!(cd_command("sh", "/x").as_deref(), Some(" cd -- '/x'"));
+        assert_eq!(cd_command("/usr/bin/fish", r"/srv/it's\x").as_deref(), Some(r" cd '/srv/it\'s\\x'"));
+        assert_eq!(
+            cd_command(r"C:\Program Files\PowerShell\7\pwsh.exe", "C:\\dev\\it's \u{2019}q").as_deref(),
+            Some("Set-Location -LiteralPath 'C:\\dev\\it''s \u{2019}\u{2019}q'")
+        );
+        assert_eq!(cd_command("powershell.exe", r"C:\x").as_deref(), Some(r"Set-Location -LiteralPath 'C:\x'"));
+        assert_eq!(cd_command("nu", "/x"), None, "a shell it can't quote for");
+        assert_eq!(cd_command("node", "/x"), None);
+        assert_eq!(cd_command("bash", "/a\nrm -rf b"), None, "a line break would run a second command");
+        assert_eq!(cd_command("bash", ""), None);
+    }
+
+    #[test]
+    fn claims_each_handoff_once_and_keeps_only_recent_claims() {
+        use serde_json::{json, Value};
+        let first = claim(&Value::Null, "t1", "a").unwrap();
+        assert_eq!(first, json!(["t1 a"]));
+        assert_eq!(claim(&first, "t1", "a"), None, "another App already typed it");
+        assert_eq!(claim(&first, "t1", "b").unwrap(), json!(["t1 a", "t1 b"]), "the next quit in that terminal");
+        assert_eq!(claim(&first, "t2", "a").unwrap(), json!(["t1 a", "t2 a"]));
+        let mut claims = Value::Null;
+        for n in 0..70 {
+            claims = claim(&claims, "t1", &n.to_string()).unwrap();
+        }
+        let list = claims.as_array().unwrap();
+        assert_eq!((list.len(), list[0].as_str(), list[63].as_str()), (64, Some("t1 6"), Some("t1 69")));
+    }
+
     #[test]
     fn reads_reporter_pid_without_confusing_uri_fragments() {
         assert_eq!(parse("file://box/src?herdr-pid=42").unwrap().pid, Some(42));
