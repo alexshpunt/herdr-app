@@ -2,10 +2,16 @@
 # Fork build for Windows: dist/herdr-app-windows-x86_64.tar.gz and its .sha256.
 #
 # Unlike scripts/package this does not set HERDR_APP_RELEASE: such a build
-# would check releases.herdr.dev and replace itself with the upstream app. The
-# fork is updated by running its installer again (distribution/fork-install.ps1).
+# would check releases.herdr.dev and replace itself with the upstream app, and
+# would send upstream's telemetry. It sets HERDR_FORK_RELEASE instead, so the
+# app updates itself and its core from the fork's GitHub releases, and reports
+# HERDR_FORK_VERSION (`0.1.16-fork.67.1`: run and attempt of the release build).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+[[ ${HERDR_FORK_VERSION:-} =~ ^[0-9]+\.[0-9]+\.[0-9]+-fork\.[1-9][0-9]*\.[1-9][0-9]*$ ]] ||
+  { echo "fork-package: set HERDR_FORK_VERSION like 0.1.16-fork.67.1" >&2; exit 1; }
+export HERDR_FORK_VERSION HERDR_FORK_RELEASE=1
 
 target=windows-x86_64
 archive="dist/herdr-app-$target.tar.gz"
@@ -14,6 +20,8 @@ for notice in LICENSE THIRD-PARTY-NOTICES; do
 done
 
 cargo build --release --locked
+[[ $(target/release/herdr-app.exe --version) == "herdr-app $HERDR_FORK_VERSION" ]] ||
+  { echo "fork-package: the build does not report $HERDR_FORK_VERSION" >&2; exit 1; }
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

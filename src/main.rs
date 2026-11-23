@@ -143,7 +143,7 @@ fn main() {
         Some("-h" | "--help" | "help") => return print!("{HELP}"),
         Some("--skill") => return print!("{}", include_str!("SKILL.md")),
         Some("--browser-api") => return println!("{}", serde_json::json!({"version": 1, "module": "herdr-browser"})),
-        Some("-V" | "--version" | "version") => return println!("herdr-app {}", env!("CARGO_PKG_VERSION")),
+        Some("-V" | "--version" | "version") => return println!("herdr-app {}", crate::update::VERSION),
         Some(other) => {
             eprint!("herdr-app: unknown argument {other:?}\n\n{HELP}");
             std::process::exit(2);
