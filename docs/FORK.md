@@ -179,6 +179,20 @@ in its system's form: a Unix path from WSL started in a Windows terminal is igno
 Otherwise the folder of the process in front applies, as before. The core replays the
 last report when the app reattaches, so it survives an app restart.
 
+When Pi quits after a move, Teleport's last report carries `herdr-handoff=1`. Herdr
+accepts it only from the process it already verified in that terminal; a replay after an
+app restart has no verified process and moves nothing. The handoff ends the reported
+folder and waits up to 30 seconds for the terminal's own shell (its root process) to be
+in front with another PID. Herdr then claims the handoff in the `herdr-app-handoffs`
+document of the terminal's core, so when several apps show the terminal only one types.
+It sends one line through the core's `terminal.send`, which waits for the person's
+unfinished input like any agent message: ` cd -- '<folder>'` for bash, zsh and other
+POSIX shells (sh, dash, ksh, mksh, ash), ` cd '<folder>'` for fish (the leading space
+keeps it out of history where the shell ignores such lines), and
+`Set-Location -LiteralPath '<folder>'` for PowerShell. Nothing is typed for another
+program in front, another shell, an ended terminal, a folder on another machine or a
+path with control characters.
+
 ## Native view limits
 
 The page keeps its state when its tab is inactive. Native pixels always draw

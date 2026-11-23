@@ -225,6 +225,11 @@ the highlighted line shows where it will land.
   terminals. For a UNC folder Teleport percent-encodes the UNC path under the
   reporting machine's host; ordinary `file://server/share` is ambiguous with
   SSH and is not treated as local UNC.
+  When Pi quits after a move, Teleport's last report is a handoff
+  (`herdr-handoff=1`) from the same verified process: once the terminal's
+  own shell is in front again, Herdr types a `cd` to that folder (bash,
+  zsh, sh, fish; `Set-Location -LiteralPath` in PowerShell) into it through
+  `terminal.send`, so the shell continues where the agent was.
   A live root or foreground Pi can publish `herdr.project` as JSON
   `{pid, cwd}`. Its nonempty session folder takes precedence over OSC reports
   and process folders, including for app buttons and their project props.
