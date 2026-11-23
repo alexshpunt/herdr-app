@@ -63,6 +63,44 @@ pub(super) fn create(state: &State, window: &Window, cx: &App) {
     }).detach();
 }
 
+pub(super) fn return_focus(container: Option<isize>) {
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        UI::{
+            Input::KeyboardAndMouse::{GetFocus, SetFocus},
+            WindowsAndMessaging::{GetForegroundWindow, GetParent, IsChild},
+        },
+    };
+    let Some(container) = container else { return };
+    let container = container as HWND;
+    // Hiding or destroying WebView2 while it owns focus can leave the active
+    // Herdr window with no focused HWND. Leave focus alone if it moved away.
+    unsafe {
+        let host = GetParent(container);
+        if host.is_null() || GetForegroundWindow() != host {
+            return;
+        }
+        let focused = GetFocus();
+        if focused == container || IsChild(container, focused) != 0 {
+            SetFocus(host);
+        }
+    }
+}
+
+pub(super) fn close(
+    executor: &gpui::ForegroundExecutor,
+    container: Option<isize>,
+    view: wry::WebView,
+    context: Option<wry::WebContext>,
+) {
+    // Like creation, native teardown can dispatch messages back to GPUI.
+    executor.spawn(async move {
+        return_focus(container);
+        drop(view);
+        drop(context);
+    }).detach();
+}
+
 fn parent(window: &Window) -> anyhow::Result<Parent> {
     match HasWindowHandle::window_handle(window)?.as_raw() {
         RawWindowHandle::Win32(handle) => Ok(Parent(handle)),
