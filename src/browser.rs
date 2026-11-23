@@ -10,7 +10,9 @@ mod windows;
 #[cfg(windows)]
 use windows::create;
 
-use gpui::{HitboxId, HitboxBehavior, AnyElement, App, Bounds, IntoElement, ParentElement, Pixels, Styled, Window, WindowId, canvas, div};
+#[cfg(not(windows))]
+use gpui::App;
+use gpui::{HitboxId, HitboxBehavior, AnyElement, Bounds, IntoElement, ParentElement, Pixels, Styled, Window, WindowId, canvas, div};
 use gpui_shell::{ArgumentDescriptor, ArgumentSchema, ComponentArgument, ComponentDataValue, ComponentDescriptor, ComponentMaterializer, ComponentPayload, ComponentRegistry, ConstructorDescriptor, FrozenComponentRegistry, MaterializeRequest, StateDescriptor, StateMethodDescriptor, COMPONENT_REGISTRY_API_VERSION};
 use std::{cell::RefCell, rc::{Rc, Weak}, sync::Arc};
 
@@ -44,6 +46,8 @@ struct Browser {
     visible: bool,
     #[cfg(windows)]
     creating: bool,
+    #[cfg(windows)]
+    executor: gpui::ForegroundExecutor,
     /// Wry's container window, which holds the WebView2 windows.
     #[cfg(windows)]
     hwnd: Option<isize>,
@@ -54,6 +58,11 @@ struct Browser {
 
 impl Drop for Browser {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(view) = self.native.take() {
+            windows::close(&self.executor, self.hwnd, view, self.context.take());
+        }
+        #[cfg(not(windows))]
         if let Some(view) = &self.native {
             let _ = view.set_visible(false);
         }
@@ -170,6 +179,9 @@ impl Browser {
         if show == self.visible { return; }
         if let Some(view) = &self.native {
             if !show {
+                #[cfg(windows)]
+                windows::return_focus(self.hwnd);
+                #[cfg(not(windows))]
                 if let Err(error) = view.focus_parent() {
                     tracing::warn!("browser focus could not return to its parent: {error}");
                 }
@@ -235,11 +247,11 @@ pub fn components() -> FrozenComponentRegistry {
     let mut registry = ComponentRegistry::new(COMPONENT_REGISTRY_API_VERSION, "herdr-browser").unwrap();
     registry.register_state(StateDescriptor::new(
         "BrowserState", "HerdrBrowserState", vec![ArgumentDescriptor::new("url", ArgumentSchema::String)],
-        |args, window, _| {
+        |args, window, _cx| {
             let ComponentArgument::String(url) = &args[0] else { unreachable!() };
             if !policy::allows_navigation(url) { return Err("Expected an HTTP(S) URL without credentials".into()); }
             let state = Rc::new(RefCell::new(Browser { window: window.window_handle().window_id(), url: url.clone(), native: None, #[cfg(not(target_os = "linux"))] context: None, error: None, hitbox: None, bounds: None, visible: false,
-                #[cfg(windows)] creating: false, #[cfg(windows)] hwnd: None, #[cfg(windows)] holes: Vec::new() }));
+                #[cfg(windows)] creating: false, #[cfg(windows)] executor: _cx.foreground_executor().clone(), #[cfg(windows)] hwnd: None, #[cfg(windows)] holes: Vec::new() }));
             VIEWS.with_borrow_mut(|views| views.push(Rc::downgrade(&state)));
             Ok(Box::new(state))
         },
