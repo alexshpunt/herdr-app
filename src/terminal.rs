@@ -478,6 +478,10 @@ impl TerminalView {
                     return None;
                 }
                 g.channel = Some(attached.channel);
+                // The core takes a new viewer for unfocused, and focus may have come while the attach was in flight.
+                if self.was_focused {
+                    g.core.focus(attached.channel, true);
+                }
                 // The theme or cell may have changed while the attach was in flight.
                 let cell = device_cell(g.cell, g.scale);
                 g.refresh_theme(&vt::theme(), cell);
