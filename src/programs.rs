@@ -264,7 +264,7 @@ pub fn powershell_line(cmd: &[String]) -> String {
     format!("& {}", cmd.iter().map(|w| powershell_quote(w)).collect::<Vec<_>>().join(" "))
 }
 
-fn powershell_quote(word: &str) -> String {
+pub(crate) fn powershell_quote(word: &str) -> String {
     let mut s = String::from("'");
     for ch in word.chars() {
         if PS_QUOTES.contains(&ch) {
