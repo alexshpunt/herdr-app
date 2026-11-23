@@ -943,6 +943,47 @@ mod tests {
     }
 
     #[test]
+    fn fork_builds_order_by_build_number_after_their_base() {
+        assert!(newer("0.1.22-fork.12.1", "0.1.22-fork.9.1"));
+        assert!(newer("0.1.22-fork.12.2", "0.1.22-fork.12.1"));
+        assert!(newer("0.1.22-fork.1.1", "0.1.22"));
+        assert!(newer("0.1.22-fork.1.1", "0.1.21-fork.99.1"));
+        assert!(newer("0.1.23", "0.1.22-fork.99.1"));
+        assert!(!newer("0.1.22", "0.1.22-fork.1.1"));
+        assert!(!newer("0.1.16-fork.66.1", "0.1.16-fork.67.1"));
+        assert!(!newer("0.1.16-fork.67.1", "0.1.16-fork.67.1"));
+        // Other pre-releases keep upstream's order.
+        assert!(newer("0.1.22", "0.1.22-rc.1"));
+    }
+
+    #[test]
+    fn fork_releases_install_only_a_waiting_core_they_may_update() {
+        let info = |ready: Option<&str>, managed: Option<&str>, updating| CoreInfo {
+            ready: ready.map(Into::into),
+            managed: managed.map(Into::into),
+            updating,
+            ..CoreInfo::default()
+        };
+        assert!(auto_core_update(&info(Some("0.1.22-fork.13.1"), None, false)));
+        assert!(!auto_core_update(&info(None, None, false)));
+        assert!(!auto_core_update(&info(Some("0.1.22-fork.13.1"), Some("homebrew"), false)));
+        assert!(!auto_core_update(&info(Some("0.1.22-fork.13.1"), None, true)));
+    }
+
+    #[test]
+    fn a_manifest_without_a_newer_version_downloads_nothing() {
+        let work = std::env::temp_dir().join(format!("herdr-fork-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&work).unwrap();
+        let manifest = work.join("manifest.json");
+        std::fs::write(&manifest, format!(r#"{{"version":"{VERSION}","targets":{{}}}}"#)).unwrap();
+        let path = manifest.display().to_string().replace('\\', "/");
+        let url = format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" });
+        assert_eq!(check_manifest(&work.join(PACKED), &url, None), Ok(None));
+        assert!(!beside(&work.join(PACKED), ".download").exists());
+        std::fs::remove_dir_all(work).unwrap();
+    }
+
+    #[test]
     fn after_app_update_targets_latest_only_in_our_generation() {
         let release = |version: &str, generation| CoreRelease { version: version.into(), generation };
         let latest = release("0.1.13", Some(1));
