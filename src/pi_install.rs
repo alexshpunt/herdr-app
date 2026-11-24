@@ -91,8 +91,21 @@ async function discoverPiRuntime(searchPath = process.env.PATH || '', platform =
       if (!stat.isFile()) continue;
       if (/\.(?:cmd|ps1)$/i.test(name)) {
         const shim = (await fs.readFile(command, 'utf8')).replaceAll('\\', '/');
+        // The pi.dev installer puts its shims in bin/ and the active release in install/.
+        const managed = name === 'pi.cmd' ? shim.includes('"%~dp0pi-launcher.js"') : shim.includes('Join-Path $basedir "pi-launcher.js"');
+        if (managed) {
+          const launcher = path.join(directory, 'pi-launcher.js');
+          if (!(await fs.stat(launcher)).isFile()) throw new Error(`Managed Pi launcher is not a file: ${launcher}`);
+          const install = path.resolve(directory, '..', 'install');
+          const current = path.join(install, 'current-version');
+          const version = (await fs.readFile(current, 'utf8')).trim();
+          if (!/^[0-9A-Za-z._+-]+$/.test(version) || version === '.' || version === '..') throw new Error(`Managed Pi current-version is invalid: ${current}`);
+          const result = await fromPackage(path.join(install, 'releases', version, 'node_modules', ...packageName.split('/')));
+          if (!result) throw new Error(`The managed Pi release ${version} has no supported package in ${install}`);
+          return result;
+        }
         if (!shim.includes(packageName)) throw new Error('The pi command does not name the supported Pi npm package');
-        const result = await fromPackage(path.join(directory, 'node_modules', '@earendil-works', 'pi-coding-agent'));
+        const result = await fromPackage(path.join(directory, 'node_modules', ...packageName.split('/')));
         if (!result) throw new Error('The Pi npm shim has no installed package beside it');
         return result;
       }
