@@ -164,6 +164,48 @@ test('discovers the Windows npm Pi CLI from its declared bin, not a hardcoded fi
   await writeFile(path.join(prefix, 'pi.cmd'), '@node "%~dp0%\\node_modules\\@earendil-works\\pi-coding-agent\\custom\\native-entry.js" %*');
   assert.deepEqual(await discover(prefix, 'win32', []), { launch: [process.execPath, await fsForDiscovery.realpath(cli)] });
 }));
+const managedShims = {
+  'pi.cmd': '@ECHO off\r\nSET "node=node"\r\n"%node%" "%~dp0pi-launcher.js" %*\r\n',
+  'pi.ps1': '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n$launcher=Join-Path $basedir "pi-launcher.js"\r\n& node $launcher $args\r\n',
+};
+async function managedInstall(root, shim) {
+  const bin = path.join(root, 'bin'), install = path.join(root, 'install');
+  await mkdir(bin);
+  await mkdir(install);
+  await writeFile(path.join(bin, shim), managedShims[shim]);
+  await writeFile(path.join(bin, 'pi-launcher.js'), '');
+  return { bin, install, current: path.join(install, 'current-version') };
+}
+async function managedRelease(install, version) {
+  const pkg = path.join(install, 'releases', version, 'node_modules', '@earendil-works', 'pi-coding-agent');
+  const cli = path.join(pkg, 'dist', 'entry.js');
+  await mkdir(path.dirname(cli), { recursive: true });
+  await writeFile(path.join(pkg, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-coding-agent', bin: { pi: './dist/entry.js' } }));
+  await writeFile(cli, '#!/usr/bin/env node\nconsole.log("fixture");\n');
+  return fsForDiscovery.realpath(cli);
+}
+for (const shim of Object.keys(managedShims)) {
+  test(`discovers the active Windows managed Pi release through ${shim}`, () => fixture(async root => {
+    const { bin, install, current } = await managedInstall(root, shim);
+    const oldCli = await managedRelease(install, '1.2.3');
+    const newCli = await managedRelease(install, '1.2.4-rc.1');
+    await writeFile(current, '1.2.3\r\n');
+    assert.deepEqual(await discover(bin, 'win32', []), { launch: [process.execPath, oldCli] });
+    await writeFile(current, '1.2.4-rc.1\r\n');
+    assert.deepEqual(await discover(bin, 'win32', []), { launch: [process.execPath, newCli] });
+  }));
+}
+test('does not launch another Windows Pi release when current-version is missing or invalid', () => fixture(async root => {
+  const { bin, install, current } = await managedInstall(root, 'pi.cmd');
+  await managedRelease(install, '1.2.3');
+  assert.match((await discover(bin, 'win32', [])).launchError, /current-version/);
+  for (const value of ['', '.', '..', '../1.2.3', '1.2.3\\..']) {
+    await writeFile(current, value);
+    assert.match((await discover(bin, 'win32', [])).launchError, /current-version.*invalid/);
+  }
+  await writeFile(current, '1.2.4');
+  assert.match((await discover(bin, 'win32', [])).launchError, /managed Pi release 1\.2\.4/);
+}));
 test('discovers a POSIX Pi symlink and follows package bin metadata', () => fixture(async root => {
   // Keep host Windows drive letters out of an emulated POSIX PATH list.
   const pkg = path.join(root, 'package'), bin = path.join(root, 'bin');
