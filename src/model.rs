@@ -481,7 +481,8 @@ impl Model {
     fn take_pane(&mut self, pane_id: &str) -> Option<Node> {
         let c = self.tab_of_mut(pane_id)?;
         let node = c.root.remove(pane_id)?;
-        if c.zoomed.as_deref() == Some(pane_id) {
+        // One pane left is all there is to show: the zoom ends with the split.
+        if c.zoomed.as_deref() == Some(pane_id) || c.root.panes().len() < 2 {
             c.zoomed = None;
         }
         c.before.retain(|p| p != pane_id);
@@ -1326,6 +1327,20 @@ mod tests {
         assert!(!m.toggle_zoom("x1"));
         assert_eq!(m.tab("c1").unwrap().zoomed, None);
         assert_eq!(m.focused_pane().as_deref(), Some("x1"));
+    }
+
+    #[test]
+    fn a_tab_left_with_one_pane_is_not_zoomed() {
+        let mut m = model_with_one();
+        m.split("x1", Axis::Row, "x2", "t2");
+        m.split("x2", Axis::Row, "x3", "t3");
+        // A hidden pane closes (its program exits): two are left, x1 stays zoomed.
+        assert!(m.toggle_zoom("x1"));
+        m.remove_pane("x3");
+        assert_eq!(m.tab("c1").unwrap().zoomed.as_deref(), Some("x1"));
+        // The last hidden pane closes: x1 is the tab's only pane, with nothing to unzoom to.
+        m.remove_pane("x2");
+        assert_eq!(m.tab("c1").unwrap().zoomed, None);
     }
 
     #[test]
