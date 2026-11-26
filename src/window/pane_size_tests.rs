@@ -206,3 +206,67 @@ fn hidden_tabs_follow(cx: &mut gpui::TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert_eq!(dims(cx), fitted, "hidden tabs must have been sized as their panes draw them");
 }
+#[test]
+fn a_header_request_stays_between_the_layouts_least_and_most() {
+    use super::pane_size::pane_header_height;
+    use serde_json::json;
+    let header = |spec: serde_json::Value| -> crate::layout::Header { serde_json::from_value(spec).unwrap() };
+    let both = header(json!({"content": {"mod": "x"}, "height": 40, "max_height": 120}));
+    assert_eq!(pane_header_height(&both, None), 40.0, "no request: the layout's height");
+    assert_eq!(pane_header_height(&both, Some(10.0)), 40.0, "the layout's height is the least");
+    assert_eq!(pane_header_height(&both, Some(80.0)), 80.0);
+    assert_eq!(pane_header_height(&both, Some(500.0)), 120.0, "max_height is the most");
+    assert_eq!(pane_header_height(&both, Some(f32::NAN)), 40.0, "a request that is not a number is none");
+    let plain = header(json!({"content": {"mod": "x"}}));
+    assert_eq!(pane_header_height(&plain, None), 30.0);
+    assert_eq!(pane_header_height(&plain, Some(1000.0)), 400.0, "the default most is 400");
+    let inverted = header(json!({"content": {"mod": "x"}, "height": 50, "max_height": 20}));
+    assert_eq!(pane_header_height(&inverted, Some(100.0)), 50.0, "a max_height under the least cannot shrink the header");
+}
+
+#[test]
+fn a_header_request_gives_the_terminal_the_rows_it_leaves() {
+    in_own_process("header_request_resizes");
+}
+
+#[gpui::test]
+fn header_request_resizes(cx: &mut gpui::TestAppContext) {
+    use serde_json::json;
+    if !running_alone("header_request_resizes") { return; }
+    let layout = json!({"id": "context", "type": "block", "content": {"tab": "active", "pane": {
+        "lone": true, "header": {"height": 23, "max_height": 100, "position": "bottom", "content": {"mod": "size-probe"}}
+    }}});
+    let (view, cx) = open_window(cx, "size-probe", "export default () => null;", layout.clone());
+    view.update_in(cx, |this, window, cx| {
+        this.folders.retain(|id, _| id == "size-probe");
+        this.chrome = serde_json::from_value(layout).unwrap();
+        this.bounds.borrow_mut().clear();
+        this.model = crate::model::Model::default();
+        this.model.add_space("space", "test", "/", super::Tab::new("tab", "", "a", "probe-a"));
+        this.sync(window, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let rows = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, cx| this.terms["a"].view.read(cx).dimensions().1);
+    let request = |cx: &mut gpui::VisualTestContext, px: Option<f32>| {
+        view.update_in(cx, |this, window, cx| {
+            match px {
+                Some(px) => this.header_heights.insert("a".into(), px),
+                None => this.header_heights.remove("a"),
+            };
+            this.sync(window, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        rows(cx)
+    };
+    let fixed = rows(cx);
+    let tall = request(cx, Some(90.0));
+    assert!(tall < fixed, "a taller header leaves the terminal fewer rows: {tall} vs {fixed}");
+    // The size predicted for a pane must be the rendered one, with the request in force.
+    let predicted = view.update_in(cx, |this, window, _| this.initial_size(&this.model.spaces[0].tabs[0].root.clone(), "a", window)).unwrap();
+    assert_eq!(predicted.1, tall, "the predicted size follows the request");
+    assert_eq!(request(cx, Some(5000.0)), request(cx, Some(100.0)), "a request over max_height gets max_height");
+    assert_eq!(request(cx, Some(1.0)), fixed, "a request under the layout's height gets the layout's height");
+    assert_eq!(request(cx, Some(90.0)), tall);
+    assert_eq!(request(cx, None), fixed, "taking the request back restores the layout's height");
+}

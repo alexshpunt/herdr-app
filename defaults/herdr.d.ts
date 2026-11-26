@@ -107,6 +107,8 @@ export function playSound(sound: string): null;
  * With no space shown, a new space is shown even with focus: false.
  * Panes: pane.split {direction: "right" | "down", pane?}, pane.close {pane?}, pane.zoom {pane?}, pane.rename {pane?, name},
  *   pane.resize {direction, pane?, px?},
+ *   pane.header_height {pane?, px?} (a pane header mod sets its own height, e.g. a footer that grows with its content;
+ *   px null or missing takes the request back; see "Pane frames" in the guide),
  *   pane.focus {pane | terminal}, pane.go {direction}, pane.swap {pane?, direction | target}.
  *   Pane menus get target { pane, terminal }.
  * Apps: app.open {mod, app?, props?, title?, for?, space?, reuse?} (a tab of the agent the pane of `for`

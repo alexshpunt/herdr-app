@@ -412,6 +412,9 @@ pub struct AppWindow {
     /// Panes showing another terminal for now (pane → address), e.g. a sub-agent
     /// looked at in place of its parent. Not saved; the pane keeps its own.
     swapped: HashMap<String, String>,
+    /// The height each pane's header mod asked for with `pane.header_height` (pane → px).
+    /// Not saved; it ends with the mod copy that asked (see `remove_copy`).
+    header_heights: HashMap<String, f32>,
     float_drag: Option<floats::FloatDrag>,
     pane_drag: Option<pane_drag::PaneDrag>,
     pane_grip_hover: Option<String>,
@@ -574,6 +577,7 @@ impl AppWindow {
             agent: None,
             agent_focused: None,
             swapped: HashMap::new(),
+            header_heights: HashMap::new(),
             float_drag: None,
             pane_drag: None,
             pane_grip_hover: None,
@@ -1155,6 +1159,8 @@ impl AppWindow {
         self.float_hover.clear();
         let other = next != self.layout_name;
         if other {
+            self.header_heights.clear();
+            self.hidden_fit = Default::default();
             self.close_windows(window, cx);
             self.drop_layout_copies(window, cx);
         }
@@ -1494,6 +1500,12 @@ impl AppWindow {
     }
 
     fn remove_copy(&mut self, slot: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A pane header mod's height request ends with its copy (a layout switch, a reload, a closed pane).
+        if let Some(pane) = slot.strip_suffix("#frame")
+            && self.header_heights.remove(pane).is_some()
+        {
+            self.hidden_fit = Default::default();
+        }
         if let Some(copy) = self.copies.remove(slot)
             && let (Some(runtime), Some(root)) = (&self.runtime, copy.root)
         {
@@ -1645,6 +1657,7 @@ impl AppWindow {
         self.model.order_spaces();
         let (model, live) = (&self.model, &self.live);
         self.swapped.retain(|p, a| model.address_of(p).is_some() && live.contains_key(a));
+        self.header_heights.retain(|p, _| model.tab_of(p).is_some());
         let (mut terms, mods_visible) = self.visible();
         let covered: HashSet<&str> = terms.iter().filter_map(|(slot, _)| slot.strip_suffix(SWAP)).collect();
         let mut displayed: HashSet<String> = terms.iter().filter(|(slot, _)| !covered.contains(slot.as_str())).map(|(slot, _)| slot.clone()).collect();
@@ -3856,6 +3869,34 @@ impl AppWindow {
                 }
                 self.save();
             }
+            "pane.header_height" => {
+                let requested = match a.get("px") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.as_f64().filter(|px| px.is_finite() && *px >= 0.0) {
+                        Some(px) => Some(px as f32),
+                        None => return self.fail(format!("{name} px must be a number of at least 0 (or null to clear the request)")),
+                    },
+                };
+                let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else {
+                    return self.fail("no pane to give a header height");
+                };
+                if self.model.tab_of(&pane).is_none() {
+                    return self.fail(format!("no pane {pane:?}"));
+                }
+                let Some(header) = self.frame_header() else {
+                    return self.fail("the shown layout gives panes no header");
+                };
+                let effective = pane_size::pane_header_height(header, requested);
+                match requested {
+                    Some(px) => self.header_heights.insert(pane, px),
+                    None => self.header_heights.remove(&pane),
+                };
+                // The terminal takes the rows the header gives up on the next frame; hidden tabs refit.
+                self.hidden_fit = Default::default();
+                cx.notify();
+                self.reply = Some(json!({ "px": effective }));
+                return;
+            }
             "pane.swap" => {
                 let by = match swap_by(a) {
                     Ok(by) => by,
@@ -5410,7 +5451,7 @@ impl AppWindow {
             body = body.child(div().absolute().inset_0().bg(crate::terminal::hsla(crate::vt::theme().bg).opacity(v)));
         }
         let Some(h) = f.header.as_ref().filter(|_| !self.frameless(&n.id)) else { return el.child(body).into_any_element() };
-        let head = div().flex_none().h(settings::z(pane_size::header_height(h))).w_full().flex()
+        let head = div().flex_none().h(settings::z(pane_size::pane_header_height(h, self.header_heights.get(&n.id).copied()))).w_full().flex()
             .child(self.render_slot(&format!("{}#frame", n.id), cx));
         if h.hover() {
             let head = head.absolute().left_0().right_0().opacity(0.).group_hover(group, |s| s.opacity(1.));
@@ -5490,7 +5531,7 @@ impl AppWindow {
                 }
             }
         };
-        let row = frame.and_then(|f| f.header.as_ref()).filter(|h| !h.bottom() && !h.hover() && !self.frameless(&n.id)).map(pane_size::header_height);
+        let row = frame.and_then(|f| f.header.as_ref()).filter(|h| !h.bottom() && !h.hover() && !self.frameless(&n.id)).map(|h| pane_size::pane_header_height(h, self.header_heights.get(&n.id).copied()));
         el.children(self.render_floats(n, cx)).children(self.pane_grip(&n.id, row, cx)).into_any_element()
     }
 

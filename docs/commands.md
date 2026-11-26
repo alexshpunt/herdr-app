@@ -308,6 +308,15 @@ Move the border of a pane (default: the focused one) "left", "right", "up" or "d
 | `pane` | no |
 | `px` | no |
 
+## `pane.header_height`
+
+Give a pane's header (default: the focused pane's) the height px, from the pane header mod that draws in it, so a footer can grow with its content. The layout's header height is the least it gets and its max_height (default 400) the most; px null or missing takes the request back. The request is kept for this running app, not saved, and ends with the header mod's copy (a layout switch, a mod reload, a closed pane). Returns {px}: the height the header now has.
+
+| Argument | Required |
+|---|---|
+| `pane` | no |
+| `px` | no |
+
 ## `pane.swap`
 
 Swap a pane (default: the focused one) with its neighbor in a direction, or with another pane of its tab (target). Give exactly one of direction or target.
