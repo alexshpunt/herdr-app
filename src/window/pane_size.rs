@@ -20,6 +20,20 @@ pub(super) fn header_height(header: &Header) -> f32 {
     header.height.unwrap_or(HEADER_HEIGHT)
 }
 
+/// The most a mod's `pane.header_height` request can make a pane header when the layout names none.
+pub(super) const HEADER_MAX_HEIGHT: f32 = 400.0;
+
+/// A pane header's height in px (layout px, before zoom): what the layout says, or the mod's
+/// request for its own pane clamped between the layout's height (the least) and `max_height`
+/// (the most; at least the least).
+pub(super) fn pane_header_height(header: &Header, requested: Option<f32>) -> f32 {
+    let least = header_height(header);
+    match requested.filter(|px| px.is_finite()) {
+        Some(px) => px.clamp(least, header.max_height.unwrap_or(HEADER_MAX_HEIGHT).max(least)),
+        None => least,
+    }
+}
+
 pub(super) fn gap(n: &Node, frame: Option<&PaneFrame>) -> f32 {
     n.gap.or(frame.and_then(|f| f.gap)).unwrap_or(0.0)
 }
@@ -117,14 +131,15 @@ fn block_bounds(n: &Node, bounds: Bounds<Pixels>, target: &str, frame: Option<&P
     }
 }
 
-fn pane_size(n: &Node, size: Size<Pixels>, target: &str, frame: Option<&PaneFrame>, focused: &HashSet<String>, zoom: f32) -> Option<Size<Pixels>> {
+/// `requested`: the height the pane's header mod asked for (`pane.header_height`).
+fn pane_size(n: &Node, size: Size<Pixels>, target: &str, frame: Option<&PaneFrame>, focused: &HashSet<String>, zoom: f32, requested: Option<f32>) -> Option<Size<Pixels>> {
     let bounds = block_bounds(n, Bounds::new(Point::default(), size), target, frame, focused, zoom)?;
     let n = n.find(target)?;
     let (y, x) = padding(n);
     let mut size = inset(bounds.size, 2.0 * x * zoom, 2.0 * y * zoom);
     if let Some(frame) = frame.filter(|_| n.is_pane()) {
         let border = frame_border(frame, focused.contains(&n.id)).map_or(0.0, |line| line.width) * zoom;
-        let header = frame.header.as_ref().filter(|h| !h.hover()).map_or(0.0, header_height) * zoom;
+        let header = frame.header.as_ref().filter(|h| !h.hover()).map_or(0.0, |h| pane_header_height(h, requested)) * zoom;
         size = inset(size, 2.0 * border, 2.0 * border + header);
     }
     Some(size)
@@ -166,7 +181,7 @@ impl AppWindow {
         // The absolute bounds canvas already excludes the context border (padding box).
         let (y, x) = padding(context);
         let size = inset(area, 2.0 * x * zoom, 2.0 * y * zoom);
-        let size = pane_size(shown, size, pane, frame, focused, zoom)?;
+        let size = pane_size(shown, size, pane, frame, focused, zoom, self.header_heights.get(pane).copied())?;
         Some(crate::terminal::grid_size(size, crate::terminal::cell_size(window)))
     }
 
@@ -186,6 +201,15 @@ impl AppWindow {
         let candidates = tab.root.visible_blocks().into_iter().filter(|n| n.is_pane() && n.id != from)
             .filter_map(|n| Some((n.id.clone(), geometry(&n.id)?)));
         nearest(geometry(from)?, dir, candidates, &self.pane_history)
+    }
+
+    /// The pane header the shown layout gives every pane, if it gives one.
+    pub(super) fn frame_header(&self) -> Option<&Header> {
+        let context = self.chrome.visible_blocks().into_iter().find(|n| matches!(n.content(), Some(Content::Context { .. })))?;
+        match context.content() {
+            Some(Content::Context { pane: Some(frame), .. }) => frame.header.as_ref(),
+            _ => None,
+        }
     }
 
     /// The block tabs show in, and the area it was last drawn with.

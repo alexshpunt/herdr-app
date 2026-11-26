@@ -570,6 +570,18 @@ The tab block says how each pane of the shown tab is wrapped:
   drawn over the terminal so the terminal never resizes. The shipped `pane`
   mod keeps its divider on the terminal-facing edge and reads the frame
   position from `layout()`.
+  `height` is the header's height in px, and the least it has. A header mod
+  whose content grows (a chat input at the bottom) sets its own height with
+  `run("pane.header_height", { pane: props().pane, px })`, for example after its
+  size changed; the terminal gives up or gets back the rows on the next frame.
+  `px` is clamped between `height` and `max_height` (default 400), both in the
+  header spec; `px: null` (or no `px`) takes the request back. The request is
+  per pane, kept only by the running app (never written to the layout or its
+  clicks), and ends with the mod copy that made it: a layout switch, a reload
+  of the mod (it asks again when it starts) or the pane closing. A header with
+  `reveal: "hover"` is drawn over the terminal and does not move it. `run`
+  returns nothing to a mod; `herdr-app do pane.header_height` prints `{px}`,
+  the height the header has now.
 - `lone: true` frames a tab's only pane too (default: only when split).
 - Each layout has its own, so one can stay bare while another makes
   every pane a card.
@@ -798,7 +810,9 @@ The main ones:
   `pane.swap {pane?, direction | target}`, `pane.rename {pane?, name}` ("": unnamed
   again; `panes()[i].name`, kept with its tab), `pane.resize {direction, pane?, px?}` (moves
   the nearest border along that axis by px, default 40, as a drag would; a keyboard
-  resize mode is a mod that runs it on h/j/k/l).
+  resize mode is a mod that runs it on h/j/k/l), `pane.header_height {pane?, px?}`
+  (a pane header mod sets the height of its own header, within the layout's
+  `height` and `max_height`; see Pane frames).
   `pane.zoom` also makes the pane its tab's focused one (the tab isn't
   selected); on the zoomed pane it unzooms and focus stays. A tab with one
   pane doesn't zoom, and a zoom ends when its tab is back to one pane.

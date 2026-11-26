@@ -264,9 +264,13 @@ pub struct Header {
     /// `always` (default) or `hover`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reveal: Option<String>,
-    /// Height in px (default 30).
+    /// Height in px (default 30). With a mod that asks for another height
+    /// (`pane.header_height`), the least it gets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f32>,
+    /// The most a mod's `pane.header_height` request can make it, in px (default 400).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<f32>,
     /// `top` (default) or `bottom`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<String>,
