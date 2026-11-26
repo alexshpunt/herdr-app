@@ -13,7 +13,7 @@ use windows::create;
 #[cfg(not(windows))]
 use gpui::App;
 use gpui::{HitboxId, HitboxBehavior, AnyElement, Bounds, IntoElement, ParentElement, Pixels, Styled, Window, WindowId, canvas, div};
-use gpui_shell::{ArgumentDescriptor, ArgumentSchema, ComponentArgument, ComponentDataValue, ComponentDescriptor, ComponentMaterializer, ComponentPayload, ComponentRegistry, ConstructorDescriptor, FrozenComponentRegistry, MaterializeRequest, StateDescriptor, StateMethodDescriptor, COMPONENT_REGISTRY_API_VERSION};
+use herdr_shell::{ArgumentDescriptor, ArgumentSchema, ComponentArgument, ComponentDataValue, ComponentDescriptor, ComponentMaterializer, ComponentPayload, ComponentRegistry, ConstructorDescriptor, FrozenComponentRegistry, MaterializeRequest, StateDescriptor, StateMethodDescriptor, COMPONENT_REGISTRY_API_VERSION};
 use std::{cell::RefCell, rc::{Rc, Weak}, sync::Arc};
 
 type State = Rc<RefCell<Browser>>;

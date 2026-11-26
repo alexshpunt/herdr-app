@@ -14,7 +14,7 @@
 //! reentrant message cannot meet a borrowed GPUI window.
 use super::policy;
 use gpui::{AnyElement, App, Bounds, HitboxBehavior, HitboxId, ParentElement, Pixels, Styled, Window, WindowId, canvas, div};
-use gpui_shell::{ArgumentDescriptor, ArgumentSchema, ComponentArgument, ComponentDataValue, ComponentDescriptor, ComponentMaterializer, ComponentPayload, ComponentRegistry, ConstructorDescriptor, MaterializeRequest, StateDescriptor, StateMethodDescriptor};
+use herdr_shell::{ArgumentDescriptor, ArgumentSchema, ComponentArgument, ComponentDataValue, ComponentDescriptor, ComponentMaterializer, ComponentPayload, ComponentRegistry, ConstructorDescriptor, MaterializeRequest, StateDescriptor, StateMethodDescriptor};
 use std::{cell::RefCell, path::PathBuf, rc::{Rc, Weak}, sync::Arc};
 
 type State = Rc<RefCell<NativeApp>>;
@@ -1259,7 +1259,7 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::{Description, class_matches, title_shows};
-    use gpui_shell::ComponentDataValue as V;
+    use herdr_shell::ComponentDataValue as V;
 
     fn object(fields: &[(&str, V)]) -> V {
         V::Object(fields.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect())
