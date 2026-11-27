@@ -531,8 +531,8 @@ pub struct Settings {
     pub colors: BTreeMap<String, String>,
     /// A draggable scroll position thumb at a terminal pane's right edge.
     pub pane_scrollbars: bool,
-    /// Space between a terminal's edge and its text, in px: [x, y].
-    pub terminal_padding: [f32; 2],
+    /// Space between a terminal's edge and its text, in px: [x, top, bottom].
+    pub terminal_padding: [f32; 3],
     /// 0..1: below 1, what's behind a terminal shows through.
     pub terminal_opacity: f32,
     pub clipboard_write: bool,
@@ -583,7 +583,7 @@ impl Default for Settings {
             dark: true,
             colors: BTreeMap::new(),
             pane_scrollbars: true,
-            terminal_padding: [10.0, 6.0],
+            terminal_padding: [10.0, 6.0, 6.0],
             terminal_opacity: 1.0,
             clipboard_write: true,
             copy_on_select: true,
@@ -629,7 +629,7 @@ impl Settings {
             dark,
             colors,
             pane_scrollbars: person.pane_scrollbars,
-            terminal_padding: look.terminal_padding.unwrap_or(d.terminal_padding),
+            terminal_padding: look.terminal_padding.map_or(d.terminal_padding, crate::layout::TerminalPadding::edges),
             terminal_opacity: look.terminal_opacity.unwrap_or(1.0).clamp(0.0, 1.0),
             sounds: person.sounds.clone(),
             clipboard_write: person.clipboard_write,
@@ -1126,7 +1126,7 @@ mod tests {
         let main: Node = serde_json::from_str(include_str!("../defaults/layouts/main.json")).unwrap();
         assert!(main.look.theme.is_none() && main.look.colors.is_none() && main.look.font.is_none() && main.look.font_size.is_none() && main.look.ui_font.is_none());
         assert_eq!(Settings::compose(&Person::default(), &main.look, true).font_size, 14.0);
-        assert_eq!(main.look.terminal_padding, Some([14.0, 12.0]));
+        assert_eq!(main.look.terminal_padding, Some(crate::layout::TerminalPadding::Xy([14.0, 12.0])));
         let terminals: Node = serde_json::from_str(include_str!("../defaults/layouts/terminals.json")).unwrap();
         assert_eq!(Settings::compose(&person, &terminals.look, true).font_size, 15.0);
         let main_settings = Settings::compose(&person, &main.look, true);
@@ -1138,6 +1138,15 @@ mod tests {
         let clicks = crate::layout_sync::State { theme: Some(ThemeChoice::One("ink".into())), ..Default::default() };
         clicks.apply(&mut win98);
         assert_eq!(Settings::compose(&person, &win98.look, true).theme, "ink");
+    }
+
+    #[test]
+    fn terminal_padding_composes_to_x_top_bottom() {
+        use crate::layout::Look;
+        let compose = |json: &str| Settings::compose(&Person::default(), &serde_json::from_str::<Look>(json).unwrap(), true).terminal_padding;
+        assert_eq!(compose("{}"), [10.0, 6.0, 6.0]);
+        assert_eq!(compose(r#"{ "terminal_padding": [14, 12] }"#), [14.0, 12.0, 12.0]);
+        assert_eq!(compose(r#"{ "terminal_padding": [14, 7, 0] }"#), [14.0, 7.0, 0.0]);
     }
 
     #[test]
