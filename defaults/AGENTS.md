@@ -490,7 +490,11 @@ layout's look and a block can differ:
 `terminal_padding` is the space between a terminal's edge and its text, in
 px: `[x, y]`, or `[x, top, bottom]` for a different space above and below
 (`[14, 7, 0]`: a gap above the text, none under it, for a pane header or a
-box that sits directly below).
+box that sits directly below). The height the whole rows leave over is split
+in half above and below when the two are equal; otherwise it all goes to the
+side with the larger padding, so the text sits flush `bottom` px above the
+bottom edge when `top` is larger (and `top` px below the top edge when
+`bottom` is larger).
 
 - `theme`: `graphite`, `ink`, `moss` (dark), `paper` (light), or the name
   of a file in `themes/`; or one for each appearance:
