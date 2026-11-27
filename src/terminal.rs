@@ -63,6 +63,20 @@ fn grid_size_in(bounds: (f32, f32), cell: (f32, f32), pad: (f32, f32, f32)) -> (
     (cols, rows)
 }
 
+/// Where the grid's top edge sits below the top of its `height` px: `top` plus a share of what the whole
+/// rows (`rows_height` px) leave over. Equal paddings split that leftover in half, above and below. Unequal
+/// ones give it all to the side with the larger padding, so the grid sits flush against the smaller one.
+fn grid_top(height: f32, rows_height: f32, top: f32, bottom: f32) -> f32 {
+    let spare = (height - top - bottom - rows_height).max(0.0);
+    top + if top > bottom {
+        spare
+    } else if bottom > top {
+        0.0
+    } else {
+        (spare / 2.0).floor()
+    }
+}
+
 pub fn hsla(c: Rgb) -> Hsla {
     Rgba { r: c.0 as f32 / 255.0, g: c.1 as f32 / 255.0, b: c.2 as f32 / 255.0, a: 1.0 }.into()
 }
@@ -2146,11 +2160,10 @@ fn paint_grid(bounds: Bounds<Pixels>, grid: &Rc<RefCell<Grid>>, focused: bool, w
     let cell = g.cell;
     let metrics = cell_metrics(window);
     let (pad_x, pad_top, pad_bottom) = pad();
-    // Rows rarely fill the height exactly: split what's left above and below.
-    let spare = (f32::from(bounds.size.height) - pad_top - pad_bottom - f32::from(cell.height) * g.vt.rows as f32).max(0.0);
     let scale = window.scale_factor();
     let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
-    let origin = bounds.origin + point(px(pad_x), px(pad_top + (spare / 2.0).floor()));
+    let top = grid_top(f32::from(bounds.size.height), f32::from(cell.height) * g.vt.rows as f32, pad_top, pad_bottom);
+    let origin = bounds.origin + point(px(pad_x), px(top));
     let origin = point(snap(origin.x), snap(origin.y));
     g.origin = origin;
     let frame = g.vt.frame();
@@ -2824,7 +2837,7 @@ impl Focusable for TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScrollTarget, grid_size_in, pages_to_lines, scroll_target, scroll_state_changed};
+    use super::{ScrollTarget, grid_size_in, grid_top, pages_to_lines, scroll_target, scroll_state_changed};
     use serde_json::{Value, json};
 
     #[test]
@@ -2838,6 +2851,30 @@ mod tests {
         // The two edges add up: 10 + 11 px leave room for 23 rows.
         assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 10.0, 11.0)), (98, 23));
         assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 10.0, 10.0)), (98, 24));
+    }
+
+    #[test]
+    fn leftover_height_goes_to_the_larger_padding_and_is_split_when_they_are_equal() {
+        // 500 px high, 24 rows of 20 px = 480 px.
+        // Equal paddings: 20 - 6 - 6 = 8 px left over, 4 above and 4 below.
+        assert_eq!(grid_top(500.0, 480.0, 6.0, 6.0), 6.0 + 4.0);
+        // A larger top padding takes it all: the grid ends `bottom` px above the bottom edge.
+        let top = grid_top(500.0, 480.0, 8.0, 0.0);
+        assert_eq!(top, 8.0 + 12.0);
+        assert_eq!(500.0 - (top + 480.0), 0.0);
+        let top = grid_top(500.0, 480.0, 7.0, 3.0);
+        assert_eq!(500.0 - (top + 480.0), 3.0);
+        // A larger bottom padding takes it: the grid sits `top` px below the top edge.
+        assert_eq!(grid_top(500.0, 480.0, 0.0, 8.0), 0.0);
+        assert_eq!(grid_top(500.0, 480.0, 3.0, 7.0), 3.0);
+        // Rows that overfill the height leave nothing over.
+        assert_eq!(grid_top(470.0, 480.0, 8.0, 0.0), 8.0);
+        assert_eq!(grid_top(470.0, 480.0, 6.0, 6.0), 6.0);
+        // Rows that were fitted with grid_size_in leave less than a row over.
+        let (_, rows) = grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 7.0, 0.0));
+        let leftover = 500.0 - 7.0 - rows as f32 * 20.0;
+        assert_eq!(grid_top(500.0, rows as f32 * 20.0, 7.0, 0.0), 7.0 + leftover);
+        assert!(leftover >= 0.0 && leftover < 20.0);
     }
 
     #[test]
