@@ -487,6 +487,11 @@ layout's look and a block can differ:
   "terminal_padding": [10, 6], "terminal_opacity": 1, ... }
 ```
 
+`terminal_padding` is the space between a terminal's edge and its text, in
+px: `[x, y]`, or `[x, top, bottom]` for a different space above and below
+(`[14, 7, 0]`: a gap above the text, none under it, for a pane header or a
+box that sits directly below).
+
 - `theme`: `graphite`, `ink`, `moss` (dark), `paper` (light), or the name
   of a file in `themes/`; or one for each appearance:
   `"theme": { "light": "paper", "dark": "graphite" }` follows the system's

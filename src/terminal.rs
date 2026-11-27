@@ -44,16 +44,22 @@ fn output_turn(
     })
 }
 
-fn pad() -> (f32, f32) {
+/// The space around the text, in px at the current zoom: (x on each side, top, bottom).
+fn pad() -> (f32, f32, f32) {
     let p = crate::settings::get().terminal_padding;
     let zoom = crate::settings::zoom();
-    (p[0] * zoom, p[1] * zoom)
+    (p[0] * zoom, p[1] * zoom, p[2] * zoom)
 }
 
 pub(crate) fn grid_size(bounds: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let (px_, py_) = pad();
-    let cols = ((f32::from(bounds.width) - 2.0 * px_) / f32::from(cell.width)).floor().max(2.0) as u16;
-    let rows = ((f32::from(bounds.height) - 2.0 * py_) / f32::from(cell.height)).floor().max(1.0) as u16;
+    grid_size_in((f32::from(bounds.width), f32::from(bounds.height)), (f32::from(cell.width), f32::from(cell.height)), pad())
+}
+
+/// Columns and rows that fit `bounds` (px) with `pad` = (x on each side, top, bottom) around them.
+fn grid_size_in(bounds: (f32, f32), cell: (f32, f32), pad: (f32, f32, f32)) -> (u16, u16) {
+    let (px_, top, bottom) = pad;
+    let cols = ((bounds.0 - 2.0 * px_) / cell.0).floor().max(2.0) as u16;
+    let rows = ((bounds.1 - top - bottom) / cell.1).floor().max(1.0) as u16;
     (cols, rows)
 }
 
@@ -2139,12 +2145,12 @@ fn paint_grid(bounds: Bounds<Pixels>, grid: &Rc<RefCell<Grid>>, focused: bool, w
     let mut g = grid.borrow_mut();
     let cell = g.cell;
     let metrics = cell_metrics(window);
-    let (pad_x, pad_y) = pad();
+    let (pad_x, pad_top, pad_bottom) = pad();
     // Rows rarely fill the height exactly: split what's left above and below.
-    let spare = (f32::from(bounds.size.height) - 2.0 * pad_y - f32::from(cell.height) * g.vt.rows as f32).max(0.0);
+    let spare = (f32::from(bounds.size.height) - pad_top - pad_bottom - f32::from(cell.height) * g.vt.rows as f32).max(0.0);
     let scale = window.scale_factor();
     let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
-    let origin = bounds.origin + point(px(pad_x), px(pad_y + (spare / 2.0).floor()));
+    let origin = bounds.origin + point(px(pad_x), px(pad_top + (spare / 2.0).floor()));
     let origin = point(snap(origin.x), snap(origin.y));
     g.origin = origin;
     let frame = g.vt.frame();
@@ -2818,8 +2824,21 @@ impl Focusable for TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScrollTarget, pages_to_lines, scroll_target, scroll_state_changed};
+    use super::{ScrollTarget, grid_size_in, pages_to_lines, scroll_target, scroll_state_changed};
     use serde_json::{Value, json};
+
+    #[test]
+    fn grid_rows_leave_the_top_and_bottom_padding_alone_and_cols_both_sides() {
+        // 1000 x 500 px, 10 x 20 px cells.
+        assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 6.0, 6.0)), (98, 24));
+        assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 0.0, 0.0)), (98, 25));
+        // Only the top: the bottom row may reach the box under the pane.
+        assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 20.0, 0.0)), (98, 24));
+        assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 0.0, 20.0)), (98, 24));
+        // The two edges add up: 10 + 11 px leave room for 23 rows.
+        assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 10.0, 11.0)), (98, 23));
+        assert_eq!(grid_size_in((1000.0, 500.0), (10.0, 20.0), (10.0, 10.0, 10.0)), (98, 24));
+    }
 
     #[test]
     fn scroll_refreshes_only_when_leaving_or_reaching_end_or_alternate_screen() {

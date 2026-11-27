@@ -171,6 +171,25 @@ impl Padding {
     }
 }
 
+/// Space between a terminal's edge and its text, px: `[x, y]` (the same above
+/// and below), or `[x, top, bottom]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TerminalPadding {
+    Xy([f32; 2]),
+    Xtb([f32; 3]),
+}
+
+impl TerminalPadding {
+    /// [x, top, bottom]
+    pub fn edges(self) -> [f32; 3] {
+        match self {
+            TerminalPadding::Xy([x, y]) => [x, y, y],
+            TerminalPadding::Xtb(edges) => edges,
+        }
+    }
+}
+
 /// Layout look cascades down the tree: the nearest node setting a field wins.
 /// Unset root fields fall back to settings.json.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -204,9 +223,9 @@ pub struct Look {
     /// The mods' font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_font: Option<String>,
-    /// Space between a terminal's edge and its text, px: [x, y].
+    /// Space between a terminal's edge and its text, px: [x, y], or [x, top, bottom].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terminal_padding: Option<[f32; 2]>,
+    pub terminal_padding: Option<TerminalPadding>,
     /// 0..1: below 1, what's behind a terminal shows through its background.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_opacity: Option<f32>,
@@ -816,6 +835,20 @@ mod tests {
 
     fn term(id: &str) -> Node {
         Node::block(id, Content::Terminal { terminal: format!("t-{id}") })
+    }
+
+    #[test]
+    fn terminal_padding_takes_x_y_or_x_top_bottom() {
+        let look = |padding: &str| -> Look { serde_json::from_str(&format!(r#"{{ "terminal_padding": {padding} }}"#)).unwrap() };
+        assert_eq!(look("[14, 6]").terminal_padding.map(TerminalPadding::edges), Some([14.0, 6.0, 6.0]));
+        assert_eq!(look("[14, 7, 0]").terminal_padding.map(TerminalPadding::edges), Some([14.0, 7.0, 0.0]));
+        assert_eq!(serde_json::from_str::<Look>("{}").unwrap().terminal_padding, None);
+        assert!(serde_json::from_str::<Look>(r#"{ "terminal_padding": [14] }"#).is_err());
+        assert!(serde_json::from_str::<Look>(r#"{ "terminal_padding": [1, 2, 3, 4] }"#).is_err());
+        for json in ["[14, 6]", "[14, 7, 0]"] {
+            let l = look(json);
+            assert_eq!(serde_json::from_str::<Look>(&serde_json::to_string(&l).unwrap()).unwrap(), l);
+        }
     }
 
     #[test]
