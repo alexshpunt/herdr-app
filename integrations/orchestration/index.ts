@@ -85,20 +85,24 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     const provide = (request as { provide?: unknown }).provide;
     if (typeof provide !== 'function') return;
     const current = client, orchestrator = service;
-    const invoke = (name: string, args: Record<string, unknown>) => {
+    // Local checks refuse before anything is recorded or sent, so a refusal keeps its own reason
+    // instead of becoming a tracked request with an unknown outcome.
+    const prepare = (name: string, args: Record<string, unknown>) => {
       if (!BRIDGE_COMMANDS.includes(name)) throw new Error('Unsupported Herdr bridge command');
       if (client !== current) throw new Error('Herdr bridge changed; reload or retry the read');
-      if (name !== 'agent.replicate' && name !== 'agent.subagent') return current.command(name, args);
+      if (name !== 'agent.replicate' && name !== 'agent.subagent') return () => current.command(name, args);
       const child = childDepth(name, depth());
-      if (name === 'agent.replicate') return current.replicate({ ...args, depth: child });
-      return startSubagent(current, orchestrator, args, child);
+      if (name === 'agent.replicate') return () => current.replicate({ ...args, depth: child });
+      return () => startSubagent(current, orchestrator, args, child);
     };
+    const invoke = (name: string, args: Record<string, unknown>) => prepare(name, args)();
     const ensureCurrent = () => { if (client !== current) throw new Error('Herdr bridge changed; reacquire it for the current session'); };
     provide({ version: 1, command: invoke,
       commandTracked(name: string, args: Record<string, unknown>, options: { toolCallId?: string | null } = {}) {
         ensureCurrent();
         if (options.toolCallId != null && (typeof options.toolCallId !== 'string' || !options.toolCallId)) throw new Error('Invalid tool call ID');
-        return current.tracked(name, options.toolCallId, () => invoke(name, args));
+        const run = prepare(name, args);
+        return current.tracked(name, options.toolCallId, run);
       },
       recovery: {
         list() { ensureCurrent(); return current.recoveryList(); },
