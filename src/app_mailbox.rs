@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     hash::{BuildHasher, Hasher},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -43,7 +43,7 @@ fn identity() -> &'static (String, String) {
 }
 pub fn new_route() -> Value {
     let (app, epoch) = identity();
-    json!({"version":1,"app":app,"epoch":epoch,"mailbox":format!("ho.{}", &random_id()[..28])})
+    json!({"version":1,"app":app,"epoch":epoch,"mailbox":format!("ho.{}", &random_id()[..28]),"receipts":1})
 }
 fn route(record: &Value) -> Option<Value> {
     let value: Value = serde_json::from_str(record["labels"]["herdr.app"].as_str()?).ok()?;
@@ -115,6 +115,7 @@ impl State {
             .or_else(|| self.routes.get(address).cloned())
             .unwrap_or_else(new_route);
         desired["epoch"] = json!(epoch);
+        desired["receipts"] = json!(1);
         self.routes.insert(address.into(), desired.clone());
         if existing.as_ref() != Some(&desired) {
             if self.routing.insert(address.into()) {
@@ -192,6 +193,10 @@ fn valid_wire(wire: &Value) -> bool {
             )
         )
 }
+fn receipt_name(id: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(id.as_bytes()));
+    format!("hr.{}", &digest[..28])
+}
 fn valid_request(id: &str, request: &Value, record: &Value, now: u64) -> bool {
     let label = crate::agents::pi_label(record);
     let Some(label) = label else { return false };
@@ -201,6 +206,8 @@ fn valid_request(id: &str, request: &Value, record: &Value, now: u64) -> bool {
         && crate::agents::current_pi(record)
         && request["pid"] == label["pid"]
         && request["session"] == label["session"]
+        && (request.get("receipt").is_none()
+            || request["receipt"].as_str() == Some(receipt_name(id).as_str()))
         && request["expires"]
             .as_u64()
             .is_some_and(|expires| expires > now && expires <= now.saturating_add(TTL))
@@ -252,8 +259,45 @@ fn claim_document(
     );
     Ok((claims, changed))
 }
+fn valid_receipt(value: &Value, claim: &Claim) -> bool {
+    value["version"] == 1
+        && value["id"] == claim.id
+        && value["pid"] == claim.accepted["pid"]
+        && value["session"] == claim.accepted["session"]
+        && value["state"] == "pending"
+}
+fn ensure_receipt(core: &Core, address: &str, claim: &Claim) -> anyhow::Result<()> {
+    let Some(name) = claim.accepted["receipt"].as_str() else {
+        return Ok(());
+    };
+    anyhow::ensure!(name == receipt_name(&claim.id), "Invalid App receipt name");
+    let current = core.call("doc.get", json!({"name":name,"on":on(address)}))?;
+    anyhow::ensure!(
+        valid_receipt(&current["value"], claim),
+        "App receipt is missing or belongs to another request"
+    );
+    Ok(())
+}
+fn validate_claims(
+    value: &mut Value,
+    claims: Vec<Claim>,
+    mut validate: impl FnMut(&Claim) -> anyhow::Result<()>,
+) -> Vec<Claim> {
+    claims
+        .into_iter()
+        .filter(|claim| match validate(claim) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!("App receipt for {} cannot be verified: {error:#}", claim.id);
+                value["requests"][&claim.id]["state"] = json!("done");
+                value["requests"][&claim.id]["result"] = json!({"error":"App could not verify this request's receipt; this request was not dispatched.","code":"HERDR_RECEIPT_REFUSED","effect":"not-applied"});
+                false
+            }
+        })
+        .collect()
+}
 /// Only an explicit CAS conflict is retried. Unknown writes never dispatch.
-pub fn claim(core: &Core, address: &str, expected: &Value) -> anyhow::Result<Vec<Claim>> {
+pub fn claim(core: &Arc<Core>, address: &str, expected: &Value) -> anyhow::Result<Vec<Claim>> {
     for _ in 0..16 {
         let record = core.call("terminal.get", json!({"terminal":address}))?;
         anyhow::ensure!(
@@ -261,25 +305,119 @@ pub fn claim(core: &Core, address: &str, expected: &Value) -> anyhow::Result<Vec
             "The App route changed"
         );
         let (mut value, version) = document(core, address, expected)?;
+        let before = value.clone();
         let (claims, changed) = claim_document(&mut value, expected, &record, now_ms())?;
+        let claims = validate_claims(&mut value, claims, |claim| ensure_receipt(core, address, claim));
+        anyhow::ensure!(serde_json::to_vec(&value)?.len() <= LIMIT, "Mailbox needs space for receipt refusals");
+        // Claim refusals before writing their receipts. A concurrent claimant
+        // must not dispatch while a pre-claim refusal is being published.
+        let mut rejected = Vec::new();
+        if let Some(requests) = value["requests"].as_object_mut() {
+            for (id, request) in requests {
+                if before["requests"][id]["state"] != "ready" || request["state"] != "done" {
+                    continue;
+                }
+                let result = request["result"].take();
+                request["state"] = json!("accepted");
+                request.as_object_mut().expect("request object").remove("result");
+                rejected.push((Claim {
+                    id: id.clone(),
+                    wire: request["wire"].clone(),
+                    accepted: request.clone(),
+                }, result));
+            }
+        }
         if !changed {
             return Ok(Vec::new());
         }
         match write(core, address, expected, &value, version) {
-            Ok(_) => return Ok(claims),
+            Ok(_) => {
+                for (rejected, result) in rejected {
+                    let core = Arc::clone(core);
+                    let address = address.to_owned();
+                    let expected = expected.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = finish_refusal(&core, &address, &expected, rejected, result) {
+                            tracing::warn!("Cannot publish App request refusal for {address}: {error:#}");
+                        }
+                    });
+                }
+                return Ok(claims);
+            }
             Err(error) if hc::error_kind(&error) == Some("conflict") => continue,
             Err(error) => return Err(error),
         }
     }
     anyhow::bail!("Mailbox changed repeatedly; no request was dispatched")
 }
-pub fn finish(
-    core: &Core,
-    address: &str,
-    route: &Value,
-    claim: Claim,
-    result: Value,
+fn finish_receipt(core: &Core, address: &str, claim: &Claim, result: &Value) -> anyhow::Result<()> {
+    let Some(name) = claim.accepted["receipt"].as_str() else {
+        return Ok(());
+    };
+    anyhow::ensure!(name == receipt_name(&claim.id), "Invalid App receipt name");
+    for _ in 0..16 {
+        let current = core.call("doc.get", json!({"name":name,"on":on(address)}))?;
+        let version = current["version"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Receipt has no version"))?;
+        let mut value = current["value"].clone();
+        anyhow::ensure!(
+            value["version"] == 1
+                && value["id"] == claim.id
+                && value["pid"] == claim.accepted["pid"]
+                && value["session"] == claim.accepted["session"],
+            "Receipt identity changed"
+        );
+        if value["state"] == "done" {
+            anyhow::ensure!(value["result"] == *result, "Receipt result changed");
+            return Ok(());
+        }
+        anyhow::ensure!(value["state"] == "pending", "Receipt is not pending");
+        value["state"] = json!("done");
+        value["result"] = result.clone();
+        if serde_json::to_vec(&value)?.len() > LIMIT {
+            value["result"] = json!({"error":"App handled the request, but its result exceeds the receipt limit. Inspect Herdr before repeating a mutation.","outcome":"unknown"});
+        }
+        match core.call(
+            "doc.set",
+            json!({"name":name,"on":on(address),"version":version,"value":value}),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(error) if hc::error_kind(&error) == Some("conflict") => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    anyhow::bail!("App receipt completion could not be confirmed")
+}
+fn publish_completion(
+    receipt: impl FnOnce() -> anyhow::Result<()>,
+    mailbox: impl FnOnce() -> anyhow::Result<()>,
+    receipt_required: bool,
 ) -> anyhow::Result<()> {
+    if let Err(error) = receipt() {
+        if receipt_required { return Err(error); }
+        tracing::warn!("Cannot publish App request refusal receipt: {error:#}");
+    }
+    mailbox()
+}
+
+fn finish_refusal(core: &Core, address: &str, route: &Value, claim: Claim, result: Value) -> anyhow::Result<()> {
+    publish_completion(
+        || finish_receipt(core, address, &claim, &result),
+        || finish_mailbox(core, address, route, &claim, &result),
+        false,
+    )
+}
+
+pub fn finish(core: &Core, address: &str, route: &Value, claim: Claim, result: Value) -> anyhow::Result<()> {
+    publish_completion(
+        || finish_receipt(core, address, &claim, &result),
+        || finish_mailbox(core, address, route, &claim, &result),
+        true,
+    )
+}
+
+fn finish_mailbox(core: &Core, address: &str, route: &Value, claim: &Claim, result: &Value) -> anyhow::Result<()> {
     for _ in 0..16 {
         let (mut value, version) = document(core, address, route)?;
         anyhow::ensure!(
@@ -392,6 +530,93 @@ mod tests {
             .unwrap()
             .0
             .is_empty());
+    }
+    #[test]
+    fn a_receipt_must_belong_to_its_request() {
+        let route = new_route();
+        let record = record();
+        let mut value = document(&route);
+        assert_eq!(receipt_name("request-1"), "hr.19f1064b619d49d35392eac7261c");
+        value["requests"]["request-1"]["receipt"] = json!(receipt_name("request-1"));
+        assert_eq!(claim_document(&mut value, &route, &record, 1000).unwrap().0.len(), 1);
+        let mut value = document(&route);
+        value["requests"]["request-1"]["receipt"] = json!(receipt_name("another-request"));
+        assert!(claim_document(&mut value, &route, &record, 1000).unwrap().0.is_empty());
+    }
+    #[test]
+    fn durable_receipt_checks_the_calling_identity() {
+        let mut request = request();
+        request["state"] = json!("accepted");
+        let claim = Claim { id: "request-1".into(), wire: request["wire"].clone(), accepted: request };
+        let receipt = json!({"version":1,"id":"request-1","pid":7,"session":"s1","state":"pending"});
+        assert!(valid_receipt(&receipt, &claim));
+        for (key, invalid) in [("id", json!("other")), ("pid", json!(8)), ("session", json!("other")), ("state", json!("done"))] {
+            let mut value = receipt.clone();
+            value[key] = invalid;
+            assert!(!valid_receipt(&value, &claim));
+        }
+    }
+    #[test]
+    fn a_bad_receipt_does_not_strand_other_requests() {
+        let route = new_route();
+        let mut value = document(&route);
+        value["requests"]["request-2"] = request();
+        let (claims, _) = claim_document(&mut value, &route, &record(), 1000).unwrap();
+        let claims = validate_claims(&mut value, claims, |claim| {
+            anyhow::ensure!(claim.id != "request-1", "fixture failure");
+            Ok(())
+        });
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].id, "request-2");
+        assert_eq!(value["requests"]["request-1"]["state"], "done");
+        assert_eq!(value["requests"]["request-1"]["result"]["code"], "HERDR_RECEIPT_REFUSED");
+        assert_eq!(value["requests"]["request-1"]["result"]["effect"], "not-applied");
+        assert_eq!(value["requests"]["request-2"]["state"], "accepted");
+    }
+    #[test]
+    fn a_receipt_refusal_reaches_the_mailbox_even_when_the_receipt_cannot_be_written() {
+        for receipt in [Value::Null, json!({"version":1,"id":"someone-else","pid":7,"session":"s1","state":"pending"})] {
+            let mut accepted = request();
+            accepted["state"] = json!("accepted");
+            let claim = Claim { id: "request-1".into(), wire: accepted["wire"].clone(), accepted };
+            let mut mailbox_completed = false;
+            let mut receipt_modified = false;
+            let completed = publish_completion(
+                || {
+                    anyhow::ensure!(valid_receipt(&receipt, &claim), "invalid receipt");
+                    receipt_modified = true;
+                    Ok(())
+                },
+                || { mailbox_completed = true; Ok(()) },
+                false,
+            );
+            assert!(completed.is_ok());
+            assert!(mailbox_completed);
+            assert!(!receipt_modified);
+        }
+    }
+    #[test]
+    fn dispatched_results_require_a_durable_receipt_before_mailbox_completion() {
+        let mut mailbox_completed = false;
+        let completed = publish_completion(
+            || anyhow::bail!("receipt unavailable"),
+            || { mailbox_completed = true; Ok(()) },
+            true,
+        );
+        assert!(completed.is_err());
+        assert!(!mailbox_completed);
+    }
+    #[test]
+    fn receipt_refusals_still_persist_valid_receipts() {
+        let mut receipt_completed = false;
+        let mut mailbox_completed = false;
+        let completed = publish_completion(
+            || { receipt_completed = true; Ok(()) },
+            || { mailbox_completed = true; Ok(()) },
+            false,
+        );
+        assert!(completed.is_ok());
+        assert!(receipt_completed && mailbox_completed);
     }
     #[test]
     fn mailbox_queue_and_size_are_bounded() {
