@@ -207,6 +207,58 @@ fn hidden_tabs_follow(cx: &mut gpui::TestAppContext) {
     assert_eq!(dims(cx), fitted, "hidden tabs must have been sized as their panes draw them");
 }
 #[test]
+fn a_gui_pane_keeps_its_terminal_fitted_when_split() {
+    in_own_process("gui_terminal_follows_split");
+}
+
+#[gpui::test]
+fn gui_terminal_follows_split(cx: &mut gpui::TestAppContext) {
+    use serde_json::json;
+    if !running_alone("gui_terminal_follows_split") { return; }
+    let layout = json!({"id": "context", "type": "block", "content": {"tab": "active", "pane": {
+        "lone": true,
+        "header": {"height": 30, "content": {"mod": "size-probe"}},
+        "footer": {"height": 82, "view": "gui", "content": {"mod": "size-probe"}}
+    }}});
+    let (view, cx) = open_window(cx, "size-probe", "import { View, div } from 'gpui-kit'; export default class Probe extends View { render() { return div(); } }", layout);
+    std::fs::write(crate::mods::app_dir().join("mods/size-probe/mod.json"),
+        r#"{"place":"none","pane_view":{"id":"gui","label":"GUI","when":[{"label":"bridge"}]}}"#).unwrap();
+    view.update_in(cx, |this, window, cx| {
+        this.sync_folders(window, cx);
+        this.folders.retain(|id, _| id == "size-probe");
+        this.model = crate::model::Model::default();
+        this.model.add_space("space", "test", "/", super::Tab::new("tab", "", "a", "probe-a"));
+        this.live.insert("probe-a".into(), json!({"state":"live", "labels":{"bridge":"ready", "herdr.view":"gui"}}));
+        this.sync(window, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(view.update(cx, |this, _| this.pane_view_mode("a")), "gui");
+    view.update_in(cx, |this, window, cx| this.fit_hidden_tabs(window, cx));
+    view.update_in(cx, |this, window, cx| this.fit_hidden_tabs(window, cx));
+    let dims = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, cx| this.terms["a"].view.read(cx).dimensions());
+    let full = dims(cx);
+    view.update_in(cx, |this, window, cx| {
+        let tab = this.model.tab_mut("tab").unwrap();
+        tab.root.split("a", super::Axis::Row, crate::model::pane("b", "probe-b"), "split".into());
+        this.sync(window, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let fitted = dims(cx);
+    assert!(fitted.0 < full.0, "splitting the active GUI must fit its hidden terminal");
+    cx.simulate_resize(gpui::size(gpui::px(1400.0), gpui::px(900.0)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    view.update_in(cx, |this, window, cx| this.fit_hidden_tabs(window, cx));
+    let resized = dims(cx);
+    assert_ne!(resized, fitted, "an active GUI terminal must follow window geometry");
+    view.update_in(cx, |this, window, cx| {
+        this.live.get_mut("probe-a").unwrap()["labels"]["herdr.view"] = json!("tui");
+        this.sync(window, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(dims(cx), resized, "showing the terminal must not change its grid");
+}
+
+#[test]
 fn frame_geometry_excludes_filtered_and_hover_slots() {
     use super::pane_size::frame_slot_height;
     use serde_json::json;
