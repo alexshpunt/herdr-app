@@ -6651,6 +6651,7 @@ fn swap_by(args: &Value) -> Result<SwapBy<'_>, String> {
 fn needs_model_pane(name: &str, args: &Value) -> bool {
     match name {
         "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "pane.rename" | "pane.resize" | "terminal.show" | "app.apart" => AppWindow::arg(args, "pane").is_none(),
+        "pane.view" => AppWindow::arg(args, "pane").is_none() && AppWindow::arg(args, "terminal").is_none(),
         "app.open" => AppWindow::arg(args, "for").is_none(),
         "pane.go" => true,
         "terminal.open" | "terminal.keep" => matches!(AppWindow::arg(args, "place"), Some("right" | "down")),
