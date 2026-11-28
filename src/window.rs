@@ -10205,6 +10205,9 @@ export default class Probe extends View { render() { return div().child("probe")
         for name in ["pane.split", "pane.close", "pane.zoom", "pane.swap", "terminal.show"] {
             assert!(!super::needs_model_pane(name, &json!({"pane": "explicit-pane"})), "{name}");
         }
+        assert!(super::needs_model_pane("pane.view", &json!({"view": "toggle"})));
+        assert!(!super::needs_model_pane("pane.view", &json!({"view": "gui", "pane": "explicit-pane"})));
+        assert!(!super::needs_model_pane("pane.view", &json!({"view": "gui", "terminal": "explicit-terminal"})));
         assert!(super::needs_model_pane("pane.go", &json!({"pane": "explicit-pane"})));
         for name in ["terminal.open", "terminal.keep"] {
             for place in ["right", "down"] {
