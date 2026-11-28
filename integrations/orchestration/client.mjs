@@ -6,6 +6,8 @@ import { existsSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { RecoveryJournal, receiptName } from './recovery.mjs';
 
 // Pi normally clamps unsupported thinking and may fuzzy-resolve model ids.
 // A workflow must either launch its saved selection exactly or fail startup.
@@ -96,22 +98,32 @@ export class CoreRpc {
 const validRoute = route => route?.version === 1 && typeof route.app === 'string' && route.app && typeof route.epoch === 'string' && route.epoch && /^[a-z0-9][a-z0-9_.-]{0,31}$/.test(route.mailbox);
 const document = (value, epoch) => value?.version === 1 && value.epoch === epoch && value.requests && typeof value.requests === 'object' && !Array.isArray(value.requests) ? value : { version: 1, epoch, requests: {} };
 const conflict = error => error.code === 'conflict';
-export async function requestViaMailbox(core, route, identity, wire, { timeout = 15000, pollMs = 250 } = {}) {
+export async function requestViaMailbox(core, route, identity, wire, { timeout = 15000, pollMs = 250, prepareReceipt, onAdmitted } = {}) {
   if (!validRoute(route)) throw new Error('The initiating Herdr App route is missing or invalid. Update Herdr and reload this Pi.');
-  const id = randomUUID(), expires = Date.now() + Math.min(timeout, 120000);
-  const request = { pid: identity.pid, session: identity.session, expires, state: 'ready', wire };
-  let admitted = false;
-  for (let attempt = 0; attempt < 8; attempt++) {
+  const id = randomUUID(), lifetime = Math.min(timeout, 120000);
+  const receipt = prepareReceipt ? await prepareReceipt(id) : undefined;
+  const admissionDeadline = Date.now() + lifetime;
+  // The bridge does not propagate cancellation. Never leave a mutation queued
+  // for later dispatch after its caller may have stopped waiting.
+  const readOnly = wire.ls === true || ['workflow.get', 'agent.list', 'agent.inspect', 'agent.history'].includes(wire.do);
+  let expires, admitted = false;
+  do {
     const current = await core.call('doc.get', { name: route.mailbox });
+    if (Date.now() >= admissionDeadline) break;
     const value = structuredClone(document(current.value, route.epoch));
     for (const [key, entry] of Object.entries(value.requests)) if (entry.expires < Date.now()) delete value.requests[key];
-    if (Object.keys(value.requests).length >= 8) throw new Error('The App mailbox has eight pending requests. Inspect Herdr before sending more.');
-    value.requests[id] = request;
-    if (Buffer.byteLength(JSON.stringify(value)) > 900000) throw new Error('The App request exceeds the bounded mailbox size');
-    try { await core.call('doc.set', { name: route.mailbox, version: current.version, value }); admitted = true; break; }
-    catch (error) { if (!conflict(error)) throw error; }
-  }
-  if (!admitted) throw new Error('The App mailbox changed repeatedly; no request was submitted');
+    if (Object.keys(value.requests).length < 8) {
+      expires = Date.now() + lifetime;
+      value.requests[id] = { pid: identity.pid, session: identity.session, expires, state: 'ready', wire, ...(receipt ? { receipt } : {}) };
+      if (Buffer.byteLength(JSON.stringify(value)) > 900000) throw new Error('The App request exceeds the bounded mailbox size');
+      try { await core.call('doc.set', { name: route.mailbox, version: current.version, value }); admitted = true; break; }
+      catch (error) { if (!conflict(error)) throw error; }
+    }
+    if (!readOnly) break;
+    if (Date.now() < admissionDeadline) await delay(Math.max(1, Math.min(pollMs, admissionDeadline - Date.now())));
+  } while (Date.now() < admissionDeadline);
+  if (!admitted) throw Object.assign(new Error('The Herdr App request queue remained full or busy. This request was not submitted. Wait for other Herdr calls to finish, then retry. Inspect the effects of any earlier unconfirmed mutation before retrying it.'), { code: 'HERDR_NOT_SUBMITTED', effect: 'not-applied', reason: 'queue' });
+  onAdmitted?.();
   await core.call('terminal.label', { terminal: identity.terminal, labels: { 'herdr.app.request': id } });
   do {
     const current = await core.call('doc.get', { name: route.mailbox });
@@ -119,13 +131,27 @@ export async function requestViaMailbox(core, route, identity, wire, { timeout =
     const result = current.value.requests?.[id];
     if (!result) throw new Error('The App request receipt is unavailable; its effect is unknown. Inspect Herdr before retrying.');
     if (result.state === 'done') {
-      // Only acknowledge after observing the result. Failure to prune cannot
-      // invalidate a confirmed result, and unknown writes are never replayed.
-      try {
-        const value = structuredClone(current.value); delete value.requests[id];
-        await core.call('doc.set', { name: route.mailbox, version: current.version, value });
-      } catch { /* Retain the bounded result until its expiry. */ }
-      if (result.result?.error) throw new Error(typeof result.result.error === 'string' ? result.result.error : JSON.stringify(result.result.error));
+      // Acknowledge only the observed result. Retry explicit CAS conflicts with
+      // a fresh document, preserving every other caller's in-flight request.
+      // An unknown write is not retried and cannot invalidate this result.
+      let snapshot = current;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        try {
+          const value = structuredClone(snapshot.value); delete value.requests[id];
+          await core.call('doc.set', { name: route.mailbox, version: snapshot.version, value });
+          break;
+        } catch (error) {
+          if (!conflict(error) || attempt === 7) break;
+          try { snapshot = await core.call('doc.get', { name: route.mailbox }); }
+          catch { break; }
+          if (snapshot.value?.epoch !== route.epoch || snapshot.value.requests?.[id]?.state !== 'done') break;
+        }
+      }
+      if (result.result?.error) {
+        const error = new Error(typeof result.result.error === 'string' ? result.result.error : JSON.stringify(result.result.error));
+        if (result.result.code === 'HERDR_RECEIPT_REFUSED' && result.result.effect === 'not-applied') Object.assign(error, { code: 'HERDR_NOT_SUBMITTED', effect: 'not-applied', reason: 'storage', refusedRequestId: id });
+        throw error;
+      }
       return result.result;
     }
     await delay(pollMs);
@@ -136,16 +162,110 @@ export async function requestViaMailbox(core, route, identity, wire, { timeout =
 // terminal whose root and foreground processes are someone else.
 export function ownsTerminal(terminal, pid) { return terminal?.pid === pid || terminal?.foreground?.pid === pid; }
 export class AppClient {
-  constructor(bindOrigin, pid, session) { this.bindOrigin = bindOrigin; this.pid = pid; this.session = session; this.hc = resolveHc(); }
+  constructor(bindOrigin, pid, session, { recoveryRoot, coreFactory = () => new CoreRpc() } = {}) {
+    this.bindOrigin = bindOrigin; this.pid = pid; this.session = session; this.hc = resolveHc(); this.coreFactory = coreFactory;
+    this.tracking = new AsyncLocalStorage();
+    this.journal = recoveryRoot ? new RecoveryJournal(recoveryRoot, session) : undefined;
+  }
+  async tracked(operation, toolCallId, run) {
+    if (!this.journal) throw new Error('Recovery is unavailable');
+    let id;
+    try { id = await this.journal.begin(operation, toolCallId); }
+    catch (error) { throw Object.assign(new Error(`Cannot record the request before submission: ${error.message}`), { code: 'HERDR_NOT_SUBMITTED', effect: 'not-applied', reason: 'storage' }); }
+    const tracker = { id, operation, admittedMutation: 0 };
+    return this.tracking.run(tracker, async () => {
+      let result;
+      try {
+        result = await run();
+        await this.journal.complete(id, result);
+      } catch (error) {
+        const safe = error?.code === 'HERDR_NOT_SUBMITTED' && !tracker.admittedMutation;
+        const failure = { code: safe ? 'HERDR_NOT_SUBMITTED' : 'HERDR_OUTCOME_UNKNOWN', effect: safe ? 'not-applied' : 'unknown', ...(safe && error.reason ? { reason: error.reason } : {}), message: error?.message ?? String(error), requestId: id };
+        try {
+          await this.journal.fail(id, failure);
+          const saved = (await this.journal.list()).find(item => item.id === id);
+          if (safe) failure.revision = saved?.revision;
+          else if (saved?.state === 'result') this.journal.created.delete(id);
+        } catch (journalError) { failure.message += `; recovery journal update failed: ${journalError.message}`; }
+        finally { this.journal.active.delete(id); }
+        throw Object.assign(new Error(failure.message), failure);
+      }
+      try {
+        const entry = (await this.journal.list()).find(item => item.id === id);
+        if (!entry || entry.state !== 'result') throw new Error('Recorded recovery result is unavailable');
+        return { id, revision: entry.revision, result };
+      } catch (error) {
+        this.journal.created.delete(id);
+        throw Object.assign(new Error(`Result was recorded but could not be delivered: ${error.message}`), { code: 'HERDR_OUTCOME_UNKNOWN', effect: 'unknown', requestId: id });
+      }
+    });
+  }
+  async resolveReceipts(requests, existingCore) {
+    const core = existingCore ?? this.coreFactory();
+    try {
+      return await Promise.all(requests.map(async request => {
+        if (request.refused) return { id: request.id, state: 'done', result: { code: 'HERDR_RECEIPT_REFUSED', effect: 'not-applied', error: 'App refused an unverifiable receipt' } };
+        const response = await core.call('doc.get', { name: request.receipt });
+        const value = response.value;
+        if (!value || value.id !== request.id || value.session !== this.session) return { id: request.id, state: 'unknown' };
+        return { id: request.id, state: value.state, ...(value.state === 'done' ? { result: value.result } : {}) };
+      }));
+    } finally { if (!existingCore) core.close(); }
+  }
+  async recoveryList() {
+    await this.owner();
+    let core;
+    try { return await this.journal.list(requests => this.resolveReceipts(requests, core ??= this.coreFactory())); }
+    finally { core?.close(); }
+  }
+  async recoveryAck(input) {
+    await this.owner();
+    await this.journal.ack(input, requests => this.resolveReceipts(requests));
+    const requests = await this.journal.cleanupPending();
+    if (!requests.length) return { cleanupPending: [] };
+    const core = this.coreFactory(), cleanupPending = [];
+    try {
+      for (const request of requests) {
+        try {
+          const current = await core.call('doc.get', { name: request.receipt });
+          if (current.value != null) {
+            if (current.value.id !== request.id || current.value.session !== this.session) throw new Error('Receipt identity changed');
+            await core.call('doc.set', { name: request.receipt, version: current.version, value: null });
+          }
+          await this.journal.cleanupComplete(request.id);
+        } catch (error) { cleanupPending.push({ id: request.id, error: error.message }); }
+      }
+    } finally { core.close(); }
+    return { cleanupPending };
+  }
   async app(args, options = {}) {
     const owner = await this.owner();
     let route;
     try { route = JSON.parse(owner.labels?.['herdr.app'] ?? 'null'); } catch { /* Report an invalid route below. */ }
     if (!validRoute(route)) throw new Error('The initiating Herdr App route is missing or invalid. Update Herdr and reload this Pi.');
     const wire = args[0] === 'ls' ? { ls: true } : { do: args[1], args: JSON.parse(args[2] ?? '{}') };
-    const core = new CoreRpc();
-    try { return await requestViaMailbox(core, route, { pid: this.pid, session: this.session, terminal: process.env.HC_TERMINAL_ID }, wire, options); }
-    finally { core.close(); }
+    const core = this.coreFactory(), tracker = this.tracking.getStore();
+    const readOnly = wire.ls === true || ['workflow.get', 'agent.list', 'agent.inspect', 'agent.history'].includes(wire.do);
+    const capture = tracker && (!readOnly || wire.do === tracker.operation);
+    try {
+      if (capture && route.receipts !== 1) throw Object.assign(new Error('Update Herdr App before using durable recovery.'), { code: 'HERDR_NOT_SUBMITTED', effect: 'not-applied', reason: 'app-version' });
+      const prepareReceipt = capture ? async id => {
+        const receipt = receiptName(id);
+        await this.journal.addRequest(tracker.id, { id, receipt, wire });
+        try { await core.call('doc.set', { name: receipt, version: 0, value: { version: 1, id, pid: this.pid, session: this.session, state: 'pending' } }); }
+        catch (error) { throw Object.assign(new Error(`Cannot prepare durable App receipt: ${error.message}`), { code: 'HERDR_NOT_SUBMITTED', effect: 'not-applied', reason: 'storage' }); }
+        return receipt;
+      } : undefined;
+      try {
+        return await requestViaMailbox(core, route, { pid: this.pid, session: this.session, terminal: process.env.HC_TERMINAL_ID }, wire, { ...options, prepareReceipt, onAdmitted: () => { if (tracker && !readOnly) tracker.admittedMutation++; } });
+      } catch (error) {
+        if (tracker && error?.refusedRequestId) {
+          await this.journal.preserveReceipt(tracker.id, error.refusedRequestId);
+          if (!readOnly) tracker.admittedMutation--;
+        }
+        throw error;
+      }
+    } finally { core.close(); }
   }
   async command(name, args = {}) {
     const launch = ['space.new', 'tab.new', 'pane.split', 'terminal.open'].includes(name);

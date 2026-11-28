@@ -23,6 +23,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../integrations/orchestration/client.mjs"),
     ),
     (
+        "recovery.mjs",
+        include_str!("../integrations/orchestration/recovery.mjs"),
+    ),
+    (
         "orchestration.mjs",
         include_str!("../integrations/orchestration/orchestration.mjs"),
     ),

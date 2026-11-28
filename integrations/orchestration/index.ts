@@ -22,7 +22,11 @@ async function startSubagent(client: Client, service: Service | undefined, args:
   const origin = await client.context();
   const input = { requestId: args.requestId as string, name: args.name as string, folder: args.folder as string, profile: args.profile as string, message: args.task as string };
   try { return await service.create(input, undefined, undefined, { space: origin.space, depth }); }
-  catch (error) { throw new Error(`agent.subagent refused: ${error instanceof Error ? error.message : String(error)}`); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const fields = error && typeof error === 'object' ? error as { code?: string; effect?: string; requestId?: string } : {};
+    throw Object.assign(new Error(`agent.subagent refused: ${reason}`), fields);
+  }
 }
 
 export default function herdrOrchestration(pi: ExtensionAPI): void {
@@ -81,14 +85,26 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     const provide = (request as { provide?: unknown }).provide;
     if (typeof provide !== 'function') return;
     const current = client, orchestrator = service;
-    provide({ version: 1, command(name: string, args: Record<string, unknown>) {
+    const invoke = (name: string, args: Record<string, unknown>) => {
       if (!BRIDGE_COMMANDS.includes(name)) throw new Error('Unsupported Herdr bridge command');
       if (client !== current) throw new Error('Herdr bridge changed; reload or retry the read');
       if (name !== 'agent.replicate' && name !== 'agent.subagent') return current.command(name, args);
       const child = childDepth(name, depth());
       if (name === 'agent.replicate') return current.replicate({ ...args, depth: child });
       return startSubagent(current, orchestrator, args, child);
-    } });
+    };
+    const ensureCurrent = () => { if (client !== current) throw new Error('Herdr bridge changed; reacquire it for the current session'); };
+    provide({ version: 1, command: invoke,
+      commandTracked(name: string, args: Record<string, unknown>, options: { toolCallId?: string | null } = {}) {
+        ensureCurrent();
+        if (options.toolCallId != null && (typeof options.toolCallId !== 'string' || !options.toolCallId)) throw new Error('Invalid tool call ID');
+        return current.tracked(name, options.toolCallId, () => invoke(name, args));
+      },
+      recovery: {
+        list() { ensureCurrent(); return current.recoveryList(); },
+        ack(input: { items: { id: string; revision: string }[] }) { ensureCurrent(); return current.recoveryAck(input); },
+      },
+    });
   });
   const report = (ctx: ExtensionContext, value: unknown) => ctx.ui.notify(`Herdr agents: ${value instanceof Error ? value.message : String(value)}`, 'warning');
   const publish = (ctx: ExtensionContext) => {
@@ -117,7 +133,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
     const clientUrl = new URL('./client.mjs', import.meta.url); clientUrl.searchParams.set('load', suffix);
     const serviceUrl = new URL('./orchestration.mjs', import.meta.url); serviceUrl.searchParams.set('load', suffix);
     const [{ AppClient, ownsTerminal, workflowSelectionError }, { Orchestrator, bindOrigin }] = await Promise.all([importFresh(clientUrl.href), importFresh(serviceUrl.href)]);
-    const candidate = new AppClient(bindOrigin, process.pid, session);
+    const candidate = new AppClient(bindOrigin, process.pid, session, { recoveryRoot: path.join(getAgentDir(), 'herdr-orchestration', 'recovery') });
     const owner = await candidate.terminal();
     // A nested Pi, such as a replicate copy behind a wrapper shell, does not own
     // the terminal it inherited. It stays inactive instead of warning on every publication.
