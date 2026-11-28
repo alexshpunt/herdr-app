@@ -416,6 +416,9 @@ pub struct Person {
     /// A draggable scroll position thumb at a terminal pane's right edge.
     #[serde(skip_serializing_if = "is_true")]
     pub pane_scrollbars: bool,
+    /// The last explicitly selected pane view, or the fresh-install default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_pane_view: Option<PaneView>,
     /// Minimum terminal text contrast ratio; 1 leaves program colors unchanged.
     pub minimum_contrast: f32,
     /// macOS Option sends Alt shortcuts, or follows the keyboard layout.
@@ -428,6 +431,20 @@ pub struct Person {
     pub theme: Option<crate::layout::ThemeChoice>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub colors: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PaneView {
+    Gui,
+    #[default]
+    Tui,
+}
+
+impl PaneView {
+    pub fn as_str(self) -> &'static str {
+        match self { Self::Gui => "gui", Self::Tui => "tui" }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -487,6 +504,7 @@ impl Default for Person {
             clipboard_write: true,
             copy_on_select: true,
             pane_scrollbars: true,
+            default_pane_view: None,
             minimum_contrast: 1.0,
             option_as_alt: OptionAsAlt::Auto,
             appearance: Appearance::System,
@@ -775,6 +793,21 @@ fn person_text(person: &Person, previous: &str) -> std::io::Result<String> {
         raw.extend(owned);
     }
     Ok(serde_json::to_string_pretty(&raw)? + "\n")
+}
+
+#[test]
+fn pane_view_choice_survives_settings_writes() {
+    let fresh: Person = serde_json::from_str("{}").unwrap();
+    assert_eq!(fresh.default_pane_view.unwrap_or_default(), PaneView::Tui);
+    for mode in [PaneView::Gui, PaneView::Tui] {
+        let mut person = fresh.clone();
+        person.default_pane_view = Some(mode);
+        let text = person_text(&person, r#"{"mod_preference":42}"#).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(saved["mod_preference"], 42);
+        let restored: Person = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.default_pane_view, Some(mode));
+    }
 }
 
 /// Installs new settings; returns whether anything changed.

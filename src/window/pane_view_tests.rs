@@ -129,6 +129,10 @@ export default class Probe extends View {
                 assert!(result.get("error").is_none(), "{result}");
                 assert_eq!(this.pane_view_mode("a"), mode);
                 assert_eq!(this.pane_view_mode("b"), "tui");
+                assert_eq!(
+                    serde_json::to_value(&this.person).unwrap()["default_pane_view"],
+                    mode
+                );
                 let visible = this.visible().1;
                 assert_eq!(
                     visible.iter().any(|(slot, _)| slot == "a#view"),
@@ -157,6 +161,28 @@ export default class Probe extends View {
         }
     }
     view.update_in(cx, |this, window, cx| {
+        // An unlabeled terminal follows the last choice; an explicit label wins.
+        this.live.get_mut("term-b").unwrap()["labels"]
+            .as_object_mut()
+            .unwrap()
+            .remove("herdr.view");
+        this.run_as(
+            "pane.view",
+            json!({"pane":"a", "view":"gui"}),
+            false,
+            window,
+            cx,
+        );
+        assert_eq!(this.pane_view_mode("b"), "gui");
+        this.live.get_mut("term-b").unwrap()["labels"]["herdr.view"] = json!("tui");
+        assert_eq!(this.pane_view_mode("b"), "tui");
+        this.run_as(
+            "pane.view",
+            json!({"pane":"a", "view":"tui"}),
+            false,
+            window,
+            cx,
+        );
         this.live.get_mut("term-b").unwrap()["labels"]["herdr.view"] = json!("gui");
         let result = this.run_as(
             "pane.view",
@@ -197,6 +223,10 @@ export default class Probe extends View {
             this.pane_view_mode("b"),
             "tui",
             "a missing bridge falls back to the terminal"
+        );
+        assert_eq!(
+            this.person.default_pane_view,
+            Some(crate::settings::PaneView::Gui)
         );
         let gui = this
             .pane_view_options("b")

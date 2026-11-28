@@ -826,8 +826,10 @@ The main ones:
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
   `pane.view {view: "gui" | "tui" | "toggle", pane?, terminal?}` (default target: the
-  focused pane; the choice is kept in the terminal label `herdr.view`; an unavailable
-  GUI falls back to the terminal),
+  focused pane; the choice is kept in the terminal label `herdr.view` and in
+  `settings.json` as `default_pane_view`. Terminals without a view label use that
+  default, initially `tui`; an unavailable GUI falls back to the terminal without
+  changing the choice),
   `pane.swap {pane?, direction | target}`, `pane.rename {pane?, name}` ("": unnamed
   again; `panes()[i].name`, kept with its tab), `pane.resize {direction, pane?, px?}` (moves
   the nearest border along that axis by px, default 40, as a drag would; a keyboard
