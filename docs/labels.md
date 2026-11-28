@@ -65,7 +65,8 @@ read `pinned` from `agents()`; they never write the label themselves.
 A program that has a pane view (such as a Pi bridge) sets it while its focused
 screen cannot be drawn by that view, for example a full-screen child program.
 Present and non-empty: the pane shows the terminal and the desktop app prints
-the reason over the terminal's top right corner. Remove the label (write it
+the reason in a banner row above the terminal (the terminal gives up those rows,
+so the banner never covers terminal text). Remove the label (write it
 empty) when the screen closes and the pane returns to the view. The person's
 choice in `herdr.view` and the default for new panes do not change. Clients
 that don't know this label keep showing the view.

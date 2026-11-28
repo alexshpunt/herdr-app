@@ -310,6 +310,13 @@ const SWAP: &str = "#swap";
 /// draw. Its value is the reason. The pane shows the terminal until the label is
 /// gone; the saved `herdr.view` does not change.
 const VIEW_HOLD_LABEL: &str = "herdr.view.unavailable";
+/// Height of the banner that tells why a pane shows its terminal for now. It is a
+/// row of its own above the terminal, so it never covers terminal text.
+const VIEW_HOLD_BANNER_HEIGHT: f32 = 28.0;
+/// Horizontal padding of that banner, in logical pixels.
+const VIEW_HOLD_BANNER_PADDING: f32 = 10.0;
+/// Text size of that banner, in logical pixels.
+const VIEW_HOLD_BANNER_TEXT: f32 = 13.0;
 
 /// The share of the script VM's heap ceiling past which a mod edit starts a
 /// new VM instead of reloading into the old one (`files_changed`).
@@ -5763,15 +5770,17 @@ impl AppWindow {
                                 cx.notify();
                             }
                         }))
-                        .child(shown_terminal(&t.view, cx))
-                        .children(self.pane_view_notice(&n.id).map(|reason| {
-                            // Over the terminal's corner, not beside it: its grid must not resize. No
-                            // listeners, so clicks still reach the program.
-                            div().absolute().top(settings::z(8.0)).right(settings::z(16.0)).max_w_full()
-                                .px(settings::z(10.0)).py(settings::z(4.0)).rounded(settings::z(6.0))
-                                .bg(c("raised")).border_1().border_color(c("border"))
-                                .text_size(settings::z(13.0)).text_color(c("foreground")).truncate().child(reason)
-                        }))
+                        .map(|body| match self.pane_view_notice(&n.id) {
+                            // A row of its own above the terminal: the terminal gives up those rows,
+                            // so the banner never hides its text, and takes them back when it goes.
+                            Some(reason) => body.flex().flex_col()
+                                .child(div().flex_none().w_full().h(settings::z(VIEW_HOLD_BANNER_HEIGHT)).flex().items_center()
+                                    .px(settings::z(VIEW_HOLD_BANNER_PADDING)).bg(c("raised")).border_b_1().border_color(c("border"))
+                                    .text_size(settings::z(VIEW_HOLD_BANNER_TEXT)).text_color(c("foreground"))
+                                    .child(div().min_w_0().truncate().child(reason)))
+                                .child(div().flex_1().min_h_0().w_full().child(shown_terminal(&t.view, cx))),
+                            None => body.child(shown_terminal(&t.view, cx)),
+                        })
                         .into_any_element()
                 }
                 None => div().into_any_element(),
