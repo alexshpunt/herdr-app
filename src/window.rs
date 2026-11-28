@@ -1933,7 +1933,15 @@ impl AppWindow {
         let mut views = vec![json!({"id": "tui", "label": "TUI", "available": true, "reason": null})];
         views.extend(self.pane_views_for(pane).into_iter().map(|(view, matches)| {
             let failed = view.id() == "gui" && self.copies.get(&format!("{pane}#view")).is_some_and(|c| c.root.is_none());
-            let reason = if failed { Some("The pane view failed to load") } else if !matches { Some("Pane view requirements are not met") } else { None };
+            let labels = self.pane_view_address(pane).and_then(|address| self.live.get(&address)).and_then(|r| r.get("labels"));
+            let missing_label = view.reg.when.iter().find_map(|rule| match rule {
+                crate::apps::Rule::Label { label } if labels.and_then(|v| v.get(label)).and_then(Value::as_str).is_none_or(str::is_empty) => Some(label),
+                _ => None,
+            });
+            let reason = if failed { Some("The pane view failed to load".to_owned()) }
+                else if !matches { Some(missing_label.map(|label| format!("Requires terminal label {label}"))
+                    .unwrap_or_else(|| "Pane view requirements are not met".to_owned())) }
+                else { None };
             json!({"id": view.id(), "label": view.reg.label, "available": reason.is_none(), "reason": reason})
         }));
         views

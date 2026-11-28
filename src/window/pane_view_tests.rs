@@ -198,6 +198,13 @@ export default class Probe extends View {
             "tui",
             "a missing bridge falls back to the terminal"
         );
+        let gui = this
+            .pane_view_options("b")
+            .into_iter()
+            .find(|v| v["id"] == "gui")
+            .unwrap();
+        assert_eq!(gui["available"], false);
+        assert!(gui["reason"].is_string());
         assert!(!this.visible().1.iter().any(|(slot, _)| slot == "b#view"));
     });
 }
