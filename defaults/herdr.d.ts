@@ -109,7 +109,8 @@ export function playSound(sound: string): null;
  *   pane.resize {direction, pane?, px?},
  *   pane.header_height {pane?, px?} (a pane header mod sets its own height, e.g. a footer that grows with its content;
  *   px null or missing takes the request back; see "Pane frames" in the guide),
- *   pane.focus {pane | terminal}, pane.go {direction}, pane.swap {pane?, direction | target}.
+ *   pane.focus {pane | terminal}, pane.go {direction}, pane.swap {pane?, direction | target},
+ *   pane.view {view: "gui" | "tui" | "toggle", pane?, terminal?} (default: focused pane; saved in herdr.view; unavailable GUI falls back to terminal).
  *   Pane menus get target { pane, terminal }.
  * Apps: app.open {mod, app?, props?, title?, for?, space?, reuse?} (a tab of the agent the pane of `for`
  *   or the focused pane works for; reuse: "agent" | "project" | "none"), app.beside {tab?} (into its
@@ -271,10 +272,13 @@ export interface PaneScroll {
   from_bottom: number;
 }
 
+/** A pane view registered by a mod, with its current availability for the terminal. */
+export interface PaneView { id: string; label: string; available: boolean; }
+
 export interface PaneInfo {
   pane: string;
   /** null for a mod pane (`pane.split {mod}`): then `mod` names it, and only
-   *  pane, mod, props, tab, title, name, focused, zoomed and movable are set. */
+   *  pane, mod, props, tab, title, name, focused, zoomed, view, views and movable are set. */
   terminal: string | null;
   mod?: string;
   /** A mod pane's props as given (`tab.new {mod, props}`, `app.open`: `AppProps`). */
@@ -294,6 +298,10 @@ export interface PaneInfo {
   program: Program;
   focused: boolean;
   zoomed: boolean;
+  /** The mode actually shown; unavailable GUI views fall back to "tui". */
+  view: "gui" | "tui";
+  /** Registered pane views and whether each is available for this terminal. */
+  views: PaneView[];
   /** The app's top-center grip can rearrange this pane. False when zoomed or alone. */
   movable: boolean;
   /** History scroll for a terminal pane's attached view; null for mod panes / alt-screen. Live. */
@@ -350,8 +358,10 @@ export interface TerminalSelectionState {
  *  without an agent block, with a mod pane focused, the agent the tab was opened for
  *  (its `origin`) or null.
  *  `terminal` is null for mod panes. Selection describes the terminal that receives
- *  terminal commands (including a shown replacement or peek). Live. */
-export function focused(): ({ space: string; tab: string; pane: string | null; terminal: string | null; shown: string | null; agent: string | null; cwd: string | null } & TerminalSelectionState) | null;
+ *  terminal commands (including a shown replacement or peek). `view` is the shown
+ *  mode; `views` lists registered pane views and their availability. For a focused
+ *  terminal block outside a pane, `view` is "tui" and `views` is empty. Live. */
+export function focused(): ({ space: string; tab: string; pane: string | null; terminal: string | null; shown: string | null; agent: string | null; cwd: string | null; view: "gui" | "tui"; views: PaneView[] } & TerminalSelectionState) | null;
 
 /** The shown layout (layouts/<name>.json). Its name is shared("layout").
  *  Root `terminal_menu?: string` chooses a terminal right-click menu mod (default: "menu").

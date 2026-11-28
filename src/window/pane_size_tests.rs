@@ -207,6 +207,29 @@ fn hidden_tabs_follow(cx: &mut gpui::TestAppContext) {
     assert_eq!(dims(cx), fitted, "hidden tabs must have been sized as their panes draw them");
 }
 #[test]
+fn frame_geometry_excludes_filtered_and_hover_slots() {
+    use super::pane_size::frame_slot_height;
+    use serde_json::json;
+    let frame: crate::layout::PaneFrame = serde_json::from_value(json!({
+        "header": {"content": {"mod": "header"}, "height": 30},
+        "footer": {"content": {"mod": "composer"}, "height": 82, "view": "gui"}
+    })).unwrap();
+    assert_eq!(frame_slot_height(&frame, "gui", None), 112.0);
+    assert_eq!(frame_slot_height(&frame, "tui", None), 30.0);
+    assert_eq!(frame_slot_height(&frame, "tui", Some(50.0)), 50.0);
+    let tui_footer: crate::layout::PaneFrame = serde_json::from_value(json!({
+        "header": {"content": {"mod": "header"}, "height": 30, "view": "gui"},
+        "footer": {"content": {"mod": "footer"}, "height": 40, "view": "tui"}
+    })).unwrap();
+    assert_eq!(frame_slot_height(&tui_footer, "gui", Some(50.0)), 50.0);
+    assert_eq!(frame_slot_height(&tui_footer, "tui", Some(50.0)), 40.0);
+    let hover: crate::layout::PaneFrame = serde_json::from_value(json!({
+        "footer": {"content": {"mod": "composer"}, "height": 82, "reveal": "hover"}
+    })).unwrap();
+    assert_eq!(frame_slot_height(&hover, "gui", None), 0.0);
+}
+
+#[test]
 fn a_header_request_stays_between_the_layouts_least_and_most() {
     use super::pane_size::pane_header_height;
     use serde_json::json;

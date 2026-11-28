@@ -34,6 +34,15 @@ pub(super) fn pane_header_height(header: &Header, requested: Option<f32>) -> f32
     }
 }
 
+/// The space reserved by the frame's slots for a given view. Hover slots
+/// overlay the pane and filtered slots reserve no space.
+pub(super) fn frame_slot_height(frame: &PaneFrame, view: &str, header_request: Option<f32>) -> f32 {
+    let height = |slot: Option<&Header>, request| slot
+        .filter(|h| h.shows_in(view) && !h.hover())
+        .map_or(0.0, |h| pane_header_height(h, request));
+    height(frame.header.as_ref(), header_request) + height(frame.footer.as_ref(), None)
+}
+
 pub(super) fn gap(n: &Node, frame: Option<&PaneFrame>) -> f32 {
     n.gap.or(frame.and_then(|f| f.gap)).unwrap_or(0.0)
 }
@@ -139,8 +148,10 @@ fn pane_size(n: &Node, size: Size<Pixels>, target: &str, frame: Option<&PaneFram
     let mut size = inset(bounds.size, 2.0 * x * zoom, 2.0 * y * zoom);
     if let Some(frame) = frame.filter(|_| n.is_pane()) {
         let border = frame_border(frame, focused.contains(&n.id)).map_or(0.0, |line| line.width) * zoom;
-        let header = frame.header.as_ref().filter(|h| !h.hover()).map_or(0.0, |h| pane_header_height(h, requested)) * zoom;
-        size = inset(size, 2.0 * border, 2.0 * border + header);
+        // A hidden terminal keeps the geometry it will have in TUI mode,
+        // even when the pane's visible GUI uses different chrome.
+        let slots = frame_slot_height(frame, "tui", requested) * zoom;
+        size = inset(size, 2.0 * border, 2.0 * border + slots);
     }
     Some(size)
 }

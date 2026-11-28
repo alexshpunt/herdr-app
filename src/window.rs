@@ -412,6 +412,10 @@ pub struct AppWindow {
     /// Panes showing another terminal for now (pane → address), e.g. a sub-agent
     /// looked at in place of its parent. Not saved; the pane keeps its own.
     swapped: HashMap<String, String>,
+    /// Local choices awaiting the core's terminal listing.
+    written_views: HashMap<String, String>,
+    view_writes_in_flight: HashSet<String>,
+    focused_view_mode: Option<String>,
     /// The height each pane's header mod asked for with `pane.header_height` (pane → px).
     /// Not saved; it ends with the mod copy that asked (see `remove_copy`).
     header_heights: HashMap<String, f32>,
@@ -577,6 +581,9 @@ impl AppWindow {
             agent: None,
             agent_focused: None,
             swapped: HashMap::new(),
+            written_views: HashMap::new(),
+            view_writes_in_flight: HashSet::new(),
+            focused_view_mode: None,
             header_heights: HashMap::new(),
             float_drag: None,
             pane_drag: None,
@@ -1377,15 +1384,20 @@ impl AppWindow {
         if self.shows_tab()
             && let Some(c) = self.model.active_tab()
         {
-            let header = self.pane_frame().and_then(|f| f.header.as_ref()).and_then(|h| match &h.content {
-                HeaderContent::Mod { name, props } => Some((name.clone(), props.clone())),
-                HeaderContent::Builtin(_) => None,
-            });
             for n in c.shown().visible_blocks() {
-                if let Some((name, props)) = &header
-                    && n.is_pane()
-                {
-                    mods.push(pane_header_mod(n, name, props));
+                if n.is_pane() && !self.frameless(&n.id) {
+                    if let Some(frame) = self.pane_frame() {
+                        for (slot, header) in [("frame", frame.header.as_ref()), ("footer", frame.footer.as_ref())] {
+                            if let Some(h) = header.filter(|h| h.shows_in(self.pane_view_mode(&n.id)))
+                                && let HeaderContent::Mod { name, props } = &h.content
+                            {
+                                mods.push(pane_frame_mod(n, slot, name, props));
+                            }
+                        }
+                    }
+                }
+                if self.pane_view_mode(&n.id) == "gui" && let Some(inst) = self.pane_view_instance(n) {
+                    mods.push((format!("{}#view", n.id), inst));
                 }
                 match n.content() {
                     Some(Content::Mod { name, props }) => mods.push((n.id.clone(), self.pane_mod(n, name, props))),
@@ -1434,29 +1446,28 @@ impl AppWindow {
                 }
             }
         }
-        // The layout's pane header, shown or not (`pane_frame` says what's drawn now).
-        let header = self
-            .chrome
-            .walk()
-            .into_iter()
-            .find_map(|n| match n.content() {
-                Some(Content::Context { pane: Some(f), .. }) => f.header.as_ref(),
-                _ => None,
-            })
-            .and_then(|h| match &h.content {
-                HeaderContent::Mod { name, props } => Some((name.clone(), props.clone())),
-                HeaderContent::Builtin(_) => None,
-            });
+        // Frame copies remain owned even when their mode filter hides them.
+        let frame = self.chrome.walk().into_iter().find_map(|n| match n.content() {
+            Some(Content::Context { pane: Some(f), .. }) => Some(f),
+            _ => None,
+        });
         for c in self.model.tabs() {
             for n in c.root.walk() {
                 if let Some(Content::Mod { name, props }) = n.content() {
                     out.insert(n.id.clone(), self.pane_mod(n, name, props));
                 }
-                if let Some((name, props)) = &header
-                    && n.is_pane()
-                {
-                    let (slot, i) = pane_header_mod(n, name, props);
-                    out.insert(slot, i);
+                if n.is_pane() {
+                    if let Some(frame) = frame {
+                        for (slot, header) in [("frame", frame.header.as_ref()), ("footer", frame.footer.as_ref())] {
+                            if let Some(h) = header && let HeaderContent::Mod { name, props } = &h.content {
+                                let (slot, inst) = pane_frame_mod(n, slot, name, props);
+                                out.insert(slot, inst);
+                            }
+                        }
+                    }
+                    if let Some(inst) = self.pane_view_instance(n) {
+                        out.insert(format!("{}#view", n.id), inst);
+                    }
                 }
             }
         }
@@ -1757,7 +1768,10 @@ impl AppWindow {
         } else {
             model_pane.clone()
         };
-        let pane_changed = focused != self.focused_pane;
+        let mode = focused.as_ref().map(|p| self.pane_view_mode(p).to_owned());
+        let mode_changed = mode != self.focused_view_mode;
+        self.focused_view_mode = mode;
+        let pane_changed = focused != self.focused_pane || mode_changed;
         // A pane focused some other way, or the block leaving, ends it.
         if (pane_changed && self.focused_block != focused) || self.focused_block.as_ref().is_some_and(|b| !self.mod_block_shown(b)) {
             self.focused_block = None;
@@ -1797,12 +1811,19 @@ impl AppWindow {
             if no_dialog {
                 focused.as_ref().and_then(|p| self.pane_focus(p, cx)).unwrap_or_else(|| self.focus.clone()).focus(window, cx);
                 // An app's pane focused (`app.open`) gives it the keyboard (`focus` from `nextCommand()`).
-                if let Some(copy) = focused.as_ref().filter(|p| self.is_app_pane(p)).and_then(|p| self.copies.get(p)) {
-                    mods::send_command_to(copy.id, "focus");
+                if let Some(pane) = focused.as_ref() {
+                    let slot = if self.pane_view_mode(pane) == "gui" { Some(format!("{pane}#view")) } else if self.is_app_pane(pane) { Some(pane.clone()) } else { None };
+                    if let Some(copy) = slot.as_ref().and_then(|s| self.copies.get(s)) {
+                        mods::send_command_to(copy.id, "focus");
+                    }
                 }
             }
         } else if revealed {
-            self.refocus_pane(window, cx);
+            if no_dialog && let Some(pane) = focused.as_ref().filter(|p| self.pane_view_mode(p) == "gui") {
+                if let Some(copy) = self.copies.get(&format!("{pane}#view")) { mods::send_command_to(copy.id, "focus"); }
+            } else {
+                self.refocus_pane(window, cx);
+            }
         }
         if self.window_active {
             let visible = self.visible_addresses();
@@ -1872,6 +1893,13 @@ impl AppWindow {
             self.focus.focus(window, cx);
             return self.hand_keyboard();
         }
+        if dialog.is_none() && self.shows_tab() && self.agent_block().is_none()
+            && terminal_block(&self.chrome, self.focused_pane.as_deref()).is_none()
+            && let Some(pane) = self.model.focused_pane().filter(|p| self.pane_view_mode(p) == "gui") {
+            self.focus.focus(window, cx);
+            if let Some(copy) = self.copies.get(&format!("{pane}#view")) { mods::send_command_to(copy.id, "focus"); }
+            return;
+        }
         let shown = if terminal_block(&self.chrome, self.focused_pane.as_deref()).is_some() {
             self.focused_pane.as_deref().and_then(|p| self.pane_focus(p, cx))
         } else if let Some(block) = self.agent_block() {
@@ -1882,6 +1910,56 @@ impl AppWindow {
             None
         };
         dialog.or(shown).unwrap_or_else(|| self.focus.clone()).focus(window, cx);
+    }
+
+    /// The terminal whose view is shown in this pane.
+    fn pane_view_address(&self, pane: &str) -> Option<String> {
+        self.swapped.get(pane).cloned().or_else(|| self.model.address_of(pane))
+    }
+
+    fn pane_view_instance(&self, n: &Node) -> Option<Instance> {
+        let terminal = self.pane_view_address(&n.id)?;
+        let (view, _) = self.pane_views_for(&n.id).into_iter().find(|(v, available)| v.id() == "gui" && *available)?;
+        Some(Instance { name: view.name, props: json!({ "pane": n.id, "terminal": terminal, "view": "gui" }) })
+    }
+
+    fn pane_view_options(&self, pane: &str) -> Vec<Value> {
+        let mut views = vec![json!({"id": "tui", "label": "TUI", "available": true})];
+        views.extend(self.pane_views_for(pane).into_iter().map(|(view, available)|
+            json!({"id": view.id(), "label": view.reg.label, "available": available})));
+        views
+    }
+
+    fn pane_view_mode(&self, pane: &str) -> &'static str {
+        let Some(address) = self.pane_view_address(pane) else { return "tui" };
+        let mode = self.written_views.get(&address).map(String::as_str)
+            .or_else(|| self.live.get(&address).and_then(|r| r.pointer("/labels/herdr.view")).and_then(Value::as_str));
+        let failed = self.copies.get(&format!("{pane}#view")).is_some_and(|c| c.root.is_none());
+        if mode == Some("gui") && !failed && self.pane_views_for(pane).iter().any(|(v, available)| v.id() == "gui" && *available) { "gui" } else { "tui" }
+    }
+
+    /// Serialize writes for a terminal, so rapid switches cannot reach the core out of order.
+    fn write_pane_view(&mut self, address: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.view_writes_in_flight.insert(address.clone()) { return; }
+        let Some(mode) = self.written_views.get(&address).cloned() else {
+            self.view_writes_in_flight.remove(&address);
+            return;
+        };
+        let core = self.core.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let params = json!({ "terminal": address, "labels": { "herdr.view": mode } });
+            let result = cx.background_executor().spawn(async move { core.call("terminal.label", params) }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.view_writes_in_flight.remove(&address);
+                if this.written_views.get(&address) != Some(&mode) {
+                    this.write_pane_view(address, window, cx);
+                } else if let Err(e) = result {
+                    tracing::warn!("pane view label for {address}: {e:#}");
+                    this.written_views.remove(&address);
+                    this.sync(window, cx);
+                }
+            });
+        }).detach();
     }
 
     /// The terminal view a pane shows: the swapped-in one, else its own.
@@ -1905,8 +1983,8 @@ impl AppWindow {
     /// Peeks, floats and swapped-in views own keyboard focus without changing the model pane.
     fn focused_terminal(&self, window: &Window, cx: &App) -> Option<&Term> {
         self.terms.values().find(|t| t.view.read(cx).owns_keyboard_focus(window, cx))
-            .or_else(|| self.focused_pane.as_deref().and_then(|p| self.pane_term(p)))
-            .or_else(|| self.model.focused_pane().and_then(|p| self.pane_term(&p)))
+            .or_else(|| self.focused_pane.as_deref().filter(|p| self.pane_view_mode(p) != "gui").and_then(|p| self.pane_term(p)))
+            .or_else(|| self.model.focused_pane().filter(|p| self.pane_view_mode(p) != "gui").and_then(|p| self.pane_term(&p)))
     }
 
     fn shown_terminal_view(&self, address: &str, window: &Window, cx: &App) -> Result<Entity<TerminalView>, String> {
@@ -1967,7 +2045,7 @@ impl AppWindow {
     /// The keyboard target of a pane: its terminal's. A mod takes the keyboard
     /// on a click (the window holds it until then).
     fn pane_focus(&self, pane: &str, cx: &App) -> Option<FocusHandle> {
-        self.pane_term(pane).map(|t| t.view.read(cx).focus_target(cx))
+        if self.pane_view_mode(pane) == "gui" { None } else { self.pane_term(pane).map(|t| t.view.read(cx).focus_target(cx)) }
     }
 
     /// Whether a tab's pane is an app (`app.open`).
@@ -2070,7 +2148,7 @@ impl AppWindow {
                     let zoomed = ctx.zoomed.as_deref() == Some(p.id.as_str());
                     // A mod pane: what it shows, no terminal.
                     if let Some(Content::Mod { name, props }) = p.content() {
-                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "props": props, "tab": ctx.id, "title": name, "name": p.title, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
+                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "props": props, "tab": ctx.id, "title": name, "name": p.title, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id), "view": "tui", "views": [] }));
                         continue;
                     }
                     let Some(addr) = p.terminal() else { continue };
@@ -2083,6 +2161,7 @@ impl AppWindow {
                         "cwd": self.cwds.get(addr), "branch": m.folder_info.get(addr).and_then(|f| f.branch.clone()),
                         "status": m.status(addr), "app": a.and_then(|a| a.app.clone()), "program": self.program(addr),
                         "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id),
+                        "view": self.pane_view_mode(&p.id), "views": self.pane_view_options(&p.id),
                     }));
                     let Some(status) = m.status(addr) else { continue };
                     agents.push(json!({
@@ -2103,12 +2182,13 @@ impl AppWindow {
             if let Some(block) = block {
                 let address = block.terminal()?;
                 return Some(json!({ "space": p.id, "tab": ctx.id, "pane": null, "terminal": address,
-                    "shown": null, "agent": self.shown_agent(), "cwd": self.cwds.get(address) }));
+                    "shown": null, "agent": self.shown_agent(), "cwd": self.cwds.get(address), "view": "tui", "views": [] }));
             }
             let pane = ctx.focused_pane()?;
             let cwd = (if self.shows_agent() { self.shown_agent() } else { m.address_of(&pane) }).and_then(|a| self.cwds.get(&a).cloned());
             Some(json!({ "space": p.id, "tab": ctx.id, "terminal": m.address_of(&pane), "shown": self.swapped.get(&pane),
-                "pane": pane, "agent": self.focused_agent(), "cwd": cwd }))
+                "pane": pane, "agent": self.focused_agent(), "cwd": cwd,
+                "view": self.pane_view_mode(&pane), "views": self.pane_view_options(&pane) }))
         });
         let machines = self.documents.iter().map(|(name, slot)| json!({
             "name": (!name.is_empty()).then_some(name), "layout": slot.layout(),
@@ -2449,6 +2529,7 @@ impl AppWindow {
             obj.remove(crate::hc::AGENT_SINCE);
         }
         self.live = live;
+        self.written_views.retain(|addr, view| self.live.get(addr).is_some_and(|r| self.view_writes_in_flight.contains(addr) || r.pointer("/labels/herdr.view").and_then(Value::as_str) != Some(view.as_str())));
         self.closing_terminals.retain(|addr, completed| !*completed || self.live.contains_key(addr));
         // A new sub-agent changes only this list; mods that show teams need to redraw.
         let terminals_changed = mods::publish_terminals(list);
@@ -2502,7 +2583,7 @@ impl AppWindow {
         if changed {
             self.sync(window, cx);
         } else if listed {
-            self.publish(cx);
+            self.sync(window, cx);
         }
     }
 
@@ -4027,6 +4108,22 @@ impl AppWindow {
                 }
                 self.peek_terminal(t, window, cx);
             }
+            "pane.view" => {
+                let target = Self::owned(a, "pane")
+                    .or_else(|| Self::arg(a, "terminal").and_then(|t| self.model.pane_of(t)))
+                    .or_else(|| if Self::arg(a, "terminal").is_none() { self.model.focused_pane() } else { None });
+                let Some(pane) = target else { return self.fail("no such terminal pane") };
+                let Some(address) = self.pane_view_address(&pane).filter(|a| self.live.contains_key(a)) else { return self.fail("no running terminal in pane") };
+                let mode = match Self::arg(a, "view") {
+                    Some("gui") => "gui",
+                    Some("tui") => "tui",
+                    Some("toggle") if self.pane_view_mode(&pane) == "gui" => "tui",
+                    Some("toggle") => "gui",
+                    _ => return self.fail("pane.view view is gui, tui or toggle"),
+                };
+                self.written_views.insert(address.clone(), mode.to_owned());
+                self.write_pane_view(address, window, cx);
+            }
             "terminal.show" => {
                 let pane = Self::owned(a, "pane").or_else(|| self.model.focused_pane());
                 let target = Self::arg(a, "terminal").filter(|t| self.live.contains_key(*t)).map(str::to_owned);
@@ -5048,7 +5145,9 @@ impl AppWindow {
                 self.route_link(links::Target::Url(url), None, space, origin, None, "browser", false, window, cx);
             }
             Request::OpenLink { link, system } => self.deliver_link(link, system, window, cx),
-            Request::AppProbe { machine, folder, probe } => self.app_probed(machine, folder, probe, cx),
+            Request::AppProbe { machine, folder, probe } => {
+                if self.app_probed(machine, folder, probe, cx) { self.sync(window, cx); }
+            },
         }
     }
 
@@ -5417,7 +5516,7 @@ impl AppWindow {
         }
         if let Some(p) = &self.focused_pane {
             // Pane selection survives an input, float or dialog taking the keyboard.
-            if self.pane_term(p).is_some_and(|t| !t.view.read(cx).owns_keyboard_focus(window, cx)) {
+            if self.pane_view_mode(p) != "gui" && self.pane_term(p).is_some_and(|t| !t.view.read(cx).owns_keyboard_focus(window, cx)) {
                 return out;
             }
             if let Some(c) = self.model.active_tab()
@@ -5464,15 +5563,27 @@ impl AppWindow {
             // glass layout's transparent `background` would make the veil vanish.
             body = body.child(div().absolute().inset_0().bg(crate::terminal::hsla(crate::vt::theme().bg).opacity(v)));
         }
-        let Some(h) = f.header.as_ref().filter(|_| !self.frameless(&n.id)) else { return el.child(body).into_any_element() };
-        let head = div().flex_none().h(settings::z(pane_size::pane_header_height(h, self.header_heights.get(&n.id).copied()))).w_full().flex()
-            .child(self.render_slot(&format!("{}#frame", n.id), cx));
-        if h.hover() {
-            let head = head.absolute().left_0().right_0().opacity(0.).group_hover(group, |s| s.opacity(1.));
-            let head = if h.bottom() { head.bottom_0() } else { head.top_0() };
-            return el.child(body).child(head).into_any_element();
+        if self.frameless(&n.id) { return el.child(body).into_any_element(); }
+        let mode = self.pane_view_mode(&n.id);
+        let mut top = Vec::new();
+        let mut bottom = Vec::new();
+        let mut overlays = Vec::new();
+        for (slot, header) in [("frame", f.header.as_ref()), ("footer", f.footer.as_ref())] {
+            let Some(h) = header.filter(|h| h.shows_in(mode)) else { continue };
+            let requested = (slot == "frame").then(|| self.header_heights.get(&n.id).copied()).flatten();
+            let head = div().flex_none().h(settings::z(pane_size::pane_header_height(h, requested))).w_full().flex()
+                .child(self.render_slot(&format!("{}#{slot}", n.id), cx));
+            let at_bottom = slot == "footer" || h.bottom();
+            if h.hover() {
+                let head = head.absolute().left_0().right_0().opacity(0.).group_hover(group.clone(), |s| s.opacity(1.));
+                overlays.push(if at_bottom { head.bottom_0() } else { head.top_0() });
+            } else if at_bottom {
+                bottom.push(head);
+            } else {
+                top.push(head);
+            }
         }
-        if h.bottom() { el.child(body).child(head) } else { el.child(head).child(body) }.into_any_element()
+        el.children(top).child(body).children(bottom).children(overlays).into_any_element()
     }
 
     /// How much a frame's `veil` fades this pane: the shown tab's panes but
@@ -5545,12 +5656,25 @@ impl AppWindow {
                 }
             }
         };
-        let row = frame.and_then(|f| f.header.as_ref()).filter(|h| !h.bottom() && !h.hover() && !self.frameless(&n.id)).map(|h| pane_size::pane_header_height(h, self.header_heights.get(&n.id).copied()));
+        let row = frame.and_then(|f| f.header.as_ref()).filter(|h| h.shows_in(self.pane_view_mode(&n.id)) && !h.bottom() && !h.hover() && !self.frameless(&n.id)).map(|h| pane_size::pane_header_height(h, self.header_heights.get(&n.id).copied()));
         el.children(self.render_floats(n, cx)).children(self.pane_grip(&n.id, row, cx)).into_any_element()
     }
 
     fn render_block(&self, n: &Node, content: &Content, focused: &HashSet<String>, rendered_dividers: &mut HashSet<(String, usize)>, cx: &mut Context<Self>) -> AnyElement {
         match content {
+            Content::Terminal { .. } if self.pane_view_mode(&n.id) == "gui" => {
+                let id = n.id.clone();
+                div().size_full().on_any_mouse_down(cx.listener(move |this, _, _, cx| {
+                    if this.focused_pane.as_deref() != Some(id.as_str()) {
+                        this.model.focus_pane(&id);
+                        this.focused_pane = Some(id.clone());
+                        this.synced_model_pane = this.model.focused_pane();
+                        this.publish(cx);
+                        this.save();
+                        cx.notify();
+                    }
+                })).child(self.render_slot(&format!("{}#view", n.id), cx)).into_any_element()
+            },
             Content::Terminal { .. } => match self.pane_term(&n.id) {
                 Some(t) => {
                     let id = n.id.clone();
@@ -6550,10 +6674,14 @@ fn float_mod(id: &str, name: &str, props: &Value) -> (String, Instance) {
 
 /// A pane header's slot and copy, told which pane it sits on (a mod pane has no terminal).
 fn pane_header_mod(n: &Node, name: &str, props: &Value) -> (String, Instance) {
+    pane_frame_mod(n, "frame", name, props)
+}
+
+fn pane_frame_mod(n: &Node, slot: &str, name: &str, props: &Value) -> (String, Instance) {
     let mut props = if props.is_object() { props.clone() } else { json!({}) };
     props["pane"] = json!(n.id);
     props["terminal"] = json!(n.terminal());
-    (format!("{}#frame", n.id), Instance { name: name.to_owned(), props })
+    (format!("{}#{slot}", n.id), Instance { name: name.to_owned(), props })
 }
 
 /// A tab's mod pane, told which pane it is (its props as stored, plus `pane`).
@@ -6922,6 +7050,7 @@ fn reconcile_core_update_error(dismissed: &mut Option<String>, core: &crate::upd
 
 #[cfg(test)]
 mod tests {
+    include!("window/pane_view_tests.rs");
     include!("window/mod_reload_tests.rs");
     use gpui::{div, point, px, size, Context, IntoElement, Render, TestAppContext, Window};
     use gpui::prelude::*;

@@ -553,6 +553,7 @@ The tab block says how each pane of the shown tab is wrapped:
   "pane": { "gap": 6, "radius": 6, "background": "surface",
             "border": { "width": 1, "color": "border" }, "focus": { "width": 1, "color": "accent" },
             "header": { "content": { "mod": "pane" }, "height": 30, "position": "top", "reveal": "always" },
+            "footer": { "content": { "mod": "composer" }, "height": 82, "view": "gui" },
             "lone": false } }
 ```
 
@@ -591,6 +592,14 @@ The tab block says how each pane of the shown tab is wrapped:
   `reveal: "hover"` is drawn over the terminal and does not move it. `run`
   returns nothing to a mod; `herdr-app do pane.header_height` prints `{px}`,
   the height the header has now.
+- `footer` adds a second pane slot below the terminal or pane view. It accepts
+  the same content and height fields as `header`. Either slot may specify
+  `view: "gui"` or `view: "tui"` to appear only in that mode. A filtered-out
+  slot takes no height, and its mod copy stays alive across mode switches.
+  `panes()` and `focused()` expose `view` (the mode actually shown) and `views`
+  (views as `{id, label, available}`). If the GUI is unavailable, the shown
+  mode is `tui` even when the saved `herdr.view` label says `gui`. For a focused
+  terminal block outside a pane, `focused().view` is `tui` and `views` is empty.
 - `lone: true` frames a tab's only pane too (default: only when split).
 - Each layout has its own, so one can stay bare while another makes
   every pane a card.
@@ -816,6 +825,9 @@ The main ones:
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
+  `pane.view {view: "gui" | "tui" | "toggle", pane?, terminal?}` (default target: the
+  focused pane; the choice is kept in the terminal label `herdr.view`; an unavailable
+  GUI falls back to the terminal),
   `pane.swap {pane?, direction | target}`, `pane.rename {pane?, name}` ("": unnamed
   again; `panes()[i].name`, kept with its tab), `pane.resize {direction, pane?, px?}` (moves
   the nearest border along that axis by px, default 40, as a drag would; a keyboard
@@ -1213,6 +1225,19 @@ has 124 programs (agents, editors, runtimes, tools, databases, infra);
   null. A tab bar shows the available ones as buttons that run `app.open`. An
   app's copy gets `props().app` (its registration), `origin`, `project` and
   `pane`.
+
+- `"pane_view"` in `mod.json` registers a GUI for a terminal pane:
+  ```json
+  "pane_view": { "id": "gui", "label": "GUI",
+                 "when": [{ "label": "herdr.stereo.bridge" }] }
+  ```
+  The view id is `gui`. All `when` rules must hold; they use the same `has`,
+  `remote`, `label` and `local` rules described for apps above. The pane view
+  copy gets `props().pane`, `props().terminal` and `props().view` (`"gui"`).
+  Herdr keeps that copy alive while its terminal matches, including in TUI
+  mode, so its state survives switches. It draws the copy only in GUI mode.
+  When the pane takes keyboard focus, the copy receives `"focus"` through
+  `nextCommand()` and should focus its own handle.
 
 - `"palette"` in `mod.json` adds entries each time the command palette opens.
   For example, `"palette": [{ "title": "TUI sessions", "command": "mod.open", "args": { "name": "tui-sessions" }, "words": "agents" }]`.

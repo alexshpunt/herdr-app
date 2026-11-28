@@ -419,6 +419,21 @@ mod tests {
     }
 
     #[test]
+    fn pane_view_registration_uses_app_label_ownership_rules() {
+        let registrations = parse("stereo", &json!({"id": "gui", "label": "GUI", "when": [{"label": "bridge"}]}));
+        assert_eq!(registrations.len(), 1);
+        assert_eq!(registrations[0].id(), "gui");
+        let labels = json!({"bridge": "{\"pid\":42}"});
+        let mut place = Place { local: true, terminal_live: true, labels: &labels, root_pid: Some(1), foreground_pid: Some(42), probe: None };
+        assert!(available(&registrations[0], &place));
+        place.foreground_pid = Some(2);
+        assert!(!available(&registrations[0], &place));
+        place.root_pid = Some(42);
+        place.terminal_live = false;
+        assert!(!available(&registrations[0], &place));
+    }
+
+    #[test]
     fn mods_register_one_app_or_several_in_order() {
         let all = shipped();
         let ids: Vec<(&str, &str)> = all.iter().map(|a| (a.name.as_str(), a.id())).collect();
