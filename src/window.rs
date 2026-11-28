@@ -306,6 +306,10 @@ struct PendingTerminalChange {
 
 /// The slot of a terminal shown in a pane in place of its own (`<pane>#swap`).
 const SWAP: &str = "#swap";
+/// Terminal label a program sets while it shows a screen its pane view cannot
+/// draw. Its value is the reason. The pane shows the terminal until the label is
+/// gone; the saved `herdr.view` does not change.
+const VIEW_HOLD_LABEL: &str = "herdr.view.unavailable";
 
 /// The share of the script VM's heap ceiling past which a mod edit starts a
 /// new VM instead of reloading into the old one (`files_changed`).
@@ -1940,7 +1944,9 @@ impl AppWindow {
                 crate::apps::Rule::Label { label } if labels.and_then(|v| v.get(label)).and_then(Value::as_str).is_none_or(str::is_empty) => Some(label),
                 _ => None,
             });
+            let hold = if view.id() == "gui" { self.pane_view_hold(pane) } else { None };
             let reason = if failed { Some("The pane view failed to load".to_owned()) }
+                else if hold.is_some() { hold }
                 else if !matches { Some(missing_label.map(|label| format!("Requires terminal label {label}"))
                     .unwrap_or_else(|| "Pane view requirements are not met".to_owned())) }
                 else { None };
@@ -1949,13 +1955,31 @@ impl AppWindow {
         views
     }
 
-    fn pane_view_mode(&self, pane: &str) -> &'static str {
+    /// The view the person chose for a pane, whether or not it can be shown now.
+    fn pane_view_choice(&self, pane: &str) -> &str {
         let Some(address) = self.pane_view_address(pane) else { return "tui" };
-        let mode = self.written_views.get(&address).map(String::as_str)
+        self.written_views.get(&address).map(String::as_str)
             .or_else(|| self.live.get(&address).and_then(|r| r.pointer("/labels/herdr.view")).and_then(Value::as_str))
-            .unwrap_or_else(|| self.person.default_pane_view.unwrap_or_default().as_str());
+            .unwrap_or_else(|| self.person.default_pane_view.unwrap_or_default().as_str())
+    }
+
+    /// The reason to tell the person when a chosen GUI shows the terminal for now.
+    fn pane_view_notice(&self, pane: &str) -> Option<String> {
+        self.pane_view_hold(pane).filter(|_| self.pane_view_choice(pane) == "gui")
+    }
+
+    fn pane_view_mode(&self, pane: &str) -> &'static str {
+        let mode = self.pane_view_choice(pane);
         let failed = self.copies.get(&format!("{pane}#view")).is_some_and(|c| c.root.is_none());
-        if mode == "gui" && !failed && self.pane_views_for(pane).iter().any(|(v, available)| v.id() == "gui" && *available) { "gui" } else { "tui" }
+        if mode == "gui" && !failed && self.pane_view_hold(pane).is_none() && self.pane_views_for(pane).iter().any(|(v, available)| v.id() == "gui" && *available) { "gui" } else { "tui" }
+    }
+
+    /// Why a pane that would show its GUI shows the terminal for now: the program
+    /// in front opened a screen the view cannot draw (`herdr.view.unavailable`).
+    fn pane_view_hold(&self, pane: &str) -> Option<String> {
+        let address = self.pane_view_address(pane)?;
+        self.live.get(&address)?.pointer(&format!("/labels/{VIEW_HOLD_LABEL}"))
+            .and_then(Value::as_str).filter(|reason| !reason.is_empty()).map(str::to_owned)
     }
 
     /// Serialize writes for a terminal, so rapid switches cannot reach the core out of order.
@@ -5740,6 +5764,14 @@ impl AppWindow {
                             }
                         }))
                         .child(shown_terminal(&t.view, cx))
+                        .children(self.pane_view_notice(&n.id).map(|reason| {
+                            // Over the terminal's corner, not beside it: its grid must not resize. No
+                            // listeners, so clicks still reach the program.
+                            div().absolute().top(settings::z(8.0)).right(settings::z(16.0)).max_w_full()
+                                .px(settings::z(10.0)).py(settings::z(4.0)).rounded(settings::z(6.0))
+                                .bg(c("raised")).border_1().border_color(c("border"))
+                                .text_size(settings::z(13.0)).text_color(c("foreground")).truncate().child(reason)
+                        }))
                         .into_any_element()
                 }
                 None => div().into_any_element(),

@@ -240,6 +240,135 @@ export default class Probe extends View {
 }
 
 #[test]
+fn a_screen_the_gui_cannot_draw_shows_the_terminal_until_it_closes() {
+    in_own_process("pane_view_hold");
+}
+
+#[gpui::test]
+fn pane_view_hold(cx: &mut gpui::TestAppContext) {
+    use serde_json::json;
+    if !running_alone("pane_view_hold") {
+        return;
+    }
+    let probe = r#"import { View, div } from 'gpui-kit';
+import { nextCommand, props, setShared, shared } from 'herdr';
+export default class Probe extends View {
+  init(_, cx) {
+    this.pane = props().pane;
+    cx.spawn(async () => {
+      for (;;) {
+        if (await nextCommand() === 'focus') {
+          const key = 'pane-hold.focus.' + this.pane;
+          setShared(key, (shared(key) ?? 0) + 1);
+        }
+      }
+    });
+  }
+  render() { return div().size_full(); }
+}
+"#;
+    let layout = json!({"id":"context", "type":"block", "content":{"tab":"active"}});
+    let (view, cx) = open_window(cx, "hold-probe", probe, layout);
+    std::fs::write(
+        crate::mods::app_dir().join("mods/hold-probe/mod.json"),
+        r#"{"place":"none","pane_view":{"id":"gui","label":"GUI","when":[{"label":"bridge"}]}}"#,
+    )
+    .unwrap();
+    view.update_in(cx, |this, window, cx| {
+        this.sync_folders(window, cx);
+        this.folders.retain(|id, _| id == "hold-probe");
+        this.model = crate::model::Model::default();
+        let mut tab = super::Tab::new("tab", "", "a", "term-a");
+        tab.root.split(
+            "a",
+            super::Axis::Row,
+            crate::model::pane("b", "term-b"),
+            "split".into(),
+        );
+        tab.focus("a");
+        this.model.add_space("space", "test", "/", tab);
+        for term in ["term-a", "term-b"] {
+            this.live.insert(
+                term.into(),
+                json!({"state":"live", "labels":{"bridge":"ready", "herdr.view":"gui"}}),
+            );
+        }
+        window.activate_window();
+        this.sync(window, cx);
+    });
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+    };
+    draw(cx);
+    let focused = || {
+        crate::mods::shared("pane-hold.focus.a")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    };
+    let before = focused();
+    let default = view.update(cx, |this, _| this.person.default_pane_view);
+    view.update_in(cx, |this, window, cx| {
+        assert_eq!(this.pane_view_mode("a"), "gui");
+        assert_eq!(this.pane_view_hold("a"), None);
+        this.live.get_mut("term-a").unwrap()["labels"][VIEW_HOLD_LABEL] =
+            json!("Pi opened a screen the GUI can't show");
+        this.sync(window, cx);
+        assert_eq!(this.pane_view_mode("a"), "tui");
+        assert_eq!(this.pane_view_mode("b"), "gui");
+        assert_eq!(
+            this.pane_view_hold("a").as_deref(),
+            Some("Pi opened a screen the GUI can't show")
+        );
+        assert_eq!(this.pane_view_hold("b"), None);
+        // The saved choice and the default for new panes stay as they were.
+        assert_eq!(this.live["term-a"]["labels"]["herdr.view"], "gui");
+        assert!(this.written_views.get("term-a").is_none());
+        assert_eq!(this.person.default_pane_view, default);
+        assert!(!this.visible().1.iter().any(|(slot, _)| slot == "a#view"));
+        let gui = this
+            .pane_view_options("a")
+            .into_iter()
+            .find(|v| v["id"] == "gui")
+            .unwrap();
+        assert_eq!(gui["available"], false);
+        assert_eq!(gui["reason"], "Pi opened a screen the GUI can't show");
+        let result = this.run_as(
+            "pane.view",
+            json!({"pane":"a", "view":"gui"}),
+            false,
+            window,
+            cx,
+        );
+        assert!(result.get("error").is_none(), "{result}");
+        assert_eq!(
+            this.pane_view_mode("a"),
+            "tui",
+            "an explicit choice cannot show a screen the GUI cannot draw"
+        );
+    });
+    draw(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.live.get_mut("term-a").unwrap()["labels"]
+            .as_object_mut()
+            .unwrap()
+            .remove(VIEW_HOLD_LABEL);
+        this.sync(window, cx);
+        assert_eq!(this.pane_view_mode("a"), "gui");
+        assert_eq!(this.pane_view_hold("a"), None);
+        assert!(this.visible().1.iter().any(|(slot, _)| slot == "a#view"));
+    });
+    draw(cx);
+    assert!(
+        focused() > before,
+        "the GUI takes the keyboard back when the screen closes"
+    );
+}
+
+#[test]
 fn footer_mod_resizes_only_its_own_slot() {
     in_own_process("footer_mod_height");
 }
