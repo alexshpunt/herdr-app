@@ -108,10 +108,12 @@ test('a sub-agent and its fallback open as tabs of the caller\u2019s space, one 
   // Even after the primary exited, the fallback stays next to the caller instead of opening a space.
   assert.deepEqual(api.calls.map(call => [call[1].model, call[1].space, call[1].depth]), [['p/main', 'm/sp1', 2], ['p/backup', 'm/sp1', 2]]);
 }));
-test('replicas and sub-agents nest two levels below the agent the user started', () => {
+test('replicas and sub-agents nest three levels below the agent the user started', () => {
   assert.equal(childDepth('agent.subagent', 0), 1);
   assert.equal(childDepth('agent.replicate', 1), 2);
-  assert.throws(() => childDepth('agent.subagent', 2), /^Error: agent\.subagent refused: .*nesting stops at depth 2\. Do this work yourself\.$/);
+  assert.equal(childDepth('agent.subagent', 2), 3);
+  assert.throws(() => childDepth('agent.subagent', 3), /nesting stops at depth 3/);
+  assert.throws(() => childDepth('agent.replicate', 4), /nesting stops at depth 3/);
 });
 test('an unknown profile names the current ones and launches nothing', () => fixture(async root => {
   const api = client();

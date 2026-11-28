@@ -18,6 +18,9 @@ export class AppClient {
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async command(name,args){return {version:${JSON.stringify(version)},name,args}}
+ async tracked(name,toolCallId,run){let result;try{result=await run()}catch(error){throw Object.assign(new Error(error.message),{code:'HERDR_OUTCOME_UNKNOWN',effect:'unknown'})}return {id:'tracked-1',revision:'revision-1',result,toolCallId}}
+ async recoveryList(){return [{id:'tracked-1',revision:'revision-1',state:'result'}]}
+ async recoveryAck(input){return {items:input.items}}
  async replicate(args){return {replicated:args}}
  async workflow(){return {version:1,profiles:[]}}
 }
@@ -39,6 +42,10 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal(bridge().version, 1);
   assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
   assert.equal((await bridge().command('agent.remove', { terminal: 'm/t2' })).name, 'agent.remove');
+  const tracked = await bridge().commandTracked('agent.inspect', { terminal: 'm/t2' }, { toolCallId: 'tool-1' });
+  assert.deepEqual(tracked, { id: 'tracked-1', revision: 'revision-1', toolCallId: 'tool-1', result: { version: 'first', name: 'agent.inspect', args: { terminal: 'm/t2' } } });
+  assert.deepEqual(await bridge().recovery.list(), [{ id: 'tracked-1', revision: 'revision-1', state: 'result' }]);
+  assert.deepEqual(await bridge().recovery.ack({ items: [{ id: tracked.id, revision: tracked.revision }] }), { items: [{ id: tracked.id, revision: tracked.revision }] });
   // A replica launch goes through the client's own validation, not a raw tab.new, one level deeper than its caller.
   assert.deepEqual(await bridge().command('agent.replicate', { name: 'r', depth: 9 }), { replicated: { name: 'r', depth: 1 } });
   assert.equal((await bridge().command('workflow.get', {})).name, 'workflow.get');
@@ -47,6 +54,14 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
     /^Error: agent\.subagent refused: Unknown workflow profile missing\. Current profiles: none/);
   await assert.rejects(bridge().command('agent.subagent', { name: 'research' }), /agent\.subagent needs a non-empty requestId/);
   for (const name of ['agent.stop', 'space.new', 'tab.new']) assert.throws(() => bridge().command(name, {}));
+  // Local refusals happen before a tracked request is recorded, so they keep their reason instead of an unknown outcome.
+  assert.throws(() => bridge().commandTracked('tab.new', {}, { toolCallId: 'tool-2' }), error => error.message === 'Unsupported Herdr bridge command' && error.code === undefined);
+  session.extensionRunner.setFlagValue('herdr-depth', '3');
+  for (const name of ['agent.subagent', 'agent.replicate'])
+    assert.throws(() => bridge().commandTracked(name, { name: 'deep' }, { toolCallId: 'tool-3' }), error => /nesting stops at depth 3/.test(error.message) && error.code === undefined);
+  session.extensionRunner.setFlagValue('herdr-depth', '2');
+  assert.deepEqual((await bridge().commandTracked('agent.replicate', { name: 'r' }, { toolCallId: 'tool-4' })).result, { replicated: { name: 'r', depth: 3 } });
+  session.extensionRunner.setFlagValue('herdr-depth', '0');
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
   const snapshot = async () => {

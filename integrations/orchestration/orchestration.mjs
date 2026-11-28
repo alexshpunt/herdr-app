@@ -29,7 +29,7 @@ export function startupOutcome(agent) {
   return 'pending';
 }
 /** Agents the user starts are depth 0; a replica or sub-agent at this depth starts no more of them. */
-export const MAX_DEPTH = 2;
+export const MAX_DEPTH = 3;
 /** The nesting depth a replica or sub-agent of a Pi at `depth` gets, or a refusal once nesting stops. */
 export function childDepth(command, depth) {
   if (depth >= MAX_DEPTH) throw new Error(`${command} refused: this agent is a replica or sub-agent at nesting depth ${depth}, and nesting stops at depth ${MAX_DEPTH}. Do this work yourself.`);
