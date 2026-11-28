@@ -33,7 +33,7 @@ test('a process exit leaves its request recoverable without holding a journal lo
     assert.equal(entries[0].state, 'unknown');
     assert.equal(entries[0].recoverable, true);
     await journal.begin('agent.list', 'tool-2');
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });
 test('competing processes cannot exceed the session journal bound', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'herdr-recovery-race-'));
@@ -42,7 +42,7 @@ test('competing processes cannot exceed the session journal bound', async () => 
     assert.equal(outcomes.filter(result => result.code === 0).length, 1);
     const journal = new RecoveryJournal(root, 'same-session', { limit: 1 });
     assert.equal((await journal.list()).length, 1);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });
 
 test('a live owner stays pending and an exited owner becomes recoverable', async () => {
@@ -73,6 +73,6 @@ test('a live owner stays pending and an exited owner becomes recoverable', async
     assert.equal(entry.recoverable, true);
   } finally {
     if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; }
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
