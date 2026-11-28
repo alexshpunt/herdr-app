@@ -598,7 +598,12 @@ The tab block says how each pane of the shown tab is wrapped:
   slot takes no height, and its mod copy stays alive across mode switches.
   `panes()` and `focused()` expose `view` (the mode actually shown) and `views`
   (views as `{id, label, available, reason}`). If the GUI is unavailable, the shown
-  mode is `tui` even when the saved `herdr.view` label says `gui`. For a focused
+  mode is `tui` even when the saved `herdr.view` label says `gui`. The same holds
+  while the terminal carries a non-empty `herdr.view.unavailable` label: its program
+  opened a screen the view cannot draw, the pane shows the terminal with the label's
+  text over its top right corner, and the GUI returns when the label is gone, with
+  `herdr.view` and `default_pane_view` untouched. `views` then reports the GUI as
+  unavailable with that text as its `reason`. For a focused
   terminal block outside a pane, `focused().view` is `tui` and `views` is empty.
 - `lone: true` frames a tab's only pane too (default: only when split).
 - Each layout has its own, so one can stay bare while another makes
@@ -829,7 +834,7 @@ The main ones:
   focused pane; the choice is kept in the terminal label `herdr.view` and in
   `settings.json` as `default_pane_view`. Terminals without a view label use that
   default, initially `tui`; an unavailable GUI falls back to the terminal without
-  changing the choice),
+  changing the choice, also while `herdr.view.unavailable` is set),
   `pane.swap {pane?, direction | target}`, `pane.rename {pane?, name}` ("": unnamed
   again; `panes()[i].name`, kept with its tab), `pane.resize {direction, pane?, px?}` (moves
   the nearest border along that axis by px, default 40, as a drag would; a keyboard
