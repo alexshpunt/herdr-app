@@ -69,6 +69,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("pane.zoom", &[opt("pane")], "Show only this pane of its tab, or all again."),
     cmd("pane.rename", &[opt("pane"), opt("name")], "Name a pane (default: the focused one; asks the person when no name; an empty name: unnamed again)."),
     cmd("pane.focus", &[opt("pane"), opt("terminal")], "Focus a pane (or the pane showing a terminal)."),
+    cmd("pane.view", &[req("view"), opt("pane"), opt("terminal")], "Show a pane's GUI or terminal view: view is \"gui\", \"tui\" or \"toggle\". Target a pane or terminal; default: the focused pane. The choice is kept in the terminal label herdr.view; an unavailable GUI falls back to the terminal."),
     cmd("pane.go", &[req("direction")], "Focus the pane or focusable mod to the \"left\", \"right\", \"up\" or \"down\"."),
     cmd("pane.resize", &[req("direction"), opt("pane"), opt("px")], "Move the border of a pane (default: the focused one) \"left\", \"right\", \"up\" or \"down\" by px (default 40), like dragging the divider."),
     cmd("pane.header_height", &[opt("pane"), opt("px")], "Give a pane's header (default: the focused pane's) the height px, from the pane header mod that draws in it, so a footer can grow with its content. The layout's header height is the least it gets and its max_height (default 400) the most; px null or missing takes the request back. The request is kept for this running app, not saved, and ends with the header mod's copy (a layout switch, a mod reload, a closed pane). Returns {px}: the height the header now has."),
@@ -285,6 +286,8 @@ mod tests {
             ("space.close", "id"),
             ("tab.new", "space"),
             ("terminal.show", "terminal"),
+            ("pane.view", "pane"),
+            ("pane.view", "terminal"),
             ("pane.swap", "pane"),
             ("pane.swap", "target"),
             ("app.open", "for"),
@@ -321,6 +324,10 @@ mod tests {
             shorthand(find("pane.split").unwrap(), "right"),
             json!({ "direction": "right" })
         );
+        let view = find("pane.view").unwrap();
+        assert_eq!(shorthand(view, "toggle"), json!({ "view": "toggle" }));
+        assert_eq!(missing(view, &json!({})), Some("view"));
+        assert_eq!(missing(view, &json!({ "view": "gui" })), None);
         let move_ = find("space.move").unwrap();
         assert_eq!(
             missing(move_, &json!({ "id": " ", "index": 1 })),

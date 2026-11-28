@@ -290,6 +290,16 @@ Focus a pane (or the pane showing a terminal).
 | `pane` | no |
 | `terminal` | no |
 
+## `pane.view`
+
+Show a pane's GUI or terminal view: view is "gui", "tui" or "toggle". Target a pane or terminal; default: the focused pane. The choice is kept in the terminal label herdr.view; an unavailable GUI falls back to the terminal.
+
+| Argument | Required |
+|---|---|
+| `view` | yes |
+| `pane` | no |
+| `terminal` | no |
+
 ## `pane.go`
 
 Focus the pane or focusable mod to the "left", "right", "up" or "down".

@@ -42,8 +42,16 @@ pub struct NodeState {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PaneClick {
     pub header_height: Option<f32>,
+    // Missing in old state means leave a newly added footer alone; null means
+    // the footer was explicitly reset to its default height.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_option")]
+    pub footer_height: Option<Option<f32>>,
     pub border: Option<Line>,
     pub focus: Option<Line>,
+}
+
+fn present_option<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Option<f32>>, D::Error> {
+    Option::<f32>::deserialize(deserializer).map(Some)
 }
 
 fn pane(n: &Node) -> Option<&PaneFrame> {
@@ -63,13 +71,21 @@ fn pane_mut(n: &mut Node) -> Option<&mut PaneFrame> {
 impl PaneClick {
     fn of(n: &Node) -> Option<Self> {
         let p = pane(n)?;
-        Some(Self { header_height: p.header.as_ref().and_then(|h| h.height), border: p.border.clone(), focus: p.focus.clone() })
+        Some(Self {
+            header_height: p.header.as_ref().and_then(|h| h.height),
+            footer_height: p.footer.as_ref().map(|h| h.height),
+            border: p.border.clone(),
+            focus: p.focus.clone(),
+        })
     }
 
     fn apply(&self, n: &mut Node) {
         if let Some(p) = pane_mut(n) {
             if let Some(h) = &mut p.header {
                 h.height = self.header_height;
+            }
+            if let (Some(h), Some(height)) = (&mut p.footer, self.footer_height) {
+                h.height = height;
             }
             p.border = self.border.clone();
             p.focus = self.focus.clone();
@@ -319,6 +335,47 @@ mod tests {
 
     fn node(j: Value) -> Node {
         serde_json::from_value(j).unwrap()
+    }
+
+    #[test]
+    fn footer_height_clicks_round_trip_without_overriding_new_footers_in_old_state() {
+        let file = node(json!({"id": "main", "type": "block", "content": {"tab": "active", "pane": {
+            "header": {"content": {"mod": "head"}, "height": 30},
+            "footer": {"content": {"mod": "composer"}, "height": 82}
+        }}}));
+        let mut now = file.clone();
+        pane_mut(&mut now).unwrap().footer.as_mut().unwrap().height = Some(120.0);
+        let state = State::between(&file, &now);
+        let state: State = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let mut shown = file.clone();
+        state.apply(&mut shown);
+        assert_eq!(shown, now);
+        assert_eq!(without_clicks(&file, &now), file);
+
+        pane_mut(&mut now).unwrap().footer.as_mut().unwrap().height = None;
+        let state: State = serde_json::from_value(serde_json::to_value(State::between(&file, &now)).unwrap()).unwrap();
+        let mut shown = file.clone();
+        state.apply(&mut shown);
+        assert_eq!(shown, now);
+
+        let mut clicked = file.clone();
+        pane_mut(&mut clicked).unwrap().footer.as_mut().unwrap().height = Some(120.0);
+        let mut state = State::between(&file, &clicked);
+        let mut edited = file.clone();
+        pane_mut(&mut edited).unwrap().footer.as_mut().unwrap().height = Some(90.0);
+        state.forget_edited(&file, &edited);
+        let mut shown = edited.clone();
+        state.apply(&mut shown);
+        assert_eq!(shown, edited);
+
+        let old: State = serde_json::from_value(json!({"nodes": {"main": {"pane": {
+            "header_height": 40, "border": null, "focus": null
+        }}}})).unwrap();
+        let mut shown = file.clone();
+        old.apply(&mut shown);
+        let pane = pane(&shown).unwrap();
+        assert_eq!(pane.header.as_ref().unwrap().height, Some(40.0));
+        assert_eq!(pane.footer.as_ref().unwrap().height, Some(82.0));
     }
 
     #[test]

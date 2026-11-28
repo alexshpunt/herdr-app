@@ -293,9 +293,17 @@ pub struct Header {
     /// `top` (default) or `bottom`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<String>,
+    /// When set, show this pane slot only in this view (`gui` or `tui`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
 }
 
 impl Header {
+    /// Unfiltered slots appear in both views.
+    pub fn shows_in(&self, view: &str) -> bool {
+        self.view.as_deref().is_none_or(|required| required == view)
+    }
+
     pub fn hover(&self) -> bool {
         self.reveal.as_deref() == Some("hover")
     }
@@ -311,6 +319,8 @@ impl Header {
 pub struct PaneFrame {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<Header>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<Header>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Background>,
     /// `sm`, `md` or `lg`.
@@ -812,6 +822,20 @@ pub fn snap(x: f32, y: f32, w: f32, h: f32) -> (Edge, Align) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pane_frame_keeps_both_slots_and_filters_them_by_view() {
+        let frame: PaneFrame = serde_json::from_value(serde_json::json!({
+            "header": {"content": {"mod": "header"}, "height": 30},
+            "footer": {"content": {"mod": "composer"}, "height": 82, "view": "gui"}
+        })).unwrap();
+        let header = frame.header.as_ref().unwrap();
+        let footer = frame.footer.as_ref().unwrap();
+        assert!(header.shows_in("gui") && header.shows_in("tui"));
+        assert!(footer.shows_in("gui"));
+        assert!(!footer.shows_in("tui"));
+        let round_trip: PaneFrame = serde_json::from_value(serde_json::to_value(&frame).unwrap()).unwrap();
+        assert_eq!(round_trip, frame);
+    }
 
     #[test]
     fn floats_snap_to_the_nearest_edge_and_third() {

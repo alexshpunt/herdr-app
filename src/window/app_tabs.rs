@@ -209,6 +209,74 @@ impl AppWindow {
         )
     }
 
+    /// Pane views use the same rule and ordering semantics as apps.
+    pub(super) fn registered_pane_views(&self) -> Vec<App> {
+        apps::sorted(
+            self.folders
+                .values()
+                .flat_map(|f| f.pane_views.iter().cloned())
+                .collect(),
+        )
+    }
+
+    /// Project for the terminal actually drawn by a pane, including a swapped-in terminal.
+    fn pane_view_project(&self, pane: &str) -> Option<(Option<String>, String)> {
+        let Some(address) = self.swapped.get(pane) else {
+            return self.pane_project(pane);
+        };
+        if let Some(own_pane) = self.model.pane_of(address) {
+            return self.pane_project(&own_pane);
+        }
+        let machine = address
+            .split_once('/')
+            .map(|(m, _)| m.to_owned())
+            .or_else(|| self.model.space_of(pane).and_then(|s| s.machine.clone()));
+        let folder = self
+            .model
+            .folder_info
+            .get(address)
+            .map(|f| f.top.clone())
+            .or_else(|| self.cwds.get(address).cloned())?;
+        (!folder.is_empty()).then_some((machine, folder))
+    }
+
+    /// Registered views and their availability for the terminal currently in a pane.
+    pub(super) fn pane_views_for(&self, pane: &str) -> Vec<(App, bool)> {
+        let all = self.registered_pane_views();
+        let address = self
+            .swapped
+            .get(pane)
+            .cloned()
+            .or_else(|| self.model.address_of(pane));
+        let record = address.as_ref().and_then(|a| self.live.get(a));
+        let project = self.pane_view_project(pane);
+        let machine = project
+            .as_ref()
+            .map(|(m, _)| m.clone())
+            .unwrap_or_else(|| self.machine_of_node(pane));
+        let locals = apps::local_machines();
+        let probe = project
+            .as_ref()
+            .and_then(|key| self.app_probes.get(key))
+            .and_then(|p| p.probe.as_ref());
+        let place = Place {
+            local: machine.as_deref().is_none_or(|m| locals.contains(m)),
+            terminal_live: record.is_some_and(|r| r["state"] == "live"),
+            labels: record.and_then(|r| r.get("labels")).unwrap_or(&Value::Null),
+            root_pid: record.and_then(|r| r.get("pid")).and_then(Value::as_u64),
+            foreground_pid: record
+                .and_then(|r| r.pointer("/foreground/pid"))
+                .and_then(Value::as_u64),
+            probe,
+        };
+        all.into_iter()
+            .map(|a| {
+                let available = place.terminal_live && apps::available(&a, &place);
+                (a, available)
+            })
+            .collect()
+    }
+
     /// A pane's project, as (machine, folder): its terminal's Git work tree,
     /// else its terminal's folder, else its space's folder.
     pub(super) fn pane_project(&self, pane: &str) -> Option<(Option<String>, String)> {
@@ -276,7 +344,7 @@ impl AppWindow {
         folder: String,
         probe: Probe,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let slot = self
             .app_probes
             .entry((machine, folder))
@@ -287,6 +355,9 @@ impl AppWindow {
         if slot.probe.as_ref() != Some(&probe) {
             slot.probe = Some(probe);
             self.publish(cx);
+            true
+        } else {
+            false
         }
     }
 
@@ -296,9 +367,11 @@ impl AppWindow {
     /// the open tab its button shows again (`reuse`), else null.
     pub(super) fn apps_snapshot(&mut self) -> Value {
         let all = self.registered_apps();
-        let files = apps::probed_files(&all);
+        let mut registrations = all.clone();
+        registrations.extend(self.registered_pane_views());
+        let files = apps::probed_files(&registrations);
         let looks = !files.is_empty()
-            || all.iter().any(|a| {
+            || registrations.iter().any(|a| {
                 a.reg
                     .when
                     .iter()
@@ -315,6 +388,9 @@ impl AppWindow {
         let mut by_near: HashMap<String, Value> = HashMap::new();
         let mut available = serde_json::Map::new();
         for pane in panes {
+            if looks && let Some((machine, folder)) = self.pane_view_project(&pane) {
+                self.folder_probe(machine, folder, &files);
+            }
             let owner = self.model.owner_of(&pane);
             let near = owner
                 .as_deref()

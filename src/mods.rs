@@ -363,6 +363,9 @@ pub struct Hint {
     /// The apps it registers (`crate::apps`): one object or a list.
     #[serde(default)]
     pub app: Value,
+    /// A view drawn in place of a matching terminal (`crate::apps` rules).
+    #[serde(default)]
+    pub pane_view: Value,
 }
 
 impl Hint {
@@ -398,6 +401,25 @@ impl Section {
             _ => true,
         }
     }
+}
+
+#[test]
+fn pane_view_manifest_registers_only_mods_with_a_view() {
+    let root = crate::test_tmp().join(format!("herdr-pane-view-{}", std::process::id()));
+    let dir = root.join("stereo");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("mod.json"), r#"{"pane_view":{"id":"gui","label":"GUI","when":[{"label":"bridge"}]}}"#).unwrap();
+    std::fs::write(dir.join("main.js"), "export default class {}").unwrap();
+    let found = scan_dir(&root, "", &BTreeMap::new());
+    let views = &found["stereo"].pane_views;
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].id(), "gui");
+    assert_eq!(views[0].reg.when, vec![crate::apps::Rule::Label { label: "bridge".into() }]);
+    std::fs::remove_file(dir.join("main.js")).unwrap();
+    std::fs::write(dir.join("link.js"), "export function handleLink() {}").unwrap();
+    let found = scan_dir(&root, "", &BTreeMap::new());
+    assert!(found["stereo"].pane_views.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -440,6 +462,8 @@ pub struct Found {
     pub manifest_error: Option<String>,
     /// The apps its mod.json registers (`hint.app`), parsed once per scan.
     pub apps: Vec<crate::apps::App>,
+    /// The pane views its mod.json registers, parsed once per scan.
+    pub pane_views: Vec<crate::apps::App>,
 }
 
 pub fn scan(previous: &BTreeMap<String, Found>) -> BTreeMap<String, Found> {
@@ -486,7 +510,8 @@ fn scan_dir(root: &Path, prefix: &str, previous: &BTreeMap<String, Found>) -> BT
                 .max()
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             let apps = crate::apps::parse(&id, &hint.app);
-            Some((id.clone(), Found { id, dir, hint, has_view, link_rules, stamp, manifest_error, apps }))
+            let pane_views = if has_view { crate::apps::parse(&id, &hint.pane_view) } else { Vec::new() };
+            Some((id.clone(), Found { id, dir, hint, has_view, link_rules, stamp, manifest_error, apps, pane_views }))
         })
         .collect()
 }
@@ -494,6 +519,8 @@ fn scan_dir(root: &Path, prefix: &str, previous: &BTreeMap<String, Found>) -> BT
 /// What mods ask of the window.
 pub enum Request {
     Run { name: String, args: Value },
+    /// A mod's `run()` identifies the originating live copy, not merely its name.
+    RunFromCopy { copy: u64, name: String, args: Value },
     OpenOverlay { id: String, spec: Value },
     CloseOverlay { id: String },
     /// The OS window's title; `None` restores the default.
@@ -1447,7 +1474,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             crate::sound::play(a.string(0)?);
             Ok(HostValue::Null)
         })
-        .function("run", |a| {
+        .function("run", move |a| {
             let name = a.string(0)?.to_owned();
             let args = a.get(1).map(from_host).unwrap_or(Value::Null);
             if let Some(command) = crate::commands::find(&name) {
@@ -1459,7 +1486,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
                     tracing::warn!("final terminal.kill: {error:#}");
                 }
             } else {
-                request(Request::Run { name, args });
+                request(Request::RunFromCopy { copy, name, args });
             }
             Ok(HostValue::Null)
         })
