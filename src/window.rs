@@ -1952,9 +1952,10 @@ impl AppWindow {
     fn pane_view_mode(&self, pane: &str) -> &'static str {
         let Some(address) = self.pane_view_address(pane) else { return "tui" };
         let mode = self.written_views.get(&address).map(String::as_str)
-            .or_else(|| self.live.get(&address).and_then(|r| r.pointer("/labels/herdr.view")).and_then(Value::as_str));
+            .or_else(|| self.live.get(&address).and_then(|r| r.pointer("/labels/herdr.view")).and_then(Value::as_str))
+            .unwrap_or_else(|| self.person.default_pane_view.unwrap_or_default().as_str());
         let failed = self.copies.get(&format!("{pane}#view")).is_some_and(|c| c.root.is_none());
-        if mode == Some("gui") && !failed && self.pane_views_for(pane).iter().any(|(v, available)| v.id() == "gui" && *available) { "gui" } else { "tui" }
+        if mode == "gui" && !failed && self.pane_views_for(pane).iter().any(|(v, available)| v.id() == "gui" && *available) { "gui" } else { "tui" }
     }
 
     /// Serialize writes for a terminal, so rapid switches cannot reach the core out of order.
@@ -4166,6 +4167,8 @@ impl AppWindow {
                     Some("toggle") => "gui",
                     _ => return self.fail("pane.view view is gui, tui or toggle"),
                 };
+                let choice = if mode == "gui" { settings::PaneView::Gui } else { settings::PaneView::Tui };
+                self.write_person(|person| person.default_pane_view = Some(choice), window, cx);
                 self.written_views.insert(address.clone(), mode.to_owned());
                 self.write_pane_view(address, window, cx);
             }
