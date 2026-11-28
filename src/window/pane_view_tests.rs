@@ -129,6 +129,10 @@ export default class Probe extends View {
                 assert!(result.get("error").is_none(), "{result}");
                 assert_eq!(this.pane_view_mode("a"), mode);
                 assert_eq!(this.pane_view_mode("b"), "tui");
+                assert_eq!(
+                    serde_json::to_value(&this.person).unwrap()["default_pane_view"],
+                    mode
+                );
                 let visible = this.visible().1;
                 assert_eq!(
                     visible.iter().any(|(slot, _)| slot == "a#view"),
