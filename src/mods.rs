@@ -519,6 +519,8 @@ fn scan_dir(root: &Path, prefix: &str, previous: &BTreeMap<String, Found>) -> BT
 /// What mods ask of the window.
 pub enum Request {
     Run { name: String, args: Value },
+    /// A mod's `run()` identifies the originating live copy, not merely its name.
+    RunFromCopy { copy: u64, name: String, args: Value },
     OpenOverlay { id: String, spec: Value },
     CloseOverlay { id: String },
     /// The OS window's title; `None` restores the default.
@@ -1472,7 +1474,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
             crate::sound::play(a.string(0)?);
             Ok(HostValue::Null)
         })
-        .function("run", |a| {
+        .function("run", move |a| {
             let name = a.string(0)?.to_owned();
             let args = a.get(1).map(from_host).unwrap_or(Value::Null);
             if let Some(command) = crate::commands::find(&name) {
@@ -1484,7 +1486,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
                     tracing::warn!("final terminal.kill: {error:#}");
                 }
             } else {
-                request(Request::Run { name, args });
+                request(Request::RunFromCopy { copy, name, args });
             }
             Ok(HostValue::Null)
         })

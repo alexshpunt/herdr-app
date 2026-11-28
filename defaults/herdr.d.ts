@@ -273,7 +273,7 @@ export interface PaneScroll {
 }
 
 /** A pane view registered by a mod, with its current availability for the terminal. */
-export interface PaneView { id: string; label: string; available: boolean; }
+export interface PaneView { id: string; label: string; available: boolean; reason: string | null; }
 
 export interface PaneInfo {
   pane: string;

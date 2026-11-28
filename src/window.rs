@@ -419,6 +419,7 @@ pub struct AppWindow {
     /// The height each pane's header mod asked for with `pane.header_height` (pane → px).
     /// Not saved; it ends with the mod copy that asked (see `remove_copy`).
     header_heights: HashMap<String, f32>,
+    footer_heights: HashMap<String, f32>,
     float_drag: Option<floats::FloatDrag>,
     pane_drag: Option<pane_drag::PaneDrag>,
     pane_grip_hover: Option<String>,
@@ -585,6 +586,7 @@ impl AppWindow {
             view_writes_in_flight: HashSet::new(),
             focused_view_mode: None,
             header_heights: HashMap::new(),
+            footer_heights: HashMap::new(),
             float_drag: None,
             pane_drag: None,
             pane_grip_hover: None,
@@ -1517,6 +1519,9 @@ impl AppWindow {
         {
             self.hidden_fit = Default::default();
         }
+        if let Some(pane) = slot.strip_suffix("#footer") && self.footer_heights.remove(pane).is_some() {
+            self.hidden_fit = Default::default();
+        }
         if let Some(copy) = self.copies.remove(slot)
             && let (Some(runtime), Some(root)) = (&self.runtime, copy.root)
         {
@@ -1669,6 +1674,7 @@ impl AppWindow {
         let (model, live) = (&self.model, &self.live);
         self.swapped.retain(|p, a| model.address_of(p).is_some() && live.contains_key(a));
         self.header_heights.retain(|p, _| model.tab_of(p).is_some());
+        self.footer_heights.retain(|p, _| model.tab_of(p).is_some());
         let (mut terms, mods_visible) = self.visible();
         let covered: HashSet<&str> = terms.iter().filter_map(|(slot, _)| slot.strip_suffix(SWAP)).collect();
         let mut displayed: HashSet<String> = terms.iter().filter(|(slot, _)| !covered.contains(slot.as_str())).map(|(slot, _)| slot.clone()).collect();
@@ -1924,9 +1930,12 @@ impl AppWindow {
     }
 
     fn pane_view_options(&self, pane: &str) -> Vec<Value> {
-        let mut views = vec![json!({"id": "tui", "label": "TUI", "available": true})];
-        views.extend(self.pane_views_for(pane).into_iter().map(|(view, available)|
-            json!({"id": view.id(), "label": view.reg.label, "available": available})));
+        let mut views = vec![json!({"id": "tui", "label": "TUI", "available": true, "reason": null})];
+        views.extend(self.pane_views_for(pane).into_iter().map(|(view, matches)| {
+            let failed = view.id() == "gui" && self.copies.get(&format!("{pane}#view")).is_some_and(|c| c.root.is_none());
+            let reason = if failed { Some("The pane view failed to load") } else if !matches { Some("Pane view requirements are not met") } else { None };
+            json!({"id": view.id(), "label": view.reg.label, "available": reason.is_none(), "reason": reason})
+        }));
         views
     }
 
@@ -3486,6 +3495,29 @@ impl AppWindow {
         }
     }
 
+    /// A frame mod's height request belongs to its own slot, including a footer.
+    fn run_from_copy(&mut self, copy: u64, name: &str, args: Value, window: &mut Window, cx: &mut Context<Self>) {
+        if name != "pane.header_height" { return self.run(name, args, window, cx); }
+        let Some(slot) = self.copies.iter().find_map(|(slot, c)| (c.id == copy).then(|| slot.clone())) else { return };
+        let Some(pane) = slot.strip_suffix("#footer") else { return self.run(name, args, window, cx) };
+        if Self::arg(&args, "pane").is_some_and(|p| p != pane) {
+            return self.command_error(name, "a footer can only resize its own pane", window, cx);
+        }
+        let requested = match args.get("px") {
+            None | Some(Value::Null) => None,
+            Some(v) => match v.as_f64().filter(|px| px.is_finite() && *px >= 0.0) {
+                Some(px) => Some(px as f32),
+                None => return self.command_error(name, "px must be a number of at least 0 or null", window, cx),
+            },
+        };
+        match requested {
+            Some(px) => { self.footer_heights.insert(pane.to_owned(), px); }
+            None => { self.footer_heights.remove(pane); }
+        }
+        self.hidden_fit = Default::default();
+        cx.notify();
+    }
+
     fn command_error(&mut self, name: &str, error: &str, window: &mut Window, cx: &mut Context<Self>) {
         let spec = json!({"kind":"toast", "notification":{"title":format!("{name} failed"),"body":error,"level":"error"}});
         self.open_overlay(mods::new_overlay_id(), spec, window, cx);
@@ -4110,7 +4142,10 @@ impl AppWindow {
             }
             "pane.view" => {
                 let target = Self::owned(a, "pane")
-                    .or_else(|| Self::arg(a, "terminal").and_then(|t| self.model.pane_of(t)))
+                    .or_else(|| Self::arg(a, "terminal").and_then(|t| {
+                        self.swapped.iter().find_map(|(pane, shown)| (shown == t).then(|| pane.clone()))
+                            .or_else(|| self.model.pane_of(t))
+                    }))
                     .or_else(|| if Self::arg(a, "terminal").is_none() { self.model.focused_pane() } else { None });
                 let Some(pane) = target else { return self.fail("no such terminal pane") };
                 let Some(address) = self.pane_view_address(&pane).filter(|a| self.live.contains_key(a)) else { return self.fail("no running terminal in pane") };
@@ -5103,6 +5138,7 @@ impl AppWindow {
     fn handle(&mut self, req: Request, window: &mut Window, cx: &mut Context<Self>) {
         match req {
             Request::Run { name, args } => self.run(&name, args, window, cx),
+            Request::RunFromCopy { copy, name, args } => self.run_from_copy(copy, &name, args, window, cx),
             Request::OpenOverlay { id, spec } => self.open_overlay(id, spec, window, cx),
             Request::CloseOverlay { id } => self.close_overlay(&id, window, cx),
             Request::SetWindowTitle(title) => window.set_window_title(title.as_deref().unwrap_or("Herdr")),
@@ -5570,7 +5606,7 @@ impl AppWindow {
         let mut overlays = Vec::new();
         for (slot, header) in [("frame", f.header.as_ref()), ("footer", f.footer.as_ref())] {
             let Some(h) = header.filter(|h| h.shows_in(mode)) else { continue };
-            let requested = (slot == "frame").then(|| self.header_heights.get(&n.id).copied()).flatten();
+            let requested = if slot == "frame" { self.header_heights.get(&n.id) } else { self.footer_heights.get(&n.id) }.copied();
             let head = div().flex_none().h(settings::z(pane_size::pane_header_height(h, requested))).w_full().flex()
                 .child(self.render_slot(&format!("{}#{slot}", n.id), cx));
             let at_bottom = slot == "footer" || h.bottom();
@@ -5664,14 +5700,11 @@ impl AppWindow {
         match content {
             Content::Terminal { .. } if self.pane_view_mode(&n.id) == "gui" => {
                 let id = n.id.clone();
-                div().size_full().on_any_mouse_down(cx.listener(move |this, _, _, cx| {
+                div().size_full().on_any_mouse_down(cx.listener(move |this, _, window, cx| {
                     if this.focused_pane.as_deref() != Some(id.as_str()) {
                         this.model.focus_pane(&id);
-                        this.focused_pane = Some(id.clone());
-                        this.synced_model_pane = this.model.focused_pane();
-                        this.publish(cx);
-                        this.save();
-                        cx.notify();
+                        this.focused_pane = None;
+                        this.sync(window, cx);
                     }
                 })).child(self.render_slot(&format!("{}#view", n.id), cx)).into_any_element()
             },
@@ -6672,10 +6705,6 @@ fn float_mod(id: &str, name: &str, props: &Value) -> (String, Instance) {
     (floats::slot(id), Instance { name: name.to_owned(), props })
 }
 
-/// A pane header's slot and copy, told which pane it sits on (a mod pane has no terminal).
-fn pane_header_mod(n: &Node, name: &str, props: &Value) -> (String, Instance) {
-    pane_frame_mod(n, "frame", name, props)
-}
 
 fn pane_frame_mod(n: &Node, slot: &str, name: &str, props: &Value) -> (String, Instance) {
     let mut props = if props.is_object() { props.clone() } else { json!({}) };

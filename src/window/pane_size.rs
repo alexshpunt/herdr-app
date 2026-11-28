@@ -36,11 +36,11 @@ pub(super) fn pane_header_height(header: &Header, requested: Option<f32>) -> f32
 
 /// The space reserved by the frame's slots for a given view. Hover slots
 /// overlay the pane and filtered slots reserve no space.
-pub(super) fn frame_slot_height(frame: &PaneFrame, view: &str, header_request: Option<f32>) -> f32 {
+pub(super) fn frame_slot_height(frame: &PaneFrame, view: &str, header_request: Option<f32>, footer_request: Option<f32>) -> f32 {
     let height = |slot: Option<&Header>, request| slot
         .filter(|h| h.shows_in(view) && !h.hover())
         .map_or(0.0, |h| pane_header_height(h, request));
-    height(frame.header.as_ref(), header_request) + height(frame.footer.as_ref(), None)
+    height(frame.header.as_ref(), header_request) + height(frame.footer.as_ref(), footer_request)
 }
 
 pub(super) fn gap(n: &Node, frame: Option<&PaneFrame>) -> f32 {
@@ -141,7 +141,7 @@ fn block_bounds(n: &Node, bounds: Bounds<Pixels>, target: &str, frame: Option<&P
 }
 
 /// `requested`: the height the pane's header mod asked for (`pane.header_height`).
-fn pane_size(n: &Node, size: Size<Pixels>, target: &str, frame: Option<&PaneFrame>, focused: &HashSet<String>, zoom: f32, requested: Option<f32>) -> Option<Size<Pixels>> {
+fn pane_size(n: &Node, size: Size<Pixels>, target: &str, frame: Option<&PaneFrame>, focused: &HashSet<String>, zoom: f32, requested: Option<f32>, footer_requested: Option<f32>) -> Option<Size<Pixels>> {
     let bounds = block_bounds(n, Bounds::new(Point::default(), size), target, frame, focused, zoom)?;
     let n = n.find(target)?;
     let (y, x) = padding(n);
@@ -150,7 +150,7 @@ fn pane_size(n: &Node, size: Size<Pixels>, target: &str, frame: Option<&PaneFram
         let border = frame_border(frame, focused.contains(&n.id)).map_or(0.0, |line| line.width) * zoom;
         // A hidden terminal keeps the geometry it will have in TUI mode,
         // even when the pane's visible GUI uses different chrome.
-        let slots = frame_slot_height(frame, "tui", requested) * zoom;
+        let slots = frame_slot_height(frame, "tui", requested, footer_requested) * zoom;
         size = inset(size, 2.0 * border, 2.0 * border + slots);
     }
     Some(size)
@@ -192,7 +192,7 @@ impl AppWindow {
         // The absolute bounds canvas already excludes the context border (padding box).
         let (y, x) = padding(context);
         let size = inset(area, 2.0 * x * zoom, 2.0 * y * zoom);
-        let size = pane_size(shown, size, pane, frame, focused, zoom, self.header_heights.get(pane).copied())?;
+        let size = pane_size(shown, size, pane, frame, focused, zoom, self.header_heights.get(pane).copied(), self.footer_heights.get(pane).copied())?;
         Some(crate::terminal::grid_size(size, crate::terminal::cell_size(window)))
     }
 

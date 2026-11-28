@@ -214,19 +214,19 @@ fn frame_geometry_excludes_filtered_and_hover_slots() {
         "header": {"content": {"mod": "header"}, "height": 30},
         "footer": {"content": {"mod": "composer"}, "height": 82, "view": "gui"}
     })).unwrap();
-    assert_eq!(frame_slot_height(&frame, "gui", None), 112.0);
-    assert_eq!(frame_slot_height(&frame, "tui", None), 30.0);
-    assert_eq!(frame_slot_height(&frame, "tui", Some(50.0)), 50.0);
+    assert_eq!(frame_slot_height(&frame, "gui", None, None), 112.0);
+    assert_eq!(frame_slot_height(&frame, "tui", None, None), 30.0);
+    assert_eq!(frame_slot_height(&frame, "tui", Some(50.0), None), 50.0);
     let tui_footer: crate::layout::PaneFrame = serde_json::from_value(json!({
         "header": {"content": {"mod": "header"}, "height": 30, "view": "gui"},
         "footer": {"content": {"mod": "footer"}, "height": 40, "view": "tui"}
     })).unwrap();
-    assert_eq!(frame_slot_height(&tui_footer, "gui", Some(50.0)), 50.0);
-    assert_eq!(frame_slot_height(&tui_footer, "tui", Some(50.0)), 40.0);
+    assert_eq!(frame_slot_height(&tui_footer, "gui", Some(50.0), None), 50.0);
+    assert_eq!(frame_slot_height(&tui_footer, "tui", Some(50.0), None), 40.0);
     let hover: crate::layout::PaneFrame = serde_json::from_value(json!({
         "footer": {"content": {"mod": "composer"}, "height": 82, "reveal": "hover"}
     })).unwrap();
-    assert_eq!(frame_slot_height(&hover, "gui", None), 0.0);
+    assert_eq!(frame_slot_height(&hover, "gui", None, None), 0.0);
 }
 
 #[test]

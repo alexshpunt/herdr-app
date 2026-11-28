@@ -67,6 +67,32 @@ export default class Probe extends View {
         cx.run_until_parked();
     };
     draw(cx);
+    // Clicking outside the input in the other GUI pane must hand it the keyboard.
+    let point_in_b = view.update(cx, |this, _| {
+        let bounds = this.bounds.borrow()["b"];
+        gpui::point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height - gpui::px(10.0),
+        )
+    });
+    cx.simulate_mouse_down(
+        point_in_b,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        point_in_b,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    draw(cx);
+    assert_eq!(crate::mods::shared("pane-view.focus.b"), Some(json!(1)));
+    view.update_in(cx, |this, window, cx| {
+        this.model.focus_pane("a");
+        this.focused_pane = None;
+        this.sync(window, cx);
+    });
+    draw(cx);
     view.update_in(cx, |this, window, cx| {
         for term in ["term-a", "term-b"] {
             this.live.get_mut(term).unwrap()["labels"]["herdr.view"] = json!("tui");
@@ -142,6 +168,26 @@ export default class Probe extends View {
         assert!(result.get("error").is_none(), "{result}");
         assert_eq!(this.pane_view_mode("a"), "tui");
         assert_eq!(this.pane_view_mode("b"), "gui");
+        this.swapped.insert("a".into(), "remote/child".into());
+        this.live.insert(
+            "remote/child".into(),
+            json!({"state":"live", "labels":{"bridge":"ready"}}),
+        );
+        let swapped = this.run_as(
+            "pane.view",
+            json!({"terminal":"remote/child", "view":"gui"}),
+            false,
+            window,
+            cx,
+        );
+        assert!(
+            swapped.get("error").is_none(),
+            "a shown remote terminal must be targetable: {swapped}"
+        );
+        assert_eq!(
+            this.written_views.get("remote/child").map(String::as_str),
+            Some("gui")
+        );
         this.live.get_mut("term-b").unwrap()["labels"]
             .as_object_mut()
             .unwrap()
@@ -153,5 +199,58 @@ export default class Probe extends View {
             "a missing bridge falls back to the terminal"
         );
         assert!(!this.visible().1.iter().any(|(slot, _)| slot == "b#view"));
+    });
+}
+
+#[test]
+fn footer_mod_resizes_only_its_own_slot() {
+    in_own_process("footer_mod_height");
+}
+
+#[gpui::test]
+fn footer_mod_height(cx: &mut gpui::TestAppContext) {
+    use serde_json::json;
+    if !running_alone("footer_mod_height") {
+        return;
+    }
+    let probe = r#"import { View, div } from 'gpui-kit';
+import { props, run } from 'herdr';
+export default class Footer extends View {
+  init() { run('pane.header_height', {pane: props().pane, px: 120}); }
+  render() { return div().size_full(); }
+}"#;
+    let layout = json!({"id":"context","type":"block","content":{"tab":"active","pane":{
+        "lone":true,
+        "header":{"content":"tabs","height":30},
+        "footer":{"content":{"mod":"footer-probe"},"height":50}
+    }}});
+    let (view, cx) = open_window(cx, "footer-probe", probe, layout);
+    view.update_in(cx, |this, window, cx| {
+        this.model
+            .add_space("s", "test", "/", super::Tab::new("t", "", "p", "term"));
+        this.live
+            .insert("term".into(), json!({"state":"live", "labels":{}}));
+        this.sync(window, cx);
+    });
+    for _ in 0..3 {
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+    }
+    view.update(cx, |this, _| {
+        assert_eq!(this.footer_heights.get("p"), Some(&120.0));
+        assert_eq!(this.header_heights.get("p"), None);
+        let frame = this.pane_frame().unwrap();
+        assert_eq!(
+            super::pane_size::frame_slot_height(
+                frame,
+                "tui",
+                None,
+                this.footer_heights.get("p").copied()
+            ),
+            150.0
+        );
     });
 }

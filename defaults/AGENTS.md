@@ -597,7 +597,7 @@ The tab block says how each pane of the shown tab is wrapped:
   `view: "gui"` or `view: "tui"` to appear only in that mode. A filtered-out
   slot takes no height, and its mod copy stays alive across mode switches.
   `panes()` and `focused()` expose `view` (the mode actually shown) and `views`
-  (views as `{id, label, available}`). If the GUI is unavailable, the shown
+  (views as `{id, label, available, reason}`). If the GUI is unavailable, the shown
   mode is `tui` even when the saved `herdr.view` label says `gui`. For a focused
   terminal block outside a pane, `focused().view` is `tui` and `views` is empty.
 - `lone: true` frames a tab's only pane too (default: only when split).
