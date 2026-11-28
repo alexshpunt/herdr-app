@@ -600,8 +600,9 @@ The tab block says how each pane of the shown tab is wrapped:
   (views as `{id, label, available, reason}`). If the GUI is unavailable, the shown
   mode is `tui` even when the saved `herdr.view` label says `gui`. The same holds
   while the terminal carries a non-empty `herdr.view.unavailable` label: its program
-  opened a screen the view cannot draw, the pane shows the terminal with the label's
-  text over its top right corner, and the GUI returns when the label is gone, with
+  opened a screen the view cannot draw, the pane shows the terminal under a banner
+  row with the label's text (the terminal gives up those rows; the banner never
+  covers terminal text), and the GUI returns when the label is gone, with
   `herdr.view` and `default_pane_view` untouched. `views` then reports the GUI as
   unavailable with that text as its `reason`. For a focused
   terminal block outside a pane, `focused().view` is `tui` and `views` is empty.

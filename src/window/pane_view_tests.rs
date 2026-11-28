@@ -366,6 +366,35 @@ export default class Probe extends View {
         focused() > before,
         "the GUI takes the keyboard back when the screen closes"
     );
+    // The banner is a row of its own: the terminal under it gives up those rows (it is
+    // never covered), and takes them back when the banner goes.
+    view.update_in(cx, |this, window, cx| {
+        this.live.get_mut("term-b").unwrap()["labels"]["herdr.view"] = json!("tui");
+        this.live.get_mut("term-a").unwrap()["labels"][super::VIEW_HOLD_LABEL] =
+            json!("Pi opened a screen the GUI can't show");
+        this.sync(window, cx);
+    });
+    draw(cx);
+    let rows = |cx: &mut gpui::VisualTestContext, pane: &str| {
+        view.update(cx, |this, cx| this.terms[pane].view.read(cx).dimensions())
+    };
+    let (cols_a, rows_a) = rows(cx, "a");
+    let (cols_b, rows_b) = rows(cx, "b");
+    assert_eq!(cols_a, cols_b, "the banner takes rows, not columns");
+    assert!(
+        rows_a < rows_b,
+        "the terminal under the banner gives up its rows"
+    );
+    view.update_in(cx, |this, window, cx| {
+        this.live.get_mut("term-a").unwrap()["labels"]["herdr.view"] = json!("tui");
+        this.sync(window, cx);
+    });
+    draw(cx);
+    assert_eq!(
+        rows(cx, "a"),
+        rows(cx, "b"),
+        "the terminal gets its rows back"
+    );
 }
 
 #[test]
