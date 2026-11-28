@@ -68,7 +68,7 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
   }
-  // Agents the user starts are depth 0; their replicas and sub-agents 1; theirs 2, which start no more.
+  // Agents the user starts are depth 0; their replicas and sub-agents 1, theirs 2; agents at depth 3 start no more.
   const depth = () => { const value = Number(pi.getFlag('herdr-depth') ?? 0); return Number.isSafeInteger(value) && value > 0 ? value : 0; };
   let selectionError: ((ctx: ExtensionContext) => string | undefined) | undefined;
   let client: InstanceType<typeof import('./client.mjs').AppClient> | undefined;

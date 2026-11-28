@@ -48,7 +48,7 @@ The `pi-agent-herdr` IDE extension uses the synchronous `herdr:bridge` event. It
 
 `agent.subagent {requestId, name, folder, profile, task}` starts a fresh Pi as a workflow-profile launch, like `agent`, but as a new unfocused tab in the caller's own space, primary and startup fallback alike. It returns the same launch receipt once the sub-agent answered for the first time or startup ended; an unknown profile refuses with the current profile IDs. `workflow.get` returns the profiles for `herdr:profiles`.
 
-Replicas and sub-agents carry `--herdr-depth <n>`, one more than their caller (an agent the user started is depth 0). The bridge refuses `agent.replicate` and `agent.subagent` from a Pi at depth 2, so nesting stops two levels down. The number of agents running at once is not limited.
+Replicas and sub-agents carry `--herdr-depth <n>`, one more than their caller (an agent the user started is depth 0). The bridge refuses `agent.replicate` and `agent.subagent` from a Pi at depth 3, so nesting stops three levels down: an agent the user started can run a manager, the manager an executor, and the executor its own replicas and sub-agents. The number of agents running at once is not limited.
 
 Read `herdr:<terminal>` before writing to or deleting it. The resource extension keeps the observed identity privately and refuses writes after a replacement Pi, during startup, or while the recipient waits for the user. Use `herdr:<terminal>/history` for paging and literal search over the full branch. Repeated timeline reads omit an unchanged reply. See `docs:herdr` in Pi for resource addresses and read budgets.
 
