@@ -314,7 +314,7 @@ export default class Probe extends View {
     view.update_in(cx, |this, window, cx| {
         assert_eq!(this.pane_view_mode("a"), "gui");
         assert_eq!(this.pane_view_hold("a"), None);
-        this.live.get_mut("term-a").unwrap()["labels"][VIEW_HOLD_LABEL] =
+        this.live.get_mut("term-a").unwrap()["labels"][super::VIEW_HOLD_LABEL] =
             json!("Pi opened a screen the GUI can't show");
         this.sync(window, cx);
         assert_eq!(this.pane_view_mode("a"), "tui");
@@ -355,7 +355,7 @@ export default class Probe extends View {
         this.live.get_mut("term-a").unwrap()["labels"]
             .as_object_mut()
             .unwrap()
-            .remove(VIEW_HOLD_LABEL);
+            .remove(super::VIEW_HOLD_LABEL);
         this.sync(window, cx);
         assert_eq!(this.pane_view_mode("a"), "gui");
         assert_eq!(this.pane_view_hold("a"), None);
