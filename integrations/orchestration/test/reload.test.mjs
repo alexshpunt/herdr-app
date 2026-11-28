@@ -18,7 +18,7 @@ export class AppClient {
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async command(name,args){return {version:${JSON.stringify(version)},name,args}}
- async tracked(name,toolCallId,run){return {id:'tracked-1',revision:'revision-1',result:await run(),toolCallId}}
+ async tracked(name,toolCallId,run){let result;try{result=await run()}catch(error){throw Object.assign(new Error(error.message),{code:'HERDR_OUTCOME_UNKNOWN',effect:'unknown'})}return {id:'tracked-1',revision:'revision-1',result,toolCallId}}
  async recoveryList(){return [{id:'tracked-1',revision:'revision-1',state:'result'}]}
  async recoveryAck(input){return {items:input.items}}
  async replicate(args){return {replicated:args}}
@@ -54,6 +54,14 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
     /^Error: agent\.subagent refused: Unknown workflow profile missing\. Current profiles: none/);
   await assert.rejects(bridge().command('agent.subagent', { name: 'research' }), /agent\.subagent needs a non-empty requestId/);
   for (const name of ['agent.stop', 'space.new', 'tab.new']) assert.throws(() => bridge().command(name, {}));
+  // Local refusals happen before a tracked request is recorded, so they keep their reason instead of an unknown outcome.
+  assert.throws(() => bridge().commandTracked('tab.new', {}, { toolCallId: 'tool-2' }), error => error.message === 'Unsupported Herdr bridge command' && error.code === undefined);
+  session.extensionRunner.setFlagValue('herdr-depth', '3');
+  for (const name of ['agent.subagent', 'agent.replicate'])
+    assert.throws(() => bridge().commandTracked(name, { name: 'deep' }, { toolCallId: 'tool-3' }), error => /nesting stops at depth 3/.test(error.message) && error.code === undefined);
+  session.extensionRunner.setFlagValue('herdr-depth', '2');
+  assert.deepEqual((await bridge().commandTracked('agent.replicate', { name: 'r' }, { toolCallId: 'tool-4' })).result, { replicated: { name: 'r', depth: 3 } });
+  session.extensionRunner.setFlagValue('herdr-depth', '0');
   const label=async()=>JSON.parse(await readFile(path.join(root,'label.json'),'utf8'));
   assert.equal((await label()).startup,'pending');
   const snapshot = async () => {
