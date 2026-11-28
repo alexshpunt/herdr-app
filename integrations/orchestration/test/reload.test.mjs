@@ -18,6 +18,9 @@ export class AppClient {
  async context(){return {pid:process.pid,session:'s',terminal:'m/t1',machine:'m',space:'m/sp1'}}
  async publish(value){await writeFile(label,JSON.stringify(value))}
  async command(name,args){return {version:${JSON.stringify(version)},name,args}}
+ async tracked(name,toolCallId,run){return {id:'tracked-1',revision:'revision-1',result:await run(),toolCallId}}
+ async recoveryList(){return [{id:'tracked-1',revision:'revision-1',state:'result'}]}
+ async recoveryAck(input){return {items:input.items}}
  async replicate(args){return {replicated:args}}
  async workflow(){return {version:1,profiles:[]}}
 }
@@ -39,6 +42,10 @@ test('real Pi reload refreshes module code and never reopens the startup fallbac
   assert.equal(bridge().version, 1);
   assert.equal((await bridge().command('agent.history', { terminal: 'm/t2' })).version, 'first');
   assert.equal((await bridge().command('agent.remove', { terminal: 'm/t2' })).name, 'agent.remove');
+  const tracked = await bridge().commandTracked('agent.inspect', { terminal: 'm/t2' }, { toolCallId: 'tool-1' });
+  assert.deepEqual(tracked, { id: 'tracked-1', revision: 'revision-1', toolCallId: 'tool-1', result: { version: 'first', name: 'agent.inspect', args: { terminal: 'm/t2' } } });
+  assert.deepEqual(await bridge().recovery.list(), [{ id: 'tracked-1', revision: 'revision-1', state: 'result' }]);
+  assert.deepEqual(await bridge().recovery.ack({ items: [{ id: tracked.id, revision: tracked.revision }] }), { items: [{ id: tracked.id, revision: tracked.revision }] });
   // A replica launch goes through the client's own validation, not a raw tab.new, one level deeper than its caller.
   assert.deepEqual(await bridge().command('agent.replicate', { name: 'r', depth: 9 }), { replicated: { name: 'r', depth: 1 } });
   assert.equal((await bridge().command('workflow.get', {})).name, 'workflow.get');
