@@ -20,4 +20,6 @@ Only the Windows build matters: this fork ships for Windows alone. Before mergin
 
 # Pull requests
 
+Do not open Plannotator reviews or other approval gates for intermediate work. Complete self-review and verification, then merge and deliver; the user reviews the final result.
+
 A new or changed command ships with its documentation in the same pull request: `the_guide_names_every_command` fails when `defaults/AGENTS.md` does not name a command, and `just docs-check` fails when `docs/commands.md` is out of date. Do not split them into a separate documentation PR.
