@@ -1766,6 +1766,8 @@ impl AppWindow {
         }
         self.publish_shown_copies();
 
+        self.fit_gui_panes(window, cx);
+
         // Keyboard to the focused pane when it changes (never steal it from an open dialog).
         let model_pane = self.model.focused_pane();
         let block = terminal_block(&self.chrome, self.focused_pane.as_deref());

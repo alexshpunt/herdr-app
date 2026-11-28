@@ -230,11 +230,28 @@ impl AppWindow {
         (size.width > px(0.0) && size.height > px(0.0)).then_some((context, size))
     }
 
+    /// A GUI replaces the terminal's element, not its screen. Keep the hidden
+    /// terminal fitted to the TUI's own chrome as the active split changes.
+    pub(super) fn fit_gui_panes(&self, window: &Window, cx: &App) {
+        let Some(tab) = self.model.active_tab() else { return };
+        let cell = crate::terminal::cell_size(window);
+        let scale = window.scale_factor();
+        for pane in tab.shown().panes() {
+            if self.pane_view_mode(&pane.id) == "gui"
+                && let Some(term) = self.pane_term(&pane.id)
+                && let Some((cols, rows)) = self.shown_size(tab, &pane.id, window)
+            {
+                term.view.read(cx).fit(cols, rows, cell, scale);
+            }
+        }
+    }
+
     /// Terminals in hidden tabs keep the size they last had on screen, so a tab shown
     /// after the window changed size draws its old screens, then jumps once the programs
     /// redraw. Once the window settles (the same at two ticks), they are sized as their
     /// panes would be, so the programs redraw out of sight.
     pub(super) fn fit_hidden_tabs(&mut self, window: &Window, cx: &App) {
+        self.fit_gui_panes(window, cx);
         let Some((_, area)) = self.context_area() else { return };
         let cell = crate::terminal::cell_size(window);
         let now = (area, cell);
