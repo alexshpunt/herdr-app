@@ -13,6 +13,34 @@ import { childDepth } from './orchestration.mjs';
 const BRIDGE_COMMANDS = ['agent.list', 'agent.inspect', 'agent.history', 'agent.send', 'agent.remove', 'agent.replicate', 'agent.subagent', 'workflow.get'];
 type Client = InstanceType<typeof import('./client.mjs').AppClient>;
 type Service = InstanceType<typeof import('./orchestration.mjs').Orchestrator>;
+/** Placement needed by agents to address their terminal and open links in their space. */
+export function formatOrigin(origin: { terminal: string; space: string }): string {
+  return `Your Herdr terminal is ${origin.terminal}, in space ${origin.space}.`;
+}
+
+/** Present only the launch outcome and the next safe action to the calling agent. */
+export function formatAgentOutcome(value: unknown): string {
+  const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const clean = (value: unknown) => typeof value === 'string' ? stripVTControlCharacters(value).trim() : '';
+  const name = clean(data.name);
+  const terminal = clean(data.terminal);
+  const target = terminal ? `herdr:${terminal}` : 'herdr:';
+  const agent = name ? `Agent ${name}` : 'The agent';
+  const retained = data.retainedPrimary && typeof data.retainedPrimary === 'object' ? clean((data.retainedPrimary as Record<string, unknown>).terminal) : '';
+  const retainedText = retained ? ` Primary terminal: herdr:${retained}.` : '';
+  const fallback = data.fallbackUsed === true ? ' A fallback was used.' : '';
+  const existing = data.reused === true ? `Existing ${name ? `agent ${name}` : 'agent'}` : agent;
+  // Receipt details can contain arbitrary model errors, structured data, or terminal screens.
+  // Keep those in structuredContent; direct callers can inspect the agent's timeline instead.
+  switch (data.outcome) {
+    case 'started': return terminal ? `${existing} started in ${target}.${fallback}${retainedText}` : `${existing} started. Inspect herdr: for its location.${fallback}${retainedText}`;
+    case 'blocked': return `${agent} in ${target} is waiting for the user. Read ${target} and tell the user what it needs.${retainedText}`;
+    case 'model-failed': return `${agent} in ${target} failed during startup. Read ${target} for the cause before deciding what to do.${retainedText}`;
+    case 'exited': return `${agent} in ${target} exited during startup. Read ${target} for the cause; inspect herdr: if the terminal is no longer available.${retainedText}`;
+    case 'pending': case 'still_working': return `${agent} in ${target} may still be starting. Read ${target} before retrying.${retainedText}`;
+    default: return `The agent launch outcome is unknown. Inspect ${target} before retrying; reuse the same request ID.${retainedText}`;
+  }
+}
 
 /** A sub-agent is a workflow-profile launch, with startup fallback, as a tab of the caller's own space. */
 async function startSubagent(client: Client, service: Service | undefined, args: Record<string, unknown>, depth: number) {
@@ -220,9 +248,9 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       if (!client) return;
       const origin = await client.context();
       await publish(ctx);
-      event.systemPromptOptions.sections.herdr = `${JSON.stringify(origin)}\nYour replicas and sub-agents are yours to steer and close. Agents started with the Herdr agent tool belong to the user: do not supervise, message or close them as your helpers unless the user asks.`;
+      event.systemPromptOptions.sections.herdr = `${formatOrigin(origin)}\nYour replicas and sub-agents are yours to steer and close. Agents started with the Herdr agent tool belong to the user: do not supervise, message or close them as your helpers unless the user asks.`;
     } catch (value) {
-      event.systemPromptOptions.sections.herdr = `Pi PID ${process.pid}; Herdr placement is unavailable. Discover the Herdr agent tools only when the user asks to manage agents; inspect and resolve their context error before changing anything.`;
+      event.systemPromptOptions.sections.herdr = 'Herdr placement is unavailable. Discover the Herdr agent tools only when the user asks to manage agents; inspect and resolve their context error before changing anything.';
     }
   });
   pi.on('message_end', async (event, ctx) => {
@@ -269,10 +297,10 @@ export default function herdrOrchestration(pi: ExtensionAPI): void {
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
       async execute(_call, args, signal, onUpdate) {
         if (!client || !service) throw new Error('Herdr agent context is unavailable. Run this Pi as the foreground process of a Herdr App terminal and reload Pi.');
-        const data = await execute(args, signal, value => onUpdate?.({ content: [{ type: 'text', text: JSON.stringify(value) }], details: value }));
+        const data = await execute(args, signal, value => onUpdate?.({ content: [{ type: 'text', text: formatAgentOutcome(value) }], details: value }));
         const outcome = data && typeof data === 'object' && 'outcome' in data ? data.outcome : undefined;
         const isError = ['unknown', 'model-failed', 'exited', 'still_working', 'unconfirmed'].includes(String(outcome));
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], details: data, structuredContent: JSON.parse(JSON.stringify(data)), isError };
+        return { content: [{ type: 'text', text: formatAgentOutcome(data) }], details: data, structuredContent: JSON.parse(JSON.stringify(data)), isError };
       },
     });
   }
